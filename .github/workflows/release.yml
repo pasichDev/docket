@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"] # e.g. git tag v1.0.0 && git push origin v1.0.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # --- Publish the npm package ---
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build package
+        run: npm run build
+
+      - name: Publish package to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # --- Publish server metadata to the official MCP Registry ---
+      # Requires a server.json in the repo root (generate once locally with
+      # `mcp-publisher init` + `mcp-publisher login github`, see README) and
+      # an MCP_GITHUB_TOKEN secret (a GitHub PAT with no special scopes,
+      # used only to prove ownership of the io.github.<you>/... server name).
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github --token ${{ secrets.MCP_GITHUB_TOKEN }}
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish

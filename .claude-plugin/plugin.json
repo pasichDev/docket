@@ -1,0 +1,11 @@
+{
+  "name": "todo-mcp-claim",
+  "description": "Claim/release workflow skill for the todo-mcp MCP server's shared backlog.",
+  "version": "1.0.0",
+  "author": {
+    "name": "pasichDev",
+    "url": "https://github.com/pasichDev"
+  },
+  "homepage": "https://github.com/pasichDev/todo-mcp",
+  "license": "MIT"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "todo-mcp",
+  "owner": {
+    "name": "pasichDev",
+    "url": "https://github.com/pasichDev"
+  },
+  "description": "Marketplace for the todo-mcp claim/release workflow skill.",
+  "plugins": [
+    {
+      "name": "todo-mcp-claim",
+      "source": "./",
+      "description": "Claim/release workflow skill for the todo-mcp MCP server's shared backlog.",
+      "version": "1.0.0"
+    }
+  ]
+}

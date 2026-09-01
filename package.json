@@ -1,0 +1,56 @@
+{
+  "name": "@pasichdev/todo-mcp",
+  "version": "1.0.0",
+  "description": "A shared TODO/backlog MCP server with a web UI, agent claim/release tracking, and encrypted local storage.",
+  "license": "MIT",
+  "author": "pasichDev",
+  "homepage": "https://github.com/pasichDev/todo-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pasichDev/todo-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pasichDev/todo-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "todo",
+    "claude",
+    "claude-code"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "todo-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "mcpName": "io.github.pasichDev/todo-mcp",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "web": "node dist/web.js",
+    "stats": "node dist/stats.js",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "qrcode": "^1.5.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.7.0"
+  }
+}
