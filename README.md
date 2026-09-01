@@ -1,5 +1,10 @@
 # todo-mcp
 
+[![npm](https://img.shields.io/npm/v/%40pasichdev%2Ftodo-mcp.svg)](https://www.npmjs.com/package/@pasichdev/todo-mcp)
+[![CI](https://github.com/pasichDev/todo-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/todo-mcp/actions/workflows/ci.yml)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.pasichDev%2Ftodo--mcp-blue)](https://registry.modelcontextprotocol.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A shared TODO/backlog list exposed as an [MCP](https://modelcontextprotocol.io)
 server, so every AI client you use (Claude Code, Claude Desktop, Warp, Codex,
 or any other MCP host) — and every concurrent session in each of them — reads
@@ -187,24 +192,25 @@ Call `todo_add`, `todo_list`, `todo_claim`, `todo_complete`, `todo_delete`
 from the inspector UI and confirm `~/.todo-mcp/todos.json.enc` updates on
 disk (it won't be human-readable — that's the point).
 
-## Releasing (maintainer notes)
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+<details>
+<summary><strong>Releasing</strong> (maintainer reference)</summary>
 
 Tags matching `v*` trigger [`.github/workflows/release.yml`](.github/workflows/release.yml),
 which publishes the npm package and then the [MCP Registry](https://modelcontextprotocol.io/registry)
 listing. One-time setup before the first tag:
 
-1. `NPM_TOKEN` repo secret — an npm automation token with publish rights on
-   `@pasichdev/todo-mcp`.
+1. `NPM_TOKEN` repo secret — an npm **Automation** token (bypasses 2FA) with
+   publish rights on `@pasichdev/todo-mcp`.
 2. `MCP_GITHUB_TOKEN` repo secret — a GitHub PAT (no special scopes), used
    only to prove ownership of the `io.github.pasichDev/...` server name.
-3. Generate `server.json` once, locally: `npm install -g @modelcontextprotocol/registry`
-   (or download the `mcp-publisher` binary from the
-   [registry releases](https://github.com/modelcontextprotocol/registry/releases)),
-   then `mcp-publisher init` and `mcp-publisher login github` from the repo
-   root, and commit the resulting `server.json`.
+3. `server.json` — already committed; regenerate with `mcp-publisher init`
+   after `mcp-publisher login github` if the server metadata changes.
 
 Then: `npm version <major|minor|patch>`, `git push --follow-tags`.
 
-## License
+</details>
 
-MIT — see [LICENSE](LICENSE).
