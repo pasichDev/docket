@@ -12,17 +12,52 @@ and writes the same list. Comes with a small web UI, agent claim/release
 tracking (so you can see who's working on what right now), full change
 history per item, and an encrypted local data file.
 
-## Quick start
+## Installation guide
+
+Five minutes, no prior MCP experience needed. This sets up the server, the
+web UI, and the optional Claude Code skill in one go.
+
+**You need:** [Claude Code](https://claude.com/claude-code) already
+installed, and Node.js 18+ (check with `node --version` in a terminal — if
+that command isn't found, get Node from [nodejs.org](https://nodejs.org)).
+
+**1. Register the server.** Open a terminal and run:
 
 ```sh
 claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp
 ```
 
-That's it — restart Claude Code (or reconnect the MCP server), ask it to add
-a todo, and open **http://localhost:8787**. The web UI starts itself
-automatically the first time any MCP client connects; nothing else to run.
-See [Install](#install) for other MCP hosts and [Web UI](#web-ui) for how
-the auto-start works and how to make it persist across reboots.
+This just tells Claude Code how to start todo-mcp — nothing is downloaded
+yet. `npx` fetches and runs it the first time it's actually used.
+
+**2. Restart Claude Code** (close and reopen it, or start a new session) so
+it picks up the new server.
+
+**3. Try it.** In a chat, ask Claude something like *"add a todo: buy
+milk"*. If it uses the tool and confirms, the server is working.
+
+**4. Open the web UI.** Go to **http://localhost:8787** in your browser —
+it started itself the moment step 3 ran, no separate install step. From
+here you can add/edit/complete items with a mouse, switch light/dark theme,
+and tap the phone icon (top right) for a QR code to open the same list on
+your phone (same Wi-Fi network).
+
+**5. (Optional) Install the claim-tracking skill.** This teaches Claude
+Code to mark an item as "in progress" while it's actively working on it,
+and to check first before starting something another session already
+claimed. In Claude Code:
+
+```
+/plugin marketplace add pasichDev/todo-mcp
+/plugin install todo-mcp-claim@todo-mcp
+```
+
+Nothing to configure afterward — it applies automatically.
+
+Using a different MCP host (Claude Desktop, Warp, Codex)? See
+[Install](#install) below for the config-file form. Something not working?
+See [Manual smoke test](#manual-smoke-test) to isolate whether it's
+`npx`/npm, the server itself, or your MCP client's config.
 
 ## Why
 
@@ -53,15 +88,13 @@ and writes through the same MCP tools.
 
 ## Install
 
-### As an MCP server (npm)
+Reference for other MCP hosts, or building from source instead of `npx`.
+For the default Claude Code path, see [Installation guide](#installation-guide) above.
 
-```sh
-claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp
-```
+### Other MCP hosts
 
-This registers the server with Claude Code, running it via `npx` — no local
-clone needed. For Claude Desktop or another MCP host, add the equivalent to
-its config:
+For Claude Desktop or another MCP host, add the equivalent of the Claude
+Code command to its config:
 
 ```json
 {
@@ -103,33 +136,26 @@ the full field/workflow reference written for an agent to follow.
 
 ## Claude Code skill
 
-A skill documenting the claim/release workflow ships as a Claude Code
-plugin in this repo:
-
-```
-/plugin marketplace add pasichDev/todo-mcp
-/plugin install todo-mcp-claim@todo-mcp
-```
-
-(or the non-interactive form: `claude plugin marketplace add pasichDev/todo-mcp`
-followed by `claude plugin install todo-mcp-claim@todo-mcp`.)
+Covered in step 5 of the [Installation guide](#installation-guide) above.
+The non-interactive form: `claude plugin marketplace add pasichDev/todo-mcp`
+then `claude plugin install todo-mcp-claim@todo-mcp`. Source:
+[`skills/todo-mcp-claim/SKILL.md`](skills/todo-mcp-claim/SKILL.md).
 
 ## Web UI
 
 A read/write dashboard on `http://localhost:8787` (override with
 `TODO_MCP_WEB_PORT`) — light/dark theme, search, sort, inline edit,
 undo-delete, QR code + LAN URL so you can open it from your phone on the
-same Wi-Fi.
+same Wi-Fi. Starts itself automatically (see step 4 above); how that
+actually works under the hood:
 
-**Starts itself automatically.** It runs as its own process, separate from
-the MCP server, but you never have to launch it by hand: every time an MCP
-client starts `todo-mcp` (`npx -y @pasichdev/todo-mcp`, or `claude mcp add`),
-it first checks whether something is already answering on the web UI's
-port — if not, it spawns `web.js` detached in the background and moves on.
-The child survives after the short-lived MCP process exits, and every later
-MCP connection (from any client) finds it already running and does nothing.
-No launchd/systemd unit, no manual `npm run web`, no double-spawning across
-multiple concurrent sessions.
+It runs as its own process, separate from the MCP server. Every time an MCP
+client starts `todo-mcp`, it first checks whether something is already
+answering on the web UI's port — if not, it spawns `web.js` detached in the
+background and moves on. The child survives after the short-lived MCP
+process exits, and every later MCP connection (from any client) finds it
+already running and does nothing. No launchd/systemd unit, no manual
+`npm run web`, no double-spawning across multiple concurrent sessions.
 
 It's bound to `0.0.0.0`, so it's also reachable from other devices on your
 LAN. It polls every 3s, so it stays live while any MCP client adds/edits/
