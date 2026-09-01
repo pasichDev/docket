@@ -7,6 +7,18 @@ and writes the same list. Comes with a small web UI, agent claim/release
 tracking (so you can see who's working on what right now), full change
 history per item, and an encrypted local data file.
 
+## Quick start
+
+```sh
+claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp
+```
+
+That's it — restart Claude Code (or reconnect the MCP server), ask it to add
+a todo, and open **http://localhost:8787**. The web UI starts itself
+automatically the first time any MCP client connects; nothing else to run.
+See [Install](#install) for other MCP hosts and [Web UI](#web-ui) for how
+the auto-start works and how to make it persist across reboots.
+
 ## Why
 
 If you use more than one AI coding tool, or run several sessions in
@@ -99,23 +111,31 @@ followed by `claude plugin install todo-mcp-claim@todo-mcp`.)
 
 ## Web UI
 
-A read/write dashboard, separate process from the MCP server:
+A read/write dashboard on `http://localhost:8787` (override with
+`TODO_MCP_WEB_PORT`) — light/dark theme, search, sort, inline edit,
+undo-delete, QR code + LAN URL so you can open it from your phone on the
+same Wi-Fi.
 
-```sh
-npm run web
-```
+**Starts itself automatically.** It runs as its own process, separate from
+the MCP server, but you never have to launch it by hand: every time an MCP
+client starts `todo-mcp` (`npx -y @pasichdev/todo-mcp`, or `claude mcp add`),
+it first checks whether something is already answering on the web UI's
+port — if not, it spawns `web.js` detached in the background and moves on.
+The child survives after the short-lived MCP process exits, and every later
+MCP connection (from any client) finds it already running and does nothing.
+No launchd/systemd unit, no manual `npm run web`, no double-spawning across
+multiple concurrent sessions.
 
-Opens on `http://localhost:8787` (override with `TODO_MCP_WEB_PORT`), bound
-to `0.0.0.0` so it's also reachable from other devices on your LAN — tap the
-phone icon in the header for a QR code. It polls every 3s, so it stays live
-while any MCP client adds/edits/completes items.
+It's bound to `0.0.0.0`, so it's also reachable from other devices on your
+LAN. It polls every 3s, so it stays live while any MCP client adds/edits/
+completes items.
 
 **Note:** the web UI serves over plain HTTP with no auth — anyone on the
 same Wi-Fi network who knows or guesses the URL can read and edit your list.
 Fine on a trusted home network; don't run it on a shared/public network.
 
-To keep it running in the background (macOS example, adapt paths for your
-setup):
+**Optional — keep it running even with no MCP client connected**, or across
+reboots (macOS example, adapt paths for your setup):
 
 ```xml
 <!-- ~/Library/LaunchAgents/com.todo-mcp.web.plist -->

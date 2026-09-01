@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -12,6 +14,39 @@ installProcessLogging("mcp");
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const dateSchema = z.string().regex(DATE_RE, "Use YYYY-MM-DD");
+
+const WEB_PORT = Number(process.env.TODO_MCP_WEB_PORT ?? 8787);
+
+/**
+ * Every MCP host spawns its own `node dist/index.js` per session, so this
+ * runs on every connection — but the web UI is a single shared HTTP server,
+ * not per-session. Probe the port first and only spawn one if nothing is
+ * listening yet; the child is detached + unref'd so it outlives this
+ * (short-lived) MCP process and the next session's probe finds it already
+ * running instead of double-spawning.
+ */
+async function ensureWebUiRunning(): Promise<void> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${WEB_PORT}/api/version`, {
+      signal: AbortSignal.timeout(800),
+    });
+    if (res.ok) return; // already running
+  } catch {
+    // ECONNREFUSED / timeout — nothing listening, fall through to spawn below.
+  }
+  try {
+    const webEntry = fileURLToPath(new URL("./web.js", import.meta.url));
+    const child = spawn(process.execPath, [webEntry], {
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
+    log(`auto-started web UI (pid ${child.pid}) on port ${WEB_PORT}`);
+  } catch (err) {
+    log(`failed to auto-start web UI: ${(err as Error).message}`);
+  }
+}
 
 const server = new McpServer({ name: "todo-mcp", version: "1.0.0" });
 const startedAt = new Date().toISOString();
@@ -353,6 +388,7 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  await ensureWebUiRunning();
 }
 
 main().catch((err) => {
