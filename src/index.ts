@@ -500,6 +500,8 @@ Environment variables:
   DOCKET_MODE               "local" (default) or "remote" — see \`docket pair\` and ~/.config/docket/config.json
   DOCKET_SERVER_URL         Server URL to use when DOCKET_MODE=remote
   DOCKET_ALLOW_INSECURE_REMOTE  Set to "1" to allow a non-HTTPS remote server URL (trusted LAN dev only)
+  DOCKET_SERVER_HOST        Bind address for \`docket serve\` (default: 127.0.0.1; see --host)
+  DOCKET_SERVER_PORT        Port for \`docket serve\` (default: 8788; see --port)
 
 Disaster recovery:
   \`export\`/\`import\` move just the todo list, in the clear, between tools.

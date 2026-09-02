@@ -71,14 +71,20 @@ mkdir -p data
 docker compose up -d
 ```
 
-See [`docker-compose.yml`](../docker-compose.yml) at the repo root — it maps port 8788 and
-a `./data` volume, and includes a container healthcheck against `/api/v1/health`. The image
-(`Dockerfile`, also at the repo root) is a multi-stage build targeting `linux/amd64` and
-`linux/arm64`:
+This builds the image locally from this checkout (`build: .` in
+[`docker-compose.yml`](../docker-compose.yml)) — no image is published yet, so there's
+nothing to pull. The compose file maps port 8788 and a `./data` volume, and includes a
+container healthcheck against `/api/v1/health`. The `Dockerfile` (repo root) is a
+multi-stage build targeting `linux/amd64` and `linux/arm64`.
+
+If you'd rather publish an image once and pull it on multiple machines instead of building
+locally on each one:
 
 ```sh
 docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/pasichdev/docket:latest --push .
 ```
+
+then change `docker-compose.yml`'s `build: .` to `image: ghcr.io/pasichdev/docket:latest`.
 
 Pairing a device against a Docker-hosted server works the same way as systemd — run
 `docket devices pair` **inside the container**:
@@ -98,7 +104,7 @@ Mode: remote
 Server: https://todo.home.example
 Status: connected
 Latency: 18 ms
-Server version: 2.2.1
+Server version: 2.3.0
 Device: andrii-desktop
 Device authorization: active
 ```
@@ -128,7 +134,8 @@ init/tini layer needed to forward the signal.
    ```
 3. **Upgrade and restart:**
    - systemd: `sudo npm install -g @pasichdev/docket@latest && sudo systemctl restart docket`
-   - Docker: `docker compose pull && docker compose up -d`
+   - Docker (local build): `git pull && docker compose up -d --build`
+   - Docker (published image): `docker compose pull && docker compose up -d`
 4. **Verify** with `docket status` (exit code 0, `Status: connected`/local health all
    green) before considering the upgrade done. If something looks wrong, `docket restore
    <backup file>` on the server puts the previous state back (see the README's

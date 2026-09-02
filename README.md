@@ -402,6 +402,9 @@ peer pairing, just against a server instead of another laptop. Or drive it direc
 
 ```sh
 docket pair https://todo.home.example
+
+# Non-interactive (scripting, provisioning a fleet of devices):
+npx -y @pasichdev/docket setup --remote https://todo.home.example --yes
 ```
 
 **Run the server** (on the always-on machine):
@@ -409,11 +412,14 @@ docket pair https://todo.home.example
 ```sh
 docket serve                        # binds 127.0.0.1:8788 by default — RFC-required explicit opt-in to bind wider
 docket serve --host 0.0.0.0         # accept LAN/remote connections (put a reverse proxy + HTTPS in front for anything off-LAN)
+docket serve --port 9000 --data-dir /var/lib/docket   # or DOCKET_SERVER_HOST / DOCKET_SERVER_PORT / DOCKET_DATA_DIR
 docket devices pair                 # generate a pairing code for a new device
 docket devices pending              # review requests waiting for approval
 docket devices approve <requestId>  # approve one
+docket devices deny <requestId>     # or deny it
 docket devices list                 # see every paired device
 docket devices revoke <deviceId>    # cut off one device immediately, without unpairing everyone else
+docket devices restore <deviceId>   # un-revoke it
 ```
 
 **Check on it from any paired device:**
@@ -427,7 +433,7 @@ Mode: remote
 Server: https://todo.home.example
 Status: connected
 Latency: 18 ms
-Server version: 2.2.1
+Server version: 2.3.0
 Device: andrii-desktop
 Device authorization: active
 ```

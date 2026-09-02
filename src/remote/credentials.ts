@@ -6,8 +6,8 @@ import { withFileLock } from "../filelock.js";
 
 /**
  * This device's credentials for the ONE remote server it's paired with (RFC "Local and
- * Self-Hosted Backend Modes" §10: "Device credentials belong in the existing protected
- * todo-mcp data/config area", not the general config.json). Encrypted at rest exactly like
+ * Self-Hosted Backend Modes" §10: device credentials belong in the existing protected
+ * data directory, not the general config.json). Encrypted at rest exactly like
  * peers.json — `secret` is exactly as sensitive as a P2P peer's shared secret, since it's
  * what authenticates every request this device makes to the server.
  *

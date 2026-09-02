@@ -4,8 +4,10 @@
 # certificate authority.
 services:
   docket:
-    image: ghcr.io/pasichdev/docket:latest
-    # build: .   # uncomment to build from this checkout instead of pulling the published image
+    # No published image yet — build from this checkout. Once one is published (see
+    # docs/headless.md's "docker buildx build ... --push" step), replace this with
+    # "image: ghcr.io/pasichdev/docket:latest" to pull instead of building locally.
+    build: .
     restart: unless-stopped
     ports:
       - "8788:8788"
