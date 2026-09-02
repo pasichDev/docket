@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 const execFileAsync = promisify(execFile);
 
 function usage(): never {
-  console.error("Usage: todo-mcp-setup [--data-dir PATH]");
+  console.error("Usage: todo-mcp-setup [--data-dir PATH] [--yes]");
   process.exit(2);
 }
 
@@ -71,17 +71,26 @@ async function installClaimSkill(): Promise<void> {
   }
 }
 
-async function installCodexSkill(): Promise<void> {
+// ~/.agents/skills/<name>/SKILL.md is the shared, cross-agent convention (Codex CLI and
+// other AGENTS.md-ecosystem tools read from it) — NOT ~/.codex/skills, which doesn't exist.
+async function installAgentsSkill(): Promise<void> {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const source = join(packageRoot, "skills", "todo-mcp-claim");
-  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
-  const destination = join(codexHome, "skills", "todo-mcp-claim");
+  const destination = join(homedir(), ".agents", "skills", "todo-mcp-claim");
   try {
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
     await cp(source, destination, { recursive: true, force: true });
-    console.log(`Installed the todo-mcp-claim skill for Codex at ${destination}.`);
+    console.log(`Installed the todo-mcp-claim skill at ${destination}.`);
   } catch (error) {
-    console.warn(`Could not install the Codex skill: ${(error as Error).message}`);
+    // Most likely cause: running inside an agent sandbox that restricts writes to
+    // $HOME outside the current workspace (e.g. Codex's default workspace-write mode).
+    // That's an environment permission boundary, not something this command can force —
+    // report it plainly instead of pretending to succeed.
+    console.warn(
+      `Could not install the skill at ${destination}: ${(error as Error).message}\n` +
+        `  If this is running inside a sandboxed agent session, re-run with broader ` +
+        `filesystem access, or copy skills/todo-mcp-claim from the package yourself.`,
+    );
   }
 }
 
@@ -108,7 +117,11 @@ async function configureHosts(dataDirectory: string): Promise<void> {
   }
   if (await commandExists("claude")) {
     await execFileAsync("claude", ["mcp", "remove", "--scope", "user", "todo-mcp"]).catch(() => undefined);
-    await configure("claude", ["mcp", "add", "--scope", "user", "-e", envArg, "todo-mcp", "--", "npx", ...serverArgs], "Claude Code MCP");
+    // `claude mcp add` takes the name as a bare positional right after "add" — -e/--env
+    // is variadic (`-e KEY=v1 KEY2=v2 ...`) and swallows whatever non-flag tokens follow
+    // it, so putting the name after -e makes it try to consume "todo-mcp" as a second
+    // (invalid) env var instead of the server name.
+    await configure("claude", ["mcp", "add", "todo-mcp", "--scope", "user", "-e", envArg, "--", "npx", ...serverArgs], "Claude Code MCP");
   }
 
   for (const target of [`${homedir()}/.cursor/mcp.json`, `${homedir()}/.codeium/windsurf/mcp_config.json`]) {
@@ -126,20 +139,34 @@ async function configureHosts(dataDirectory: string): Promise<void> {
   }
 }
 
+// A human at a real terminal gets asked (and can decline); an agent driving this
+// non-interactively gets everything attempted by default — "skip because nobody was
+// there to answer a prompt" is indistinguishable from "silently do nothing," which is
+// exactly the gap that left automated setups doing nothing but printing snippets.
+// --yes forces the same always-attempt behavior even in an interactive terminal.
+export function automationDefault(args: string[]): boolean {
+  return !process.stdin.isTTY || args.includes("--yes") || args.includes("-y");
+}
+
+async function shouldAutomate(rl: ReturnType<typeof createInterface>, question: string, args: string[]): Promise<boolean> {
+  if (automationDefault(args)) return true;
+  return askYesNo(rl, question);
+}
+
 export async function runInteractiveSetup(args: string[] = process.argv.slice(3)): Promise<void> {
   const configured = parseDataDirectoryArg(args);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const defaultDirectory = configured ?? process.env.TODO_MCP_DATA_DIR ?? `${homedir()}/.todo-mcp`;
-    const chosen = configured ?? (await ask(rl, "Shared durable data directory", defaultDirectory));
+    const chosen = configured ?? (process.stdin.isTTY ? await ask(rl, "Shared durable data directory", defaultDirectory) : defaultDirectory);
     const environment = { ...process.env, TODO_MCP_DATA_DIR: chosen };
     const dataDirectory = await resolveDataDirectory({ environment, warn: (message) => process.stderr.write(message) });
 
     console.log(`\ntodo-mcp data directory: ${dataDirectory}`);
-    if (process.stdin.isTTY && await askYesNo(rl, "Configure detected MCP agents automatically?")) await configureHosts(dataDirectory);
-    if (process.stdin.isTTY && await askYesNo(rl, "Install the todo-mcp-claim skill for Claude Code?")) await installClaimSkill();
-    if (process.stdin.isTTY && await askYesNo(rl, "Install the todo-mcp-claim skill for Codex?")) await installCodexSkill();
-    if (process.stdin.isTTY && await askYesNo(rl, "Install the todo_stats terminal helper and shell startup entry?")) await installStatsIntegration(dataDirectory);
+    if (await shouldAutomate(rl, "Configure detected MCP agents automatically?", args)) await configureHosts(dataDirectory);
+    if (await shouldAutomate(rl, "Install the todo-mcp-claim skill for Claude Code?", args)) await installClaimSkill();
+    if (await shouldAutomate(rl, "Install the todo-mcp-claim skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
+    if (await shouldAutomate(rl, "Install the todo_stats terminal helper and shell startup entry?", args)) await installStatsIntegration(dataDirectory);
     console.log("\nUse this same directory in every MCP host that should share the list:\n");
     console.log("Codex (config.toml):");
     console.log("[mcp_servers.todo-mcp.env]");
