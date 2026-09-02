@@ -7,12 +7,13 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { createBackup, isBackupFile, restoreBackup } from "./backup.js";
 import { getDeviceId, getDeviceName } from "./device.js";
 import { exportToJson, exportToMarkdown, importFromJson, importFromMarkdown } from "./export.js";
 import { formatHistory } from "./history.js";
 import { installProcessLogging, log } from "./log.js";
-import { applyEdits, claimTodo, completeTodo, createTodo, isClaimActive, releaseTodo, tombstoneDelete } from "./mutations.js";
-import { CURRENT_FORMAT_VERSION, migrateLegacyFields, readStore, withStore, withTodo } from "./storage.js";
+import { applyEdits, claimTodo, completeTodo, createTodo, formatAgentIdentity, isClaimActive, releaseTodo, shortId, tombstoneDelete } from "./mutations.js";
+import { CURRENT_FORMAT_VERSION, findTodoByAnyId, migrateLegacyFields, readStore, withStore, withTodo } from "./storage.js";
 import type { Todo, TodoList } from "./types.js";
 import { checkForUpdate, getCurrentVersion, runUpdate } from "./update.js";
 
@@ -28,6 +29,9 @@ const dateSchema = z.string().regex(DATE_RE, "Use YYYY-MM-DD");
 const httpUrlSchema = z.string().url().refine((u) => ["http:", "https:"].includes(new URL(u).protocol), {
   message: "must be an http:// or https:// URL",
 });
+// The local numeric id (only meaningful on THIS device) or the short id shown on every
+// device for the same item, e.g. "T-7K2F9A" — see shortId() in mutations.ts.
+const idSchema = z.union([z.number().int(), z.string()]).describe("The todo id, e.g. 3, or the cross-device short id, e.g. T-7K2F9A");
 
 const WEB_PORT = Number(process.env.TODO_MCP_WEB_PORT ?? 8787);
 const deviceId = await getDeviceId();
@@ -107,11 +111,11 @@ function formatTodo(todo: Todo): string {
   const working = isClaimActive(todo)
     ? ` ▶working:${todo.workingAgent}${todo.workingSession ? `[${todo.workingSession}]` : ""}`
     : "";
-  const via = todo.agent ? ` (via ${todo.agent}${todo.deviceName ? ` on ${todo.deviceName}` : ""})` : "";
+  const via = todo.agent ? ` (via ${formatAgentIdentity(todo.agent, todo.deviceName)})` : "";
   const suffix = todo.done && todo.completedAt ? ` (done ${todo.completedAt.slice(0, 10)})` : "";
   const desc = todo.description ? `\n      ${todo.description}` : "";
   const source = todo.sourceUrl ? `\n      🔗 ${todo.sourceUrl}` : "";
-  return `${box} #${todo.id}${cat}${pri}${due}${working} ${todo.title}${via}${suffix}${desc}${source}`;
+  return `${box} #${todo.id} (${shortId(todo.uuid)})${cat}${pri}${due}${working} ${todo.title}${via}${suffix}${desc}${source}`;
 }
 
 /** Open items first (oldest first), done items after (most recently completed first). */
@@ -201,7 +205,7 @@ server.registerTool(
     description:
       "Edit an existing item's title/description/category/priority/dueDate/sourceUrl/list by id. Only fields you pass are changed. Pass an empty string (\"\") for description/category/priority/dueDate/sourceUrl to clear that field.",
     inputSchema: {
-      id: z.number().int().describe("The todo id, e.g. 3"),
+      id: idSchema,
       title: z.string().min(1).optional().describe("New title"),
       description: z.string().optional().describe("New description, or \"\" to clear"),
       category: z.string().optional().describe("New category, or \"\" to clear"),
@@ -235,13 +239,13 @@ server.registerTool(
     title: "Claim todo",
     description:
       "Mark an item as actively being worked on by you (the calling agent). Advisory, not a lock — check todo_list(inProgress: true) before starting new work to avoid duplicating another agent's active item. Call todo_release or todo_complete when you stop.",
-    inputSchema: { id: z.number().int().describe("The todo id, e.g. 3") },
+    inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
   async ({ id }) => {
     const agent = currentAgent();
     const claimed = await withStore((store) => {
-      const item = store.todos.find((t) => t.id === id);
+      const item = findTodoByAnyId(store, id);
       if (!item) return null;
       return { item, previousAgent: claimTodo(item, agent, sessionToken, deviceId, deviceName) };
     });
@@ -257,7 +261,7 @@ server.registerTool(
   {
     title: "Release todo",
     description: "Clear the in-progress claim on an item without completing it (e.g. you're pausing this work).",
-    inputSchema: { id: z.number().int().describe("The todo id, e.g. 3") },
+    inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
   async ({ id }) => {
@@ -318,7 +322,7 @@ server.registerTool(
   {
     title: "Complete todo",
     description: "Mark a todo as done by id.",
-    inputSchema: { id: z.number().int().describe("The todo id, e.g. 3") },
+    inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
   async ({ id }) => {
@@ -334,7 +338,7 @@ server.registerTool(
   {
     title: "Todo history",
     description: "Show the change history (create/edit/claim/release/complete) for one item, who made each change and when.",
-    inputSchema: { id: z.number().int().describe("The todo id, e.g. 3") },
+    inputSchema: { id: idSchema },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
   async ({ id }) => {
@@ -386,7 +390,7 @@ server.registerTool(
   {
     title: "Delete todo",
     description: "Permanently remove a todo by id.",
-    inputSchema: { id: z.number().int().describe("The todo id, e.g. 3") },
+    inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   async ({ id }) => {
@@ -412,6 +416,8 @@ Commands:
   web                   Ensure web UI dashboard is running and print its URL
   export [options]      Export todos to stdout or a file (--format json|markdown)
   import <file>         Import todos from a JSON or Markdown file
+  backup <file>         Encrypted full backup: identity, todos, paired peers (password-protected)
+  restore <file>        Restore a backup — REPLACES this device's identity/todos/peers
   check-update          Check npm for a newer version without installing anything
   update                Check, confirm, install, self-test, and roll back on failure
   help, --help, -h      Show this help message
@@ -423,12 +429,49 @@ Export options:
 Environment variables:
   TODO_MCP_WEB_PORT     Port for the local web UI (default: 8787)
 
+Disaster recovery:
+  \`export\`/\`import\` move just the todo list, in the clear, between tools.
+  \`backup\`/\`restore\` are for THIS device: an encrypted bundle of its sync identity,
+  todos, and paired-peer list, so a lost or wiped machine can be brought back — on the
+  same or different hardware — and still be recognized by its paired devices, instead
+  of showing up as a brand-new, unpaired one. Store the backup file and its password
+  separately; either alone is useless, but losing BOTH means the backup is unrecoverable.
+
 Examples:
   todo-mcp stats
   todo-mcp list all
   todo-mcp export --format markdown > backup.md
   todo-mcp import backup.md
+  todo-mcp backup ./todo-mcp.backup
+  todo-mcp restore ./todo-mcp.backup
 `);
+}
+
+/**
+ * Reads answers to several prompts in order from ONE readline interface.
+ *
+ * NOT the same as calling `rl.question()` twice on the same interface — under piped/
+ * non-TTY stdin (a script, `printf ... | todo-mcp restore ...`, CI), a second `question()`
+ * call on a readline interface whose input stream already delivered all its buffered data
+ * simply never resolves and the process exits silently (code 0) without asking or reading
+ * anything further — confirmed against this Node version. The async-iterator protocol
+ * (`for await` over the interface) does not have this problem and works identically on a
+ * real TTY, so every multi-prompt CLI flow here goes through this helper instead.
+ */
+async function askQuestions(prompts: string[]): Promise<string[]> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answers: string[] = [];
+  try {
+    const lines = rl[Symbol.asyncIterator]();
+    for (const prompt of prompts) {
+      process.stdout.write(prompt);
+      const { value, done } = await lines.next();
+      answers.push(done ? "" : value);
+    }
+  } finally {
+    rl.close();
+  }
+  return answers;
 }
 
 async function handleCli(args: string[]): Promise<boolean> {
@@ -541,6 +584,58 @@ async function handleCli(args: string[]): Promise<boolean> {
     return true;
   }
 
+  if (cmd === "backup") {
+    const file = args[1];
+    if (!file) {
+      console.error("Error: Please provide an output file. Example: todo-mcp backup ./todo-mcp.backup");
+      process.exit(1);
+    }
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    // Plain, visible prompt rather than masked input — matches this tool's existing
+    // trust model (a personal/LAN tool, not a hardened multi-tenant one; see #123's
+    // resolution on viewer transport security for the same tradeoff). Masking input
+    // correctly needs raw-mode terminal handling that risks leaving the terminal in a
+    // broken state if this process is killed mid-prompt — not worth it here.
+    let password: string;
+    try {
+      password = await rl.question("Backup password (anyone with this file AND this password gets full access — choose something strong): ");
+    } finally {
+      rl.close();
+    }
+    if (!password) {
+      console.error("Error: a password is required — an unencrypted backup would contain this device's private sync identity and every paired peer's shared secret.");
+      process.exit(1);
+    }
+    const bundle = await createBackup(password);
+    await writeFile(file, bundle);
+    console.log(`Backup written to ${file} (${bundle.length} bytes, encrypted). Restore it with \`todo-mcp restore ${file}\` — on this or any other machine.`);
+    return true;
+  }
+
+  if (cmd === "restore") {
+    const file = args[1];
+    if (!file) {
+      console.error("Error: Please provide a backup file. Example: todo-mcp restore ./todo-mcp.backup");
+      process.exit(1);
+    }
+    const buf = await readFile(file);
+    if (!isBackupFile(buf)) {
+      console.error(`Error: ${file} doesn't look like a todo-mcp backup file.`);
+      process.exit(1);
+    }
+    const [password, proceed] = await askQuestions([
+      "Backup password: ",
+      "This REPLACES this device's identity, todos, and paired-peer list with the backup's (the current files are renamed aside as .bak, not deleted). Continue? [y/N] ",
+    ]);
+    if (!/^y(es)?$/i.test(proceed.trim())) {
+      console.log("Restore cancelled.");
+      return true;
+    }
+    const { restoredFiles } = await restoreBackup(buf, password);
+    console.log(`Restored: ${restoredFiles.join(", ")}. Restart todo-mcp (and any running MCP host) for the restored identity to take effect.`);
+    return true;
+  }
+
   return false;
 }
 
@@ -556,15 +651,21 @@ process.on("SIGTERM", () => {
 
 async function main() {
   const args = process.argv.slice(2);
-  const isCli = args.length > 0 || process.stdin.isTTY;
-
-  if (isCli) {
+  if (args.length > 0) {
     const handled = await handleCli(args);
     if (handled) return;
-    if (process.stdin.isTTY && args.length === 0) {
-      printHelp();
-      return;
-    }
+  }
+
+  // No args from here on. This used to also treat a TTY stdin as "a human at a terminal,
+  // print help and exit" instead of starting the MCP server — but some MCP hosts allocate
+  // a pty-like stdin for the subprocesses they spawn even though nothing interactive is
+  // going on, which made todo-mcp print its help text and return without ever calling
+  // server.connect(): the host saw its connection close immediately, an otherwise
+  // unexplained "MCP startup failure". Print a one-line hint on stderr (stdout has to
+  // stay clean for JSON-RPC either way) but always start the server underneath, so a real
+  // host is never silently starved of a server regardless of what its stdin looks like.
+  if (process.stdin.isTTY) {
+    process.stderr.write("todo-mcp: waiting for an MCP client on stdio. Run `todo-mcp help` for CLI usage.\n");
   }
 
   const transport = new StdioServerTransport();

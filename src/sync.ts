@@ -1,5 +1,6 @@
 import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { decryptWithKey, encryptWithKey } from "./crypto.js";
+import { pushHistory } from "./history.js";
 import { log } from "./log.js";
 import { FIELD_KEYS, isSafeUrl, type FieldKey } from "./mutations.js";
 import { loadPeers, markPeerSynced } from "./peers.js";
@@ -9,7 +10,6 @@ const INVITE_TTL_MS = 5 * 60_000; // one-time pairing token, 5 minutes
 const OUTGOING_TTL_MS = 5 * 60_000; // give up waiting for approval after 5 minutes
 const INCOMING_TTL_MS = 5 * 60_000; // an incoming request nobody approved/denied in time disappears, rather than sitting forever for a stale click later
 const SIGNATURE_WINDOW_MS = 2 * 60_000; // reject sync requests with a timestamp off by more than this (replay protection)
-const TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000; // 30 days
 const MAX_SYNC_ITEMS = 2000; // guard against a misbehaving/malicious peer sending an unbounded payload
 const PAIR_RATE_LIMIT = 8; // pairing-request attempts...
 const PAIR_RATE_WINDOW_MS = 5 * 60_000; // ...per source IP, per this window
@@ -37,6 +37,9 @@ interface PendingIncoming {
   /** The requester's X25519 public key — we derive the shared secret from this + our own private key; it is never transmitted. */
   peerPublicKeyX: string;
   receivedAt: number;
+  /** Short Authentication String — shown to the human alongside Approve/Deny so they can
+   * compare it against what the OTHER device shows before confirming. See pairingSas(). */
+  sas: string;
 }
 
 interface PendingOutgoing {
@@ -45,6 +48,14 @@ interface PendingOutgoing {
   peerDeviceId?: string;
   peerDeviceName?: string;
   createdAt: number;
+  /** The host's public key, if it was carried in the invite (QR/full-line paste) rather than
+   * just the bare 6-char code — lets this device anchor trust in the host's identity via the
+   * SAME out-of-band channel as the code, before any network round-trip. */
+  expectedPublicKeyX?: string;
+  /** Computed the moment this device redeems, from its own locally-derived secret — shown to
+   * the human so they can compare it against the host's screen. Present only when
+   * expectedPublicKeyX was available. */
+  sas?: string;
 }
 
 // Ephemeral, in-memory only — pairing state does not need to survive a restart,
@@ -150,6 +161,20 @@ export function confirmProof(secret: string, requestId: string): string {
   return hmac(secret, `confirm:${requestId}`);
 }
 
+/**
+ * Short Authentication String — a human-comparable code binding the derived secret to
+ * BOTH devices' public keys (transcript binding). If an active attacker on the LAN
+ * substituted either public key in transit, the two sides end up deriving different
+ * secrets and this code differs — comparing it on both screens catches that before a
+ * human clicks Approve. Order-independent so either side can compute it the same way
+ * without agreeing in advance who's "A" and who's "B".
+ */
+export function pairingSas(secretHex: string, publicKeyA: string, publicKeyB: string): string {
+  const [first, second] = [publicKeyA, publicKeyB].sort();
+  const digest = createHmac("sha256", Buffer.from(secretHex, "hex")).update(`sas:${first}:${second}`).digest();
+  return String(digest.readUInt32BE(0) % 1_000_000).padStart(6, "0");
+}
+
 export function verifyConfirmProof(secret: string, requestId: string, proof: string): boolean {
   return safeEqual(confirmProof(secret, requestId), proof);
 }
@@ -177,10 +202,25 @@ export function verifySyncRequest(
   return safeEqual(signSyncRequest(secret, deviceId, since, timestamp), signature);
 }
 
+/**
+ * Bump on any wire-format change a peer running the previous version would misread.
+ * A peer that doesn't send its version at all predates this negotiation entirely —
+ * treated as compatible (there's nothing to compare against), never rejected outright.
+ */
+export const SYNC_PROTOCOL_VERSION = 1;
+/** The oldest peer protocolVersion this build still knows how to talk to. */
+export const MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION = 1;
+
+export function isSyncProtocolCompatible(peerProtocolVersion: number | null | undefined): boolean {
+  if (peerProtocolVersion == null) return true; // legacy peer, predates negotiation — allow
+  return peerProtocolVersion >= MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION;
+}
+
 export interface SyncPayload {
   todos: Todo[];
   deletedUuids: Tombstone[];
   serverTime: string;
+  protocolVersion: number;
 }
 
 /** AES-256-GCM encrypt a sync response with the peer's derived secret, so payload contents aren't plaintext on the LAN. */
@@ -300,23 +340,53 @@ function fieldTimeOf(t: Todo, field: FieldKey): string {
   return t.fieldTimestamps?.[field] ?? t.createdAt;
 }
 
+/**
+ * Deterministic tie-break for an EXACT timestamp tie (both devices touched the same field
+ * at the identical wall-clock instant — rare, but the plain `remoteTime > localTime`
+ * comparison this replaces silently favored "local incumbent" on a tie without either side
+ * agreeing that's the rule, so the two devices weren't guaranteed to converge on the same
+ * winner. This makes it an explicit, symmetric rule both sides evaluate the same way.
+ * Doesn't address clock SKEW itself (one device's timestamps running systematically fast
+ * or slow) — that needs a logical/hybrid clock replacing wall-clock timestamps outright,
+ * a bigger format change given how much of the stored data is plain ISO strings today.
+ */
+function remoteWinsTie(remote: Todo, local: Todo): boolean {
+  return (remote.deviceId ?? "") > (local.deviceId ?? "");
+}
+
 /** Copies whichever fields the remote touched more recently onto `local`, field by field, so two independent edits to DIFFERENT fields both survive instead of one whole-record timestamp clobbering the other. Returns whether anything changed. */
 function mergeTodoFields(local: Todo, remote: Todo): boolean {
   let changed = false;
   local.fieldTimestamps = local.fieldTimestamps ?? {};
+  // Fields where BOTH sides independently touched it (local had its own fieldTimestamp
+  // already) and disagreed on the value — a genuine conflict the merge resolved, worth
+  // recording distinctly from "remote simply had data local never touched" (below).
+  const conflictsResolved: string[] = [];
   for (const field of FIELD_KEYS) {
     const remoteTime = fieldTimeOf(remote, field);
     const localTime = fieldTimeOf(local, field);
-    if (remoteTime > localTime) {
-      (local as unknown as Record<FieldKey, unknown>)[field] = (remote as unknown as Record<FieldKey, unknown>)[field];
+    if (remoteTime > localTime || (remoteTime === localTime && remoteWinsTie(remote, local))) {
+      const localValue = (local as unknown as Record<FieldKey, unknown>)[field];
+      const remoteValue = (remote as unknown as Record<FieldKey, unknown>)[field];
+      if (field in local.fieldTimestamps && localValue !== remoteValue) conflictsResolved.push(field);
+      (local as unknown as Record<FieldKey, unknown>)[field] = remoteValue;
       local.fieldTimestamps[field] = remoteTime;
       changed = true;
     }
   }
-  if (remote.updatedAt > local.updatedAt) {
+  if (remote.updatedAt > local.updatedAt || (remote.updatedAt === local.updatedAt && remoteWinsTie(remote, local))) {
     local.updatedAt = remote.updatedAt;
     local.deviceId = remote.deviceId;
     local.deviceName = remote.deviceName;
+  }
+  if (conflictsResolved.length > 0) {
+    pushHistory(
+      local,
+      "sync",
+      "synced",
+      `conflict resolved from ${remote.deviceName ?? remote.deviceId ?? "peer"}: ${conflictsResolved.join(", ")} — peer's newer edit won`,
+      remote.deviceName ?? null,
+    );
   }
   local.history = mergeHistories(local.history, remote.history);
   return changed;
@@ -376,8 +446,13 @@ export function mergeSyncPayload(
     }
   }
 
-  const cutoff = new Date(Date.now() - TOMBSTONE_RETENTION_MS).toISOString();
-  store.deletedUuids = store.deletedUuids.filter((t) => t.deletedAt > cutoff);
+  // Tombstones are kept indefinitely — NOT purged by age. A device that's been offline
+  // longer than any fixed retention window (a laptop unused for a couple of months, say)
+  // would otherwise reconnect to find the tombstone for an item it still has already
+  // gone, sync its still-alive copy back out, and resurrect a deletion every other peer
+  // already agreed on. GC-by-age trades that correctness risk for disk space this app
+  // doesn't meaningfully need to reclaim; a future ACK-based GC (only drop a tombstone
+  // once every paired peer has confirmed seeing it) would reclaim space safely instead.
 
   if (inserted || updated || deleted) log(`sync: merged from peer ${peerId} — +${inserted} ~${updated} -${deleted}`);
   return { inserted, updated, deleted };
@@ -401,31 +476,48 @@ export async function pullFromPeer(
   deviceId: string,
   withStore: <T>(fn: (store: TodoStore) => T | Promise<T>) => Promise<T>,
 ): Promise<boolean> {
+  if (peer.revoked) return false; // revoked locally — don't even attempt, see peers.ts revokePeer
   const since = peer.lastSyncAt ?? "1970-01-01T00:00:00.000Z";
   const timestamp = new Date().toISOString();
   const signature = signSyncRequest(peer.secret, deviceId, since, timestamp);
-  const url = `${peer.url.replace(/\/$/, "")}/api/sync?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}&timestamp=${encodeURIComponent(timestamp)}&signature=${signature}`;
+  // protocolVersion rides outside the signed portion (deviceId|since|timestamp) — it's
+  // informational, not security-sensitive, and adding it here can't break peers signed
+  // before this field existed.
+  const url = `${peer.url.replace(/\/$/, "")}/api/sync?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}&timestamp=${encodeURIComponent(timestamp)}&signature=${signature}&protocolVersion=${SYNC_PROTOCOL_VERSION}`;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { reason?: string };
+      const body = (await res.json().catch(() => ({}))) as { reason?: string; minVersion?: number };
       if (body.reason === "unpaired") {
         log(`sync: peer ${peer.name} (${peer.id}) says it no longer knows this device — was unpaired on their side`);
         return true;
+      }
+      if (body.reason === "protocol-incompatible") {
+        const msg = `this peer requires sync protocol v${body.minVersion}+ — this device is running an older todo-mcp; update it (npm install -g todo-mcp@latest) to resume syncing`;
+        log(`sync: pull from peer ${peer.name} (${peer.id}) rejected — ${msg}`);
+        await markPeerSynced(peer.id, false, { error: msg });
+        return false;
       }
       throw new Error(`peer responded ${res.status}`);
     }
     const body = (await res.json()) as { encrypted: string };
     const payload = decryptSyncPayload(peer.secret, body.encrypted);
+    if (!isSyncProtocolCompatible(payload.protocolVersion)) {
+      const msg = `peer's sync protocol v${payload.protocolVersion} is older than this device supports (min v${MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION}) — update the peer to resume syncing`;
+      log(`sync: pull from peer ${peer.name} (${peer.id}) skipped — ${msg}`);
+      await markPeerSynced(peer.id, false, { error: msg, protocolVersion: payload.protocolVersion });
+      return false;
+    }
     await withStore((store) => {
       mergeSyncPayload(store, payload, peer.id);
     });
     // Use the PEER's own clock (what it just told us "now" is), not ours — otherwise clock
     // skew between the two machines could permanently blind this cursor to real updates.
-    await markPeerSynced(peer.id, true, payload.serverTime);
+    const clockSkewMs = Date.parse(payload.serverTime) - Date.now();
+    await markPeerSynced(peer.id, true, { cursor: payload.serverTime, protocolVersion: payload.protocolVersion, clockSkewMs });
   } catch (err) {
     log(`sync: pull from peer ${peer.name} (${peer.id}) failed: ${(err as Error).message}`);
-    await markPeerSynced(peer.id, false);
+    await markPeerSynced(peer.id, false, { error: (err as Error).message });
   }
   return false;
 }

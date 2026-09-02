@@ -144,6 +144,11 @@ npx @pasichdev/todo-mcp export --format json --out backup.json
 npx @pasichdev/todo-mcp import tasks.md
 npx @pasichdev/todo-mcp import backup.json
 
+# Encrypted full-device backup/restore — identity, todos, and paired peers, not just the
+# task list (see "Data & encryption" below for what's in it and the recovery flow)
+npx @pasichdev/todo-mcp backup ./todo-mcp.backup
+npx @pasichdev/todo-mcp restore ./todo-mcp.backup
+
 # Open or verify Web UI dashboard
 npx @pasichdev/todo-mcp web
 
@@ -380,6 +385,13 @@ new version on a throwaway port with throwaway data to confirm it actually start
 if that check fails, it automatically reinstalls the previous version instead of leaving
 you on a broken one.
 
+**Provenance:** every release is published with `npm publish --provenance` — a
+[Sigstore-backed attestation](https://docs.npmjs.com/generating-provenance-statements)
+that cryptographically ties the published package to the exact GitHub Actions run and
+commit that built it, verifiable via `npm audit signatures`. This is deliberate instead
+of a custom signing scheme: it reuses npm's own trusted infrastructure rather than
+todo-mcp managing its own signing keys.
+
 ## Data & encryption
 
 Data lives in the retained legacy location `~/.todo-mcp/` by default. Set
@@ -402,13 +414,72 @@ one list across multiple isolated MCP hosts, set the same
   encrypted the same way as the todo store
 - `server.log` — plain-text process log (no todo content in it)
 
-**Threat model:** this protects the data file from accidental exposure — a
-stray `git add -A`, a backup tool that doesn't preserve file permissions,
-another account on a shared machine. It does **not** protect against
-someone with read access to your own user account, since the key sits next
-to the data it encrypts. If you upgrade from a version before encryption
-was added, the old plaintext `todos.json` is migrated automatically on
-first read and kept as `todos.json.bak`.
+If you upgrade from a version before encryption was added, the old plaintext
+`todos.json` is migrated automatically on first read and kept as `todos.json.bak`.
+
+**Encrypted backup/restore:** `todo-mcp backup <file>` bundles this whole data
+directory — identity, at-rest key, todos, and paired peers — into one
+password-protected file (AES-256-GCM, key derived with scrypt), so a lost or
+wiped machine can be brought back on the same or different hardware and still
+be recognized by every device it was paired with, instead of showing up as a
+new, unpaired one. `todo-mcp restore <file>` decrypts and writes it back,
+renaming whatever's currently on disk aside as `.pre-restore-*.bak` first
+rather than overwriting it outright. Store the backup file and its password
+separately — either one alone is useless, but losing **both** makes the
+backup itself unrecoverable, same as losing the file with no backup at all.
+
+## Threat model
+
+What todo-mcp protects against, what it deliberately doesn't, and why:
+
+- **Disk / at-rest exposure** — see "Data & encryption" above: local-machine
+  AES-256-GCM protects against accidental exposure (a stray `git add -A`, a
+  backup tool that drops permissions, another account on a shared machine),
+  not against someone with read access to your own user account — the key
+  sits next to the data it protects.
+- **LAN sniffing of device-to-device sync** — encrypted end-to-end regardless
+  of transport: the shared secret is derived independently on each side via
+  X25519 ECDH + HKDF and never crosses the network, every sync request is
+  HMAC-signed with replay protection, and every sync response is AES-256-GCM
+  encrypted. A passive LAN listener gets nothing usable from sync traffic.
+- **LAN sniffing of viewer (browser) traffic** — **not** encrypted; the web
+  UI is plain HTTP. Real transport encryption here would mean either a
+  self-signed TLS cert (constant browser warnings on every device that opens
+  the dashboard) or an app-layer scheme keyed off the viewer's own bearer
+  token — which protects nothing, since that same token already travels in
+  the clear and a LAN eavesdropper who can read the traffic can read the
+  token. Given that, the practical mitigation is what's already in place:
+  access requires a human to click **Approve** on the host device first (see
+  "LAN Viewer Gate" above), so the exposure is "an already-approved LAN can
+  read dashboard traffic," not "anyone on the LAN gets in."
+- **A malicious or compromised peer** — sync payloads from a peer are
+  validated and clamped field-by-field before touching the store (rejects
+  malformed items, strips `javascript:`/`data:` URLs, drops unrecognized
+  history actions and `fieldTimestamps` keys) rather than trusted wholesale,
+  and a sync request body is capped at 10MB. A peer can be **revoked**
+  (Devices panel) to immediately stop syncing with it without losing the
+  pairing itself, or fully **unpaired** to drop it entirely.
+- **A stolen/leaked viewer bearer token** — grants read/write dashboard
+  access until the host explicitly revokes that viewer (Devices panel); it
+  is not scoped further (no read-only mode, no per-token expiry today).
+  Treat a viewer link/token the way you'd treat a shared password.
+- **A compromised device** — todo-mcp does not detect or contain this; a
+  device that's been compromised can read/write everything that device could
+  already read/write (its own todos, and anything its paired peers sync to
+  it). Revoking or unpairing it from the Devices panel of an *uncompromised*
+  peer stops further sync from it.
+- **Cross-site/CSRF requests against the web UI** — the session/viewer
+  cookies are `SameSite=Strict` (the primary defense: a real cross-site
+  request never carries them at all), plus explicit Origin/Referer
+  validation on every mutating request as defense-in-depth. The Host header
+  itself is also validated (rejects anything but `localhost`, an IP literal,
+  or a `.local` mDNS name) to close DNS-rebinding as a way around both.
+- **A malicious/tampered update** — `npm publish --provenance` (see
+  "Updating" above) cryptographically ties every published version to the
+  exact GitHub Actions run and commit that built it, verifiable via
+  `npm audit signatures`; `todo-mcp update` also self-tests the freshly
+  installed version before keeping it, and rolls back automatically if that
+  fails.
 
 ## Testing
 

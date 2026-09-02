@@ -5,7 +5,8 @@ export interface HistoryEntry {
   agent: string | null;
   /** Which physical device made this change. Null for entries from before device-sync existed. */
   deviceName: string | null;
-  action: "created" | "edited" | "claimed" | "released" | "completed" | "moved";
+  /** "synced" is written locally, not by the editing device — see mergeTodoFields in sync.ts: it records which peer's conflicting edit won a field, not a user action. */
+  action: "created" | "edited" | "claimed" | "released" | "completed" | "moved" | "synced";
   detail: string;
 }
 

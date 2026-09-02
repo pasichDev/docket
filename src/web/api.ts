@@ -12,9 +12,10 @@ import {
 import { deriveSharedSecret, getDevicePublicKey, getDeviceRole, setDeviceRole } from "../device.js";
 import { exportToJson, exportToMarkdown, importFromJson, importFromMarkdown } from "../export.js";
 import { log } from "../log.js";
-import { applyEdits, completeTodo, createTodo, isClaimActive, tombstoneDelete } from "../mutations.js";
+import { applyEdits, completeTodo, createTodo, isClaimActive, isSafeUrl, shortId, tombstoneDelete } from "../mutations.js";
 import { listEvents, recordCreated, recordResolved } from "../notifications.js";
-import { addPeer, loadPeers, removePeer } from "../peers.js";
+import { addPeer, loadPeers, peerFingerprint, peerTrustState, removePeer, restorePeer, revokePeer, updatePeerUrl } from "../peers.js";
+import { computeAgentPresence } from "../presence.js";
 import { CURRENT_FORMAT_VERSION, readStore, withStore, withTodo } from "../storage.js";
 import {
   addIncomingRequest,
@@ -25,15 +26,20 @@ import {
   encryptSyncPayload,
   getIncomingRequest,
   getOutgoingRequest,
+  isSyncProtocolCompatible,
   listIncomingRequests,
+  MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION,
+  pairingSas,
   redeemInvite,
   removeIncomingRequest,
   resolveOutgoingRequest,
+  signSyncRequest,
+  SYNC_PROTOCOL_VERSION,
   verifyConfirmProof,
   verifySyncRequest,
   type SyncPayload,
 } from "../sync.js";
-import type { TodoList, TodoPriority } from "../types.js";
+import type { Peer, TodoList, TodoPriority } from "../types.js";
 import { addViewer, loadViewers, removeViewer } from "../viewers.js";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -254,7 +260,10 @@ export async function handleApiRoute(
   // 6. Todos - List
   if (req.method === "GET" && url.pathname === "/api/todos") {
     const store = await readStore();
-    const todos = store.todos.map((t) => (isClaimActive(t) ? t : { ...t, workingAgent: null }));
+    // shortId travels with each item so the web UI can show the same cross-device id an
+    // MCP tool would — computed here, not client-side, so there's only one place deriving
+    // it from uuid (see shortId() in mutations.ts).
+    const todos = store.todos.map((t) => ({ ...(isClaimActive(t) ? t : { ...t, workingAgent: null }), shortId: shortId(t.uuid) }));
     json(res, 200, { todos });
     return true;
   }
@@ -355,10 +364,23 @@ export async function handleApiRoute(
     return true;
   }
 
+  // 11b. Agent Presence — "codex@ryzen active" / "idle 3m", derived from history (see presence.ts)
+  if (req.method === "GET" && url.pathname === "/api/presence") {
+    const store = await readStore();
+    json(res, 200, { presence: computeAgentPresence(store) });
+    return true;
+  }
+
   // 12. Peers - List
   if (req.method === "GET" && url.pathname === "/api/peers") {
     const peers = await loadPeers();
-    json(res, 200, { peers: peers.map(({ secret: _secret, ...safe }) => safe) });
+    json(res, 200, {
+      peers: peers.map(({ secret: _secret, publicKeyX, ...safe }) => ({
+        ...safe,
+        trustState: peerTrustState({ ...safe, publicKeyX } as Peer),
+        fingerprint: publicKeyX ? peerFingerprint(publicKeyX) : null,
+      })),
+    });
     return true;
   }
 
@@ -377,6 +399,69 @@ export async function handleApiRoute(
     return true;
   }
 
+  // 13b. Peers - Revoke / Restore (blocks/resumes sync without dropping the pairing — see peers.ts)
+  const peerRevokeMatch = url.pathname.match(/^\/api\/peers\/([\w-]+)\/revoke$/);
+  if (req.method === "POST" && peerRevokeMatch) {
+    if (!ctx.hasUiSession(req)) {
+      json(res, 403, { error: "this action must come from this device's own browser" });
+      return true;
+    }
+    const ok = await revokePeer(peerRevokeMatch[1]);
+    json(res, ok ? 200 : 404, { revoked: ok });
+    return true;
+  }
+  const peerRestoreMatch = url.pathname.match(/^\/api\/peers\/([\w-]+)\/restore$/);
+  if (req.method === "POST" && peerRestoreMatch) {
+    if (!ctx.hasUiSession(req)) {
+      json(res, 403, { error: "this action must come from this device's own browser" });
+      return true;
+    }
+    const ok = await restorePeer(peerRestoreMatch[1]);
+    json(res, ok ? 200 : 404, { restored: ok });
+    return true;
+  }
+
+  // 13c. Peers - Update Address (manual recovery when a peer's LAN address changes — see backlog #139)
+  const peerAddressMatch = url.pathname.match(/^\/api\/peers\/([\w-]+)\/address$/);
+  if (req.method === "POST" && peerAddressMatch) {
+    if (!ctx.hasUiSession(req)) {
+      json(res, 403, { error: "this action must come from this device's own browser" });
+      return true;
+    }
+    const peer = (await loadPeers()).find((p) => p.id === peerAddressMatch[1]);
+    if (!peer) {
+      json(res, 404, { error: "unknown peer" });
+      return true;
+    }
+    const body = (await readJsonBody(req)) as { url?: unknown };
+    if (typeof body.url !== "string" || !isSafeUrl(body.url)) {
+      json(res, 400, { error: "invalid address" });
+      return true;
+    }
+    const newUrl = body.url.replace(/\/$/, "");
+    // Re-verify identity at the NEW address before trusting it — but NOT via /api/device's
+    // self-reported id/publicKeyX, which anything can answer unauthenticated (and is all
+    // most existing peers have on record anyway, from before publicKeyX was persisted).
+    // Instead, prove it cryptographically: sign a sync request with the SECRET already on
+    // file for this peer. Only the genuine paired device derived that same secret via ECDH,
+    // so only it can produce a response the candidate address's own /api/sync accepts.
+    const since = "9999-01-01T00:00:00.000Z"; // far future — verified via signature only, no data ever needs to come back
+    const timestamp = new Date().toISOString();
+    const signature = signSyncRequest(peer.secret, ctx.deviceId, since, timestamp);
+    const proofUrl = `${newUrl}/api/sync?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(ctx.deviceId)}&timestamp=${encodeURIComponent(timestamp)}&signature=${signature}`;
+    try {
+      const proofRes = await fetch(proofUrl, { signal: AbortSignal.timeout(5000) });
+      if (!proofRes.ok) throw new Error(`status ${proofRes.status}`);
+    } catch (err) {
+      json(res, 403, { error: `the device at that address didn't prove it holds this peer's shared secret — refusing to update: ${(err as Error).message}` });
+      return true;
+    }
+    await updatePeerUrl(peer.id, newUrl);
+    log(`peers: updated address for ${peer.name} (${peer.id}) to ${newUrl} after re-verifying identity`);
+    json(res, 200, { ok: true });
+    return true;
+  }
+
   // 14. Pair - Create Invite
   if (req.method === "POST" && url.pathname === "/api/pair/invite") {
     if (!ctx.hasUiSession(req)) {
@@ -392,7 +477,17 @@ export async function handleApiRoute(
       return true;
     }
     const { token, expiresAt } = createInvite();
-    json(res, 200, { token, expiresAt, deviceId: ctx.deviceId, deviceName: ctx.deviceName, url: ctx.lanUrl });
+    // publicKeyX travels in the invite itself (QR / full-line paste) — the ONE channel an
+    // active LAN attacker can't tamper with — so the redeeming device can anchor trust in
+    // this device's real identity before ever making a network call. See pairingSas().
+    json(res, 200, {
+      token,
+      expiresAt,
+      deviceId: ctx.deviceId,
+      deviceName: ctx.deviceName,
+      url: ctx.lanUrl,
+      publicKeyX: await getDevicePublicKey(),
+    });
     return true;
   }
 
@@ -437,12 +532,14 @@ export async function handleApiRoute(
       return true;
     }
     const requestId = randomUUID();
+    const secret = await deriveSharedSecret(body.publicKeyX);
     addIncomingRequest(requestId, {
       deviceId: body.deviceId,
       deviceName: body.deviceName.slice(0, 80),
       callbackUrl: body.callbackUrl,
       peerPublicKeyX: body.publicKeyX,
       receivedAt: Date.now(),
+      sas: pairingSas(secret, await getDevicePublicKey(), body.publicKeyX),
     });
     recordCreated(requestId, "pairing", body.deviceName.slice(0, 80));
     log(`pairing: incoming request ${requestId} from ${body.deviceName} — awaiting approval`);
@@ -493,6 +590,7 @@ export async function handleApiRoute(
       pairedAt: new Date().toISOString(),
       lastSyncAt: null,
       lastSyncOk: true,
+      publicKeyX: pending.peerPublicKeyX,
     });
     removeIncomingRequest(requestId);
     recordResolved(requestId, "approved");
@@ -535,7 +633,7 @@ export async function handleApiRoute(
       json(res, 403, { error: "this action must come from this device's own browser" });
       return true;
     }
-    const body = (await readJsonBody(req)) as { peerUrl?: unknown; token?: unknown };
+    const body = (await readJsonBody(req)) as { peerUrl?: unknown; token?: unknown; publicKeyX?: unknown };
     if (typeof body.peerUrl !== "string" || typeof body.token !== "string" || !body.peerUrl || !body.token) {
       json(res, 400, { error: "peerUrl and token are required" });
       return true;
@@ -543,6 +641,15 @@ export async function handleApiRoute(
     if (!ctx.lanUrl) {
       json(res, 400, { error: "No LAN IP on this machine — can't receive the pairing callback." });
       return true;
+    }
+    // If the invite carried the host's public key (QR / full-line paste, not just the bare
+    // 6-char code), anchor trust in it via the out-of-band channel — derive the secret and
+    // an SAS to show the human RIGHT NOW, before any network round-trip can be tampered with.
+    const expectedPublicKeyX = typeof body.publicKeyX === "string" ? body.publicKeyX : undefined;
+    let sas: string | undefined;
+    if (expectedPublicKeyX) {
+      const secret = await deriveSharedSecret(expectedPublicKeyX);
+      sas = pairingSas(secret, expectedPublicKeyX, await getDevicePublicKey());
     }
     try {
       const upstream = await fetch(`${body.peerUrl.replace(/\/$/, "")}/api/pair/request`, {
@@ -563,8 +670,8 @@ export async function handleApiRoute(
         return true;
       }
       const { requestId } = (await upstream.json()) as { requestId: string };
-      addOutgoingRequest(requestId, { peerUrl: body.peerUrl, status: "pending" });
-      json(res, 200, { requestId });
+      addOutgoingRequest(requestId, { peerUrl: body.peerUrl, status: "pending", expectedPublicKeyX, sas });
+      json(res, 200, { requestId, sas });
     } catch (err) {
       json(res, 502, { error: `couldn't reach that device: ${(err as Error).message}` });
     }
@@ -583,7 +690,7 @@ export async function handleApiRoute(
       json(res, 404, { error: "unknown or expired pairing request" });
       return true;
     }
-    json(res, 200, { status: pendingOut.status, deviceName: pendingOut.peerDeviceName });
+    json(res, 200, { status: pendingOut.status, deviceName: pendingOut.peerDeviceName, sas: pendingOut.sas });
     return true;
   }
 
@@ -616,6 +723,14 @@ export async function handleApiRoute(
       return true;
     }
 
+    // If this device redeemed with the host's public key already anchored via the invite
+    // itself, an attacker who intercepted the pairing traffic and swapped in a different
+    // /api/device response here would be caught by this mismatch, not silently trusted.
+    if (pending.expectedPublicKeyX && pending.expectedPublicKeyX !== peerInfo.publicKeyX) {
+      json(res, 403, { error: "the confirming device's public key doesn't match the one from the pairing invite" });
+      return true;
+    }
+
     const secret = await deriveSharedSecret(peerInfo.publicKeyX);
     if (!verifyConfirmProof(secret, requestId, body.proof)) {
       json(res, 403, { error: "invalid proof" });
@@ -635,6 +750,7 @@ export async function handleApiRoute(
       pairedAt: new Date().toISOString(),
       lastSyncAt: null,
       lastSyncOk: true,
+      publicKeyX: peerInfo.publicKeyX,
     });
     resolveOutgoingRequest(requestId, { status: "confirmed", peerDeviceId: peerInfo.id, peerDeviceName: peerName });
     if (ctx.deviceRole !== "guest") {
@@ -775,14 +891,28 @@ export async function handleApiRoute(
     const callerDeviceId = url.searchParams.get("deviceId") ?? "";
     const timestamp = url.searchParams.get("timestamp") ?? "";
     const signature = url.searchParams.get("signature") ?? "";
+    const callerProtocolVersionRaw = url.searchParams.get("protocolVersion");
+    const callerProtocolVersion = callerProtocolVersionRaw === null ? null : Number(callerProtocolVersionRaw);
     const peers = await loadPeers();
     const peer = peers.find((p) => p.id === callerDeviceId);
     if (!peer) {
       json(res, 403, { error: "not a paired device", reason: "unpaired" });
       return true;
     }
+    if (peer.revoked) {
+      json(res, 403, { error: "this peer has been revoked", reason: "revoked" });
+      return true;
+    }
     if (!verifySyncRequest(peer.secret, callerDeviceId, since, timestamp, signature)) {
       json(res, 403, { error: "signature invalid or expired" });
+      return true;
+    }
+    if (!isSyncProtocolCompatible(callerProtocolVersion)) {
+      json(res, 409, {
+        error: `caller's sync protocol v${callerProtocolVersion} is older than this device supports`,
+        reason: "protocol-incompatible",
+        minVersion: MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION,
+      });
       return true;
     }
     const store = await readStore();
@@ -790,6 +920,7 @@ export async function handleApiRoute(
       todos: store.todos.filter((t) => t.updatedAt > since),
       deletedUuids: (store.deletedUuids ?? []).filter((t) => t.deletedAt > since),
       serverTime: new Date().toISOString(),
+      protocolVersion: SYNC_PROTOCOL_VERSION,
     };
     json(res, 200, encryptSyncPayload(peer.secret, payload));
     return true;

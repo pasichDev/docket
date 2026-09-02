@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
@@ -64,16 +64,77 @@ export async function removePeer(id: string): Promise<boolean> {
   });
 }
 
+/** Blocks sync with this peer without losing the pairing (secret, history) — reversible via restorePeer, unlike removePeer. */
+export async function revokePeer(id: string): Promise<boolean> {
+  return withPeers((peers) => {
+    const peer = peers.find((p) => p.id === id);
+    if (!peer) return false;
+    peer.revoked = true;
+    return true;
+  });
+}
+
+export async function restorePeer(id: string): Promise<boolean> {
+  return withPeers((peers) => {
+    const peer = peers.find((p) => p.id === id);
+    if (!peer) return false;
+    peer.revoked = false;
+    return true;
+  });
+}
+
+/**
+ * Manual recovery for a peer whose LAN address changed (new DHCP lease, moved networks) —
+ * the caller must have already re-verified the new address answers as the SAME peer
+ * (matching id and public key) before calling this; see the /api/peers/:id/address handler.
+ * There is deliberately no automatic discovery (mDNS et al. — see backlog #138): binding
+ * trust to "whatever answers at this IP" instead of a human-confirmed identity check is
+ * exactly the class of mistake this manual path avoids.
+ */
+export async function updatePeerUrl(id: string, url: string): Promise<boolean> {
+  return withPeers((peers) => {
+    const peer = peers.find((p) => p.id === id);
+    if (!peer) return false;
+    peer.url = url;
+    return true;
+  });
+}
+
+export type PeerTrustState = "pending" | "verified" | "trusted" | "revoked";
+
+/**
+ * Derived, not stored — everything but `revoked` already lives on the peer record, so
+ * computing this here (rather than tracking a redundant state machine that could drift
+ * out of sync with the fields it would duplicate) can't ever disagree with reality.
+ */
+export function peerTrustState(peer: Peer): PeerTrustState {
+  if (peer.revoked) return "revoked";
+  if (!peer.lastSyncAt) return "pending"; // paired, never synced successfully yet
+  return peer.lastSyncOk ? "trusted" : "verified"; // has synced before; "verified" = currently failing
+}
+
+/** Short, human-comparable fingerprint of a peer's public key — same idea as an SSH key fingerprint. Not a secret; the key itself is public by design. */
+export function peerFingerprint(publicKeyX: string): string {
+  return createHash("sha256").update(publicKeyX).digest("hex").slice(0, 12).toUpperCase().replace(/(.{4})(?=.)/g, "$1 ");
+}
+
 /**
  * `cursor` should be the PEER's own clock (the `serverTime` it reported in the
  * sync response), not ours — using our local clock here would silently miss
  * updates whenever the two machines' clocks disagree (see sync.ts).
  */
-export async function markPeerSynced(id: string, ok: boolean, cursor?: string): Promise<void> {
+export async function markPeerSynced(
+  id: string,
+  ok: boolean,
+  details: { cursor?: string; error?: string; protocolVersion?: number; clockSkewMs?: number } = {},
+): Promise<void> {
   await withPeers((peers) => {
     const peer = peers.find((p) => p.id === id);
     if (!peer) return;
-    if (ok && cursor) peer.lastSyncAt = cursor;
+    if (ok && details.cursor) peer.lastSyncAt = details.cursor;
     peer.lastSyncOk = ok;
+    peer.lastError = ok ? null : (details.error ?? "unknown error");
+    if (details.protocolVersion !== undefined) peer.protocolVersion = details.protocolVersion;
+    if (details.clockSkewMs !== undefined) peer.clockSkewMs = details.clockSkewMs;
   });
 }

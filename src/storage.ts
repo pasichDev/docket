@@ -4,6 +4,7 @@ import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { withFileLock } from "./filelock.js";
 import { log } from "./log.js";
+import { shortId } from "./mutations.js";
 import type { Todo, TodoStore } from "./types.js";
 import { uuidv7 } from "./uuid7.js";
 
@@ -126,14 +127,33 @@ export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Pr
   });
 }
 
+/** True local-numeric-id-shaped input — anything else is tried as a short id (case-insensitive, "T-" optional). */
+function isNumericId(id: number | string): id is number {
+  return typeof id === "number" || /^\d+$/.test(id);
+}
+
+export function findTodoByAnyId(store: TodoStore, id: number | string): Todo | undefined {
+  if (isNumericId(id)) {
+    const byNumeric = store.todos.find((t) => t.id === Number(id));
+    // The short id charset includes digits, so an all-digit input (e.g. someone typed a
+    // short id without its "T-" prefix) is numeric-shaped but not numeric-meant — fall
+    // through to the short id match below instead of reporting "not found".
+    if (byNumeric || typeof id === "number") return byNumeric;
+  }
+  const normalized = String(id).trim().toUpperCase();
+  const withPrefix = normalized.startsWith("T-") ? normalized : `T-${normalized}`;
+  return store.todos.find((t) => shortId(t.uuid) === withPrefix);
+}
+
 /**
  * `withStore` narrowed to the overwhelmingly common case: mutate the one item
- * with this id under the lock. Resolves to the item, or null if there is no
- * such id — both entry points then turn that null into their own 404 wording.
+ * matching this id (local numeric, or the cross-device short id — see
+ * findTodoByAnyId) under the lock. Resolves to the item, or null if there is
+ * no match — both entry points then turn that null into their own 404 wording.
  */
-export async function withTodo(id: number, mutate: (item: Todo, store: TodoStore) => void): Promise<Todo | null> {
+export async function withTodo(id: number | string, mutate: (item: Todo, store: TodoStore) => void): Promise<Todo | null> {
   return withStore((store) => {
-    const item = store.todos.find((t) => t.id === id);
+    const item = findTodoByAnyId(store, id);
     if (!item) return null;
     mutate(item, store);
     return item;

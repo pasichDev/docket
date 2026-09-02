@@ -13,7 +13,10 @@ const {
   confirmProof,
   decryptSyncPayload,
   encryptSyncPayload,
+  isSyncProtocolCompatible,
+  MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION,
   mergeSyncPayload,
+  pairingSas,
   signSyncRequest,
   verifyConfirmProof,
   verifySyncRequest,
@@ -31,7 +34,7 @@ function emptyStore(): TodoStore {
 }
 
 function payloadFrom(todos: Todo[]): SyncPayload {
-  return { todos, deletedUuids: [], serverTime: new Date().toISOString() };
+  return { todos, deletedUuids: [], serverTime: new Date().toISOString(), protocolVersion: 1 };
 }
 
 test("mergeSyncPayload: inserts a remote-only item under a fresh local id", () => {
@@ -75,6 +78,45 @@ test("mergeSyncPayload: two independent edits to DIFFERENT fields both survive (
   assert.equal(local.todos[0].description, "added on B", "B's description edit must also survive");
 });
 
+test("mergeSyncPayload: a genuine same-field conflict (both sides independently edited it) is recorded as a distinct 'synced' history entry (regression: no diagnostic for which device's value won)", async () => {
+  const seedStore = emptyStore();
+  const base = createTodo(seedStore, { title: "Shared item", agent: null, session: null }, "device-a", "A");
+
+  const local = emptyStore();
+  local.todos = [structuredClone(base)];
+  await new Promise((r) => setTimeout(r, 2));
+  local.todos[0].title = "Local edit";
+  touch(local.todos[0], "device-a", "A", ["title"]);
+
+  await new Promise((r) => setTimeout(r, 2));
+  const remoteItem = structuredClone(base);
+  remoteItem.title = "Remote edit";
+  touch(remoteItem, "device-b", "RemoteBox", ["title"]);
+
+  mergeSyncPayload(local, payloadFrom([remoteItem]), "device-b");
+  assert.equal(local.todos[0].title, "Remote edit", "the newer (remote) edit should win the conflict");
+  const syncedEntries = local.todos[0].history.filter((h) => h.action === "synced");
+  assert.equal(syncedEntries.length, 1, "exactly one conflict-resolution entry, not one per merge call or per unrelated field");
+  assert.match(syncedEntries[0].detail, /title/);
+  assert.match(syncedEntries[0].detail, /RemoteBox/);
+});
+
+test("mergeSyncPayload: adopting a field the local side never touched is NOT recorded as a conflict (there was nothing to conflict with)", async () => {
+  const seedStore = emptyStore();
+  const base = createTodo(seedStore, { title: "x", agent: null, session: null }, "device-a", "A");
+
+  const local = emptyStore();
+  local.todos = [structuredClone(base)]; // local never edits description
+
+  const remoteItem = structuredClone(base);
+  remoteItem.description = "added on B";
+  touch(remoteItem, "device-b", "B", ["description"]);
+
+  mergeSyncPayload(local, payloadFrom([remoteItem]), "device-b");
+  assert.equal(local.todos[0].description, "added on B");
+  assert.equal(local.todos[0].history.filter((h) => h.action === "synced").length, 0);
+});
+
 test("mergeSyncPayload: a field last-touched more recently locally is NOT overwritten by an older remote value", async () => {
   const seedStore = emptyStore();
   const base = createTodo(seedStore, { title: "x", agent: null, session: null }, "device-a", "A");
@@ -92,6 +134,36 @@ test("mergeSyncPayload: a field last-touched more recently locally is NOT overwr
   assert.equal(local.todos[0].title, "Edited locally, later");
 });
 
+test("mergeSyncPayload: an EXACT field-timestamp tie resolves the same way on both sides (regression: used to silently favor whichever copy called merge, not a rule both devices agree on)", () => {
+  const seedStore = emptyStore();
+  const base = createTodo(seedStore, { title: "original", agent: null, session: null }, "device-a", "A");
+  const tieTime = new Date(Date.now() + 1000).toISOString();
+
+  const copyA = structuredClone(base);
+  copyA.title = "from device-alpha";
+  copyA.deviceId = "device-alpha";
+  copyA.fieldTimestamps.title = tieTime;
+
+  const copyB = structuredClone(base);
+  copyB.title = "from device-beta";
+  copyB.deviceId = "device-beta";
+  copyB.fieldTimestamps.title = tieTime;
+
+  // A merges B's payload...
+  const storeOnA = emptyStore();
+  storeOnA.todos = [structuredClone(copyA)];
+  mergeSyncPayload(storeOnA, payloadFrom([copyB]), "device-beta");
+
+  // ...and B merges A's payload — a tied field-timestamp must land on the SAME winner
+  // either way, or the two devices would each believe a different edit "won" forever.
+  const storeOnB = emptyStore();
+  storeOnB.todos = [structuredClone(copyB)];
+  mergeSyncPayload(storeOnB, payloadFrom([copyA]), "device-alpha");
+
+  assert.equal(storeOnA.todos[0].title, storeOnB.todos[0].title);
+  assert.equal(storeOnA.todos[0].title, "from device-beta"); // "device-beta" > "device-alpha" lexically
+});
+
 test("mergeSyncPayload: a remote tombstone deletes a local item that hasn't changed since", () => {
   const local = emptyStore();
   const item = createTodo(local, { title: "to be deleted", agent: null, session: null }, "device-a", "A");
@@ -100,10 +172,19 @@ test("mergeSyncPayload: a remote tombstone deletes a local item that hasn't chan
     todos: [],
     deletedUuids: [{ uuid: item.uuid, deletedAt: new Date(Date.now() + 1000).toISOString(), deviceId: "device-b" }],
     serverTime: new Date().toISOString(),
+    protocolVersion: 1,
   };
   const result = mergeSyncPayload(local, tombstonePayload, "device-b");
   assert.equal(result.deleted, 1);
   assert.equal(local.todos.length, 0);
+});
+
+test("mergeSyncPayload: a tombstone months old is NOT purged (regression: a long-offline peer must still see it and not resurrect the item)", () => {
+  const local = emptyStore();
+  const veryOldTombstone = { uuid: "some-uuid", deletedAt: new Date(Date.now() - 200 * 24 * 60 * 60_000).toISOString(), deviceId: "device-a" };
+  local.deletedUuids = [veryOldTombstone];
+  mergeSyncPayload(local, payloadFrom([]), "device-b"); // an unrelated merge shouldn't sweep old tombstones as a side effect
+  assert.deepEqual(local.deletedUuids, [veryOldTombstone]);
 });
 
 test("mergeSyncPayload: an edit AFTER a peer's delete resurrects the item (edit-after-delete wins)", () => {
@@ -232,6 +313,31 @@ test("confirmProof/verifyConfirmProof: valid proof verifies, wrong secret does n
   assert.equal(verifyConfirmProof("different-secret", "req-1", proof), false);
 });
 
+test("pairingSas: deterministic and order-independent — either device computes the same code", () => {
+  const secret = "a".repeat(64);
+  const pubA = "pubkey-A-base64url-ish";
+  const pubB = "pubkey-B-base64url-ish";
+  const sas1 = pairingSas(secret, pubA, pubB);
+  const sas2 = pairingSas(secret, pubB, pubA); // the other device computes it with args swapped
+  assert.equal(sas1, sas2);
+  assert.match(sas1, /^\d{6}$/);
+});
+
+test("pairingSas: a different secret (regression: what an active MITM substituting a public key would cause) yields a different code", () => {
+  const pubA = "pubkey-A-base64url-ish";
+  const pubB = "pubkey-B-base64url-ish";
+  const sasReal = pairingSas("a".repeat(64), pubA, pubB);
+  const sasMitm = pairingSas("b".repeat(64), pubA, pubB); // MITM's secret differs from the real one
+  assert.notEqual(sasReal, sasMitm);
+});
+
+test("pairingSas: a different public key pair (a substituted key) yields a different code even with the same secret", () => {
+  const secret = "a".repeat(64);
+  const sasReal = pairingSas(secret, "pubkey-A", "pubkey-B");
+  const sasTampered = pairingSas(secret, "pubkey-A", "attacker-pubkey");
+  assert.notEqual(sasReal, sasTampered);
+});
+
 test("encryptSyncPayload/decryptSyncPayload: round-trips and the wire format is not readable JSON", () => {
   const secret = "a".repeat(64); // 32 bytes hex
   const payload = payloadFrom([]);
@@ -240,4 +346,18 @@ test("encryptSyncPayload/decryptSyncPayload: round-trips and the wire format is 
   assert.throws(() => JSON.parse(Buffer.from(wire.encrypted, "base64").toString("utf8")), "the wire bytes must not be parseable as plaintext JSON");
   const decrypted = decryptSyncPayload(secret, wire.encrypted);
   assert.deepEqual(decrypted, payload);
+});
+
+test("isSyncProtocolCompatible: a legacy peer that sent no version at all is treated as compatible", () => {
+  assert.equal(isSyncProtocolCompatible(null), true);
+  assert.equal(isSyncProtocolCompatible(undefined), true);
+});
+
+test("isSyncProtocolCompatible: the current minimum version and anything newer are compatible", () => {
+  assert.equal(isSyncProtocolCompatible(MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION), true);
+  assert.equal(isSyncProtocolCompatible(MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION + 5), true);
+});
+
+test("isSyncProtocolCompatible: a version below the minimum is rejected", () => {
+  assert.equal(isSyncProtocolCompatible(MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION - 1), false);
 });

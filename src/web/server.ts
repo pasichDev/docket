@@ -71,6 +71,34 @@ export function hasTrustedHostHeader(req: IncomingMessage): boolean {
   return hostname === "localhost" || hostname.endsWith(".local") || isIP(bare) > 0;
 }
 
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * CSRF defense-in-depth for mutating requests, alongside the SameSite=Strict session
+ * cookies (the primary defense — a real cross-site browser request never carries them
+ * at all). This catches the residual case those cookies don't: a request forged from
+ * another page on the SAME device, e.g. a malicious LAN page the browser still treats
+ * as first-party to itself, or a viewer whose bearer token a page embeds directly
+ * instead of relying on cookies. No Origin/Referer at all means a non-browser client
+ * (another paired device's own fetch(), curl) — those never send Origin unless told
+ * to, so leaving this case open doesn't weaken anything; a spoofed Origin can't fool
+ * this check because the browser sets it, not page script.
+ */
+export function hasSameOriginForMutation(req: IncomingMessage): boolean {
+  if (!req.method || !MUTATING_METHODS.has(req.method)) return true;
+  const originHeader = req.headers.origin;
+  const refererHeader = req.headers.referer;
+  const claimed = originHeader ?? refererHeader;
+  if (!claimed) return true;
+  const hostHeader = req.headers.host;
+  if (!hostHeader) return true;
+  try {
+    return new URL(claimed).host === hostHeader;
+  } catch {
+    return false;
+  }
+}
+
 export function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -125,6 +153,7 @@ const BROWSER_PROTECTED_PATHS = [
   /^\/api\/qr$/,
   /^\/api\/todos(\/|$)/,
   /^\/api\/peers(\/|$)/,
+  /^\/api\/presence$/,
   /^\/api\/pair\/invite$/,
   /^\/api\/pair\/incoming$/,
   /^\/api\/pair\/redeem$/,
@@ -160,6 +189,9 @@ export async function createWebServer(): Promise<Server> {
     try {
       if (!hasTrustedHostHeader(req)) {
         return json(res, 403, { error: "unrecognized Host header" });
+      }
+      if (!hasSameOriginForMutation(req)) {
+        return json(res, 403, { error: "cross-origin request rejected" });
       }
       const url = new URL(req.url ?? "/", "http://localhost");
 

@@ -5,10 +5,12 @@ import {
   claimTodo,
   completeTodo,
   createTodo,
+  formatAgentIdentity,
   isClaimActive,
   isSafeUrl,
   leaseExpiry,
   releaseTodo,
+  shortId,
   tombstoneDelete,
   touch,
 } from "./mutations.js";
@@ -17,6 +19,30 @@ import type { TodoStore } from "./types.js";
 function emptyStore(): TodoStore {
   return { formatVersion: 5, nextId: 1, todos: [], deletedUuids: [] };
 }
+
+test("shortId: deterministic (identical for the same uuid, regardless of which device computes it)", () => {
+  const uuid = "01926f3e-1234-7890-abcd-ef0123456789";
+  assert.equal(shortId(uuid), shortId(uuid));
+  assert.match(shortId(uuid), /^T-[2-9A-HJ-NP-Z]{6}$/); // no 0/O/1/I/L, matching the pairing-code charset
+});
+
+test("shortId: two UUIDv7s created moments apart (sharing a timestamp prefix) still get well-spread short ids", () => {
+  const a = "01926f3e-0001-7890-abcd-ef0123456789";
+  const b = "01926f3e-0002-7890-abcd-ef0123456789"; // differs only in one low byte, like real close-in-time UUIDv7s
+  assert.notEqual(shortId(a), shortId(b));
+});
+
+test("formatAgentIdentity: combines agent and device as agent@device", () => {
+  assert.equal(formatAgentIdentity("codex", "ryzen"), "codex@ryzen");
+  assert.equal(formatAgentIdentity("claude-code", "MacBook Pro"), "claude-code@MacBook Pro");
+});
+
+test("formatAgentIdentity: falls back gracefully when either half is missing", () => {
+  assert.equal(formatAgentIdentity("codex", null), "codex");
+  assert.equal(formatAgentIdentity(null, "ryzen"), "ryzen");
+  assert.equal(formatAgentIdentity(null, null), "unknown");
+  assert.equal(formatAgentIdentity("  ", "  "), "unknown"); // whitespace-only treated as absent
+});
 
 test("createTodo: stamps identity, timestamps, and device fields", () => {
   const store = emptyStore();
@@ -128,6 +154,34 @@ test("claimTodo: reports the previous active claim it took over, and null when t
 
   assert.equal(claimTodo(todo, "codex", "s2", "d", "n"), "claude-code");
   assert.match(todo.history.at(-1)!.detail, /took over from claude-code/);
+});
+
+test("claimTodo: the same claimant calling again renews the lease without resetting workingSince (heartbeat)", async () => {
+  const store = emptyStore();
+  const todo = createTodo(store, { title: "x", agent: null, session: null }, "d", "n");
+
+  claimTodo(todo, "codex", "s1", "d", "n");
+  const originalSince = todo.workingSince;
+  const originalExpiry = todo.workingLeaseExpiresAt;
+
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(claimTodo(todo, "codex", "s1", "d", "n"), "codex", "renewal still reports the (unchanged) claimant, not null");
+  assert.equal(todo.workingSince, originalSince, "workingSince must survive a renewal — it's when the work actually started");
+  assert.ok(todo.workingLeaseExpiresAt! > originalExpiry!, "the lease itself must actually be extended");
+  assert.match(todo.history.at(-1)!.detail, /lease renewed/);
+});
+
+test("claimTodo: a different SESSION from the same agent name is NOT a renewal (two host sessions can share an agent name) — workingSince resets", async () => {
+  const store = emptyStore();
+  const todo = createTodo(store, { title: "x", agent: null, session: null }, "d", "n");
+
+  claimTodo(todo, "codex", "s1", "d", "n");
+  const originalSince = todo.workingSince;
+  await new Promise((r) => setTimeout(r, 5));
+  claimTodo(todo, "codex", "s2", "d", "n");
+  assert.notEqual(todo.workingSince, originalSince, "a different session is a fresh claim, not a heartbeat — workingSince should reset");
+  assert.equal(todo.workingSession, "s2");
+  assert.doesNotMatch(todo.history.at(-1)!.detail, /lease renewed/);
 });
 
 test("releaseTodo / completeTodo: both clear the whole claim", () => {

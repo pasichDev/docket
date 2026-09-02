@@ -62,6 +62,16 @@ export interface Peer {
   pairedAt: string;
   lastSyncAt: string | null;
   lastSyncOk: boolean;
+  /** Explicitly blocks sync without losing the pairing/secret — see peers.ts revokePeer/restorePeer. Absent on records from before this field existed, treated as false. */
+  revoked?: boolean;
+  /** The last sync protocol version this peer reported (see sync.ts SYNC_PROTOCOL_VERSION); null until the first successful sync. */
+  protocolVersion?: number | null;
+  /** Reason the most recent sync attempt failed, or null if it succeeded (or none has run yet). */
+  lastError?: string | null;
+  /** peer's reported clock minus ours, at the most recent sync — a large value is worth surfacing, see peerTrustState() in peers.ts. */
+  clockSkewMs?: number | null;
+  /** The peer's X25519 public key, as verified at pairing time — public by design, safe to display. Used only to derive a human-checkable fingerprint (see peerFingerprint() in peers.ts); never used to re-derive the secret. Absent on peers paired before this field existed. */
+  publicKeyX?: string;
 }
 
 export interface TodoStore {

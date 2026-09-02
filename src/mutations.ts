@@ -1,6 +1,35 @@
+import { createHash } from "node:crypto";
 import { diffDetail, pushHistory } from "./history.js";
 import type { Todo, TodoList, TodoPriority, TodoStore } from "./types.js";
 import { uuidv7 } from "./uuid7.js";
+
+// No 0/O, 1/I/L — same unambiguous charset as the pairing short codes.
+const SHORT_ID_CHARSET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+const SHORT_ID_LENGTH = 6;
+
+/**
+ * A short, human-typeable id derived from `uuid` — identical for the same item on every
+ * device, unlike the numeric `id`, which is assigned locally by whichever device's store
+ * first held the item and can differ across devices for the exact same synced todo. Never
+ * stored: it's a pure function of `uuid`, so there's nothing to migrate or keep in sync.
+ * Hashed rather than sliced directly from the uuid's own hex, because UUIDv7's first bits
+ * are a timestamp — items created close together would otherwise share a long common
+ * prefix instead of spreading evenly across the short id space.
+ */
+export function shortId(uuid: string): string {
+  const digest = createHash("sha256").update(uuid).digest();
+  let out = "";
+  for (let i = 0; i < SHORT_ID_LENGTH; i++) out += SHORT_ID_CHARSET[digest[i] % SHORT_ID_CHARSET.length];
+  return `T-${out}`;
+}
+
+/** Compact "agent@device" identity, e.g. "codex@ryzen" — one normalized form for CLI/MCP text output and presence, instead of each call site inventing its own "via X on Y" phrasing. */
+export function formatAgentIdentity(agent: string | null, deviceName: string | null): string {
+  const a = agent?.trim() || null;
+  const d = deviceName?.trim() || null;
+  if (a && d) return `${a}@${d}`;
+  return a ?? d ?? "unknown";
+}
 
 export interface NewTodoInput {
   title: string;
@@ -161,6 +190,13 @@ function clearClaim(item: Todo): void {
 }
 
 /** Marks the item as actively worked on by `agent`, returning whichever agent's still-active claim it took over (null if it was free). */
+/**
+ * Doubles as the claim's heartbeat: the SAME claimant (agent + session) calling this
+ * again on their own still-active claim just renews the lease — CLAIM_LEASE_MS is only
+ * 15 minutes, too short for a long-running agent task to survive on a single claim.
+ * `workingSince` is preserved across a renewal (only a genuinely NEW claim resets it),
+ * so "claimed since" still reflects when the work actually started, not the last heartbeat.
+ */
 export function claimTodo(
   item: Todo,
   agent: string | null,
@@ -169,11 +205,12 @@ export function claimTodo(
   deviceName: string,
 ): string | null {
   const previousAgent = isClaimActive(item) ? item.workingAgent : null;
+  const isRenewal = previousAgent !== null && previousAgent === agent && item.workingSession === session;
+  if (!isRenewal) item.workingSince = new Date().toISOString();
   item.workingAgent = agent;
-  item.workingSince = new Date().toISOString();
   item.workingSession = session;
   item.workingLeaseExpiresAt = leaseExpiry();
-  const detail = previousAgent && previousAgent !== agent ? `took over from ${previousAgent}` : "claimed";
+  const detail = isRenewal ? "lease renewed" : previousAgent && previousAgent !== agent ? `took over from ${previousAgent}` : "claimed";
   pushHistory(item, agent, "claimed", detail, deviceName);
   touch(item, deviceId, deviceName, CLAIM_FIELDS);
   return previousAgent;

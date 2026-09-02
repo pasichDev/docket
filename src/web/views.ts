@@ -80,6 +80,7 @@ export const PAGE = `<!doctype html>
   .tag[data-tag="all"][data-active="true"] { background: var(--ink); color: var(--ink-text); }
   .tag[data-tag="todo"][data-active="true"] { background: var(--sage-bg); color: var(--sage); }
   .tag[data-tag="backlog"][data-active="true"] { background: var(--lavender-bg); color: var(--lavender); }
+  .tag[data-tag="devices"][data-active="true"] { background: var(--due-bg); color: var(--due-text); }
 
   .toolbar { display: flex; gap: 8px; align-items: center; }
   select, input[type=text], input[type=date], input[type=url], textarea {
@@ -172,6 +173,10 @@ export const PAGE = `<!doctype html>
   .via { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--meta); font-weight: 600; white-space: nowrap; }
   .via .adot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
   .via .session { opacity: .7; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .device-badge {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; white-space: nowrap;
+    color: var(--due-text); background: var(--due-bg); padding: 2px 8px; border-radius: 999px;
+  }
   .card-body .due {
     font-family: 'Fredoka', sans-serif; font-size: 11px; font-weight: 600; color: var(--due-text);
     background: var(--due-bg); padding: 3px 10px; border-radius: 999px; flex-shrink: 0; white-space: nowrap;
@@ -369,10 +374,14 @@ export const PAGE = `<!doctype html>
   }
   .row-badge.sync { background: var(--sage-bg); color: var(--sage); }
   .row-badge.viewer { background: var(--lavender-bg); color: var(--lavender); }
+  .row-badge.trust-trusted { background: var(--sage-bg); color: var(--sage); }
+  .row-badge.trust-verified { background: var(--due-bg); color: var(--accent); }
+  .row-badge.trust-pending { background: var(--input-bg); color: var(--muted2); box-shadow: 0 0 0 1px var(--card-plain-border) inset; }
+  .row-badge.trust-revoked { background: var(--due-bg); color: var(--danger); }
 
   .devices-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
   .device-row {
-    display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px;
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; flex-wrap: wrap;
     background: var(--input-bg); box-shadow: 0 0 0 1px var(--card-plain-border);
   }
   .device-row .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -380,11 +389,28 @@ export const PAGE = `<!doctype html>
   .device-row .dot.fail { background: var(--danger); }
   .device-row .name { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13px; flex: 1; }
   .device-row .meta { font-size: 11px; color: var(--muted2); }
-  .device-row .unpair {
+  .device-row .unpair, .device-row .peer-revoke {
     border: none; background: none; color: var(--muted2); cursor: pointer; font-size: 11px; font-weight: 700;
     padding: 4px 8px; border-radius: 999px; font-family: 'Fredoka', sans-serif;
   }
   .device-row .unpair:hover { color: var(--danger); background: var(--bg); }
+  .device-row .peer-revoke:hover { color: var(--accent); background: var(--bg); }
+  .device-row-details {
+    flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10.5px; color: var(--muted2);
+    padding-top: 6px; margin-top: 2px; border-top: 1px dashed var(--card-plain-border);
+  }
+  .device-row-details .err { color: var(--danger); }
+  .device-row-details button {
+    border: none; background: none; color: var(--accent); cursor: pointer; font-size: 10.5px; font-weight: 600;
+    font-family: 'Fredoka', sans-serif; padding: 0;
+  }
+
+  .presence-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+  .presence-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 11.5px; color: var(--muted2); }
+  .presence-row .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .presence-row .dot.active { background: var(--sage); }
+  .presence-row .dot.idle { background: var(--muted2); }
+  .presence-row .who { font-weight: 600; color: var(--ink); }
 
   .devices-incoming { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
   .devices-incoming[hidden] { display: none; }
@@ -394,6 +420,8 @@ export const PAGE = `<!doctype html>
   }
   .incoming-row .name { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13px; flex: 1; color: var(--text); }
   .incoming-row .meta { font-size: 11px; color: var(--muted2); display: block; }
+  .incoming-row .meta.sas-verify { color: var(--accent); margin-top: 2px; }
+  .incoming-row .meta.sas-verify strong { font-family: ui-monospace, monospace; letter-spacing: .05em; }
   .incoming-row button {
     border: none; border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 700; cursor: pointer;
     font-family: 'Fredoka', sans-serif;
@@ -541,6 +569,8 @@ export const PAGE = `<!doctype html>
       <p class="devices-explainer">Full sync partners and browsers approved to view/edit this list.</p>
       <div class="devices-list" id="devices-list"></div>
       <div class="devices-list" id="access-viewers-list"></div>
+      <p class="devices-explainer" id="presence-heading" hidden>Recent activity</p>
+      <div class="presence-list" id="presence-list"></div>
     </div>
   </dialog>
 
@@ -589,6 +619,7 @@ export const PAGE = `<!doctype html>
       <button class="tag" data-tag="all" data-active="true" type="button"><span class="dot"></span>All <span class="n" data-count="all"></span></button>
       <button class="tag" data-tag="todo" data-active="false" type="button"><span class="dot"></span>Todo <span class="n" data-count="todo"></span></button>
       <button class="tag" data-tag="backlog" data-active="false" type="button"><span class="dot"></span>Backlog <span class="n" data-count="backlog"></span></button>
+      <button class="tag" data-tag="devices" data-active="false" type="button"><span class="dot"></span>Other devices <span class="n" data-count="devices"></span></button>
     </div>
 
     <div class="toolbar">
@@ -719,7 +750,7 @@ function itemHtml(t) {
   const tint = categoryTint(t.category);
   const cardStyle = t.workingAgent ? \` style="--work-glow:\${agentColor(t.workingAgent)};"\` : "";
   const badge = t.category
-    ? \`<span class="badge" style="background:\${tint.chipBg}; color:\${tint.chipText}; --badge-rot:\${tint.rot}">\${escapeHtml(t.category)}</span>\`
+    ? \`<span class="badge" title="Filter to \${escapeHtml(t.category)}" data-category="\${escapeHtml(t.category)}" style="background:\${tint.chipBg}; color:\${tint.chipText}; --badge-rot:\${tint.rot}; cursor:pointer;">\${escapeHtml(t.category)}</span>\`
     : "";
   const listBadge = \`<span class="list-badge \${t.list}"><span class="dot"></span>\${t.list === "todo" ? "Todo" : "Backlog"}</span>\`;
   const priorityFlag = t.priority ? \`<span class="priority-flag \${t.priority}" title="\${t.priority} priority"></span>\` : "";
@@ -733,6 +764,9 @@ function itemHtml(t) {
   const via = t.agent
     ? \`<span class="via" title="\${t.session ? \`session \${escapeHtml(t.session)}\` : "no session (web)"}"><span class="adot" style="background:\${agentColor(t.agent)}"></span>via \${escapeHtml(t.agent)}\${t.session ? \` <span class="session">#\${escapeHtml(t.session)}</span>\` : ""}</span>\`
     : "";
+  // Only for items from OTHER devices — this device's own items stay uncluttered, "via"
+  // (agent) already covers the common case.
+  const deviceBadge = isFromOtherDevice(t) ? \`<span class="device-badge" title="Synced from another device">📱 \${escapeHtml(t.deviceName || "other device")}</span>\` : "";
   const workingPill = t.workingAgent
     ? \`<span class="working-pill" style="background:\${agentColor(t.workingAgent)}"><span class="pulse"></span>working — \${escapeHtml(t.workingAgent)}</span>\`
     : "";
@@ -740,7 +774,7 @@ function itemHtml(t) {
     <li class="\${t.done ? "done" : ""} \${t.workingAgent ? "working-card" : ""}" data-id="\${t.id}"\${cardStyle}>
       \${workingPill}
       <div class="card-top">
-        <span class="card-top-left">\${priorityFlag}\${listBadge}\${badge}\${via}</span>
+        <span class="card-top-left">\${priorityFlag}\${listBadge}\${badge}\${via}\${deviceBadge}</span>
         <span class="card-actions">
           <button class="edit" title="Edit">✎</button>
           <button class="del" title="Delete">✕</button>
@@ -748,7 +782,7 @@ function itemHtml(t) {
       </div>
       <div class="card-body">
         \${checkbox}
-        <span class="id">#\${t.id}</span>
+        <span class="id" title="Cross-device id — the same on every paired device, unlike #\${t.id}">#\${t.id} · \${t.shortId}</span>
         <span class="card-title">\${escapeHtml(t.title)}</span>
         \${due}
       </div>
@@ -867,9 +901,16 @@ let activeTag = "all";
 function applyTagCounts(todos) {
   const counts = { all: todos.length, todo: 0, backlog: 0 };
   for (const t of todos) counts[t.list] = (counts[t.list] ?? 0) + 1;
-  for (const tag of ["all", "todo", "backlog"]) {
+  counts.devices = todos.filter(isFromOtherDevice).length;
+  for (const tag of ["all", "todo", "backlog", "devices"]) {
     document.querySelector(\`[data-count="\${tag}"]\`).textContent = counts[tag] ?? 0;
   }
+}
+
+// Before loadDeviceInfo() resolves, thisDeviceId is still null — deviceId-tagged items
+// briefly show as "other" until then, since we don't yet know which one is "us".
+function isFromOtherDevice(t) {
+  return !!t.deviceId && t.deviceId !== thisDeviceId;
 }
 
 /**
@@ -941,7 +982,8 @@ function render(todos) {
   const search = document.querySelector(".search").value.trim().toLowerCase();
   const sortMode = document.querySelector(".sort").value;
 
-  let items = activeTag === "all" ? todos : todos.filter((t) => t.list === activeTag);
+  let items =
+    activeTag === "all" ? todos : activeTag === "devices" ? todos.filter(isFromOtherDevice) : todos.filter((t) => t.list === activeTag);
   if (search) {
     items = items.filter(
       (t) =>
@@ -1037,6 +1079,7 @@ let devicesLoaded = false;
 let devicesPollTimer = null;
 let outgoingPollTimer = null;
 let isHostBrowserFlag = false;
+let thisDeviceId = null;
 const seenRequestIds = new Set();
 // requestId -> "approve" | "deny" while that action's fetch is in flight — the periodic
 // poll (every 4s while the modal is open) rebuilds these rows from scratch, and approve
@@ -1058,6 +1101,10 @@ async function loadDeviceInfo() {
   try {
     const d = await (await fetch("/api/device")).json();
     isHostBrowserFlag = !!d.isHostBrowser;
+    if (thisDeviceId !== d.id) {
+      thisDeviceId = d.id;
+      render(allTodos); // "Other devices" counted/filtered against thisDeviceId, unknown until now
+    }
     document.getElementById("this-device-name").textContent = d.name + (d.role === "guest" ? " (guest)" : "");
     const canManage = d.role !== "guest" && d.isHostBrowser;
     document.getElementById("devices-pair-section").hidden = !canManage;
@@ -1116,16 +1163,23 @@ async function pollNotifications() {
 // one relabeled) whenever this id is mid-flight, so a periodic poll landing during
 // that window doesn't revert it to plain "Approve"/"Deny" and make the click look
 // like it did nothing.
-function incomingRowHtml(id, name, meta) {
+function incomingRowHtml(id, name, meta, sas) {
   const action = pendingRequestActions.get(id);
   const approveLabel = action === "approve" ? "Approving…" : "Approve";
   const denyLabel = action === "deny" ? "Denying…" : "Deny";
   const disabled = action ? "disabled" : "";
+  // sas: only pairing requests carry this — a code derived from both devices' public keys,
+  // shown so the human can compare it against what the OTHER device's screen shows before
+  // approving. A mismatch means someone tampered with the exchange (active MITM).
+  const sasLineHtml = sas
+    ? \`<span class="meta sas-verify">Verify code: <strong>\${sas.slice(0, 3)} \${sas.slice(3)}</strong> — must match on the other device</span>\`
+    : "";
   return \`
     <div class="incoming-row" data-id="\${id}">
       <span>
         <span class="name">\${name}</span>
         <span class="meta">\${meta}</span>
+        \${sasLineHtml}
       </span>
       <button class="approve" data-id="\${id}" type="button" \${disabled}>\${approveLabel}</button>
       <button class="deny" data-id="\${id}" type="button" \${disabled}>\${denyLabel}</button>
@@ -1136,17 +1190,31 @@ async function refreshDevicesPanel() {
   try {
     const { peers } = await (await fetch("/api/peers")).json();
     const listEl = document.getElementById("devices-list");
+    const TRUST_LABELS = { trusted: "Trusted", verified: "Verified", pending: "Pending", revoked: "Revoked" };
     listEl.innerHTML = peers
-      .map(
-        (p) => \`
+      .map((p) => {
+        const skew = typeof p.clockSkewMs === "number" ? \`\${p.clockSkewMs >= 0 ? "+" : ""}\${Math.round(p.clockSkewMs / 1000)}s skew\` : null;
+        const chips = [
+          p.fingerprint ? \`fp \${escapeHtml(p.fingerprint)}\` : null,
+          typeof p.protocolVersion === "number" ? \`protocol v\${p.protocolVersion}\` : null,
+          skew,
+        ].filter(Boolean);
+        return \`
         <div class="device-row" data-id="\${p.id}">
-          <span class="dot \${p.lastSyncOk === false ? "fail" : "ok"}"></span>
+          <span class="dot \${p.trustState === "trusted" ? "ok" : "fail"}"></span>
           <span class="name">\${escapeHtml(p.name)}</span>
           <span class="row-badge sync">Sync</span>
+          <span class="row-badge trust-\${p.trustState}">\${TRUST_LABELS[p.trustState] || p.trustState}</span>
           <span class="meta">synced \${timeAgo(p.lastSyncAt)}</span>
+          <button class="peer-revoke" data-id="\${p.id}" data-action="\${p.revoked ? "restore" : "revoke"}" type="button">\${p.revoked ? "Restore" : "Revoke"}</button>
           <button class="unpair" data-id="\${p.id}" type="button">Unpair</button>
-        </div>\`
-      )
+          <div class="device-row-details">
+            \${chips.map((c) => \`<span>\${c}</span>\`).join("")}
+            \${p.lastError ? \`<span class="err">\${escapeHtml(p.lastError)}</span>\` : ""}
+            <button class="peer-update-address" data-id="\${p.id}" data-name="\${escapeHtml(p.name)}" type="button">Update address…</button>
+          </div>
+        </div>\`;
+      })
       .join("");
   } catch (err) {
     console.error("devices refresh failed", err);
@@ -1179,6 +1247,25 @@ async function refreshDevicesPanel() {
   devicesTabBadge.hidden = connectedCount === 0;
   devicesTabBadge.textContent = String(connectedCount);
 
+  try {
+    const { presence } = await (await fetch("/api/presence")).json();
+    const presenceEl = document.getElementById("presence-list");
+    const presenceHeading = document.getElementById("presence-heading");
+    presenceHeading.hidden = presence.length === 0;
+    presenceEl.innerHTML = presence
+      .map(
+        (p) => \`
+        <div class="presence-row">
+          <span class="dot \${p.active ? "active" : "idle"}"></span>
+          <span class="who">\${escapeHtml(p.identity)}</span>
+          <span>\${p.active ? "active" : \`idle \${timeAgo(p.lastActiveAt)}\`}</span>
+        </div>\`
+      )
+      .join("");
+  } catch (err) {
+    console.error("presence refresh failed", err);
+  }
+
   if (isHostBrowserFlag) {
     try {
       const { requests: pairingRequests } = await (await fetch("/api/pair/incoming")).json();
@@ -1186,7 +1273,7 @@ async function refreshDevicesPanel() {
       incomingEl.hidden = pairingRequests.length === 0;
       incomingEl.innerHTML = pairingRequests
         .map(
-          (r) => incomingRowHtml(r.requestId, \`Pairing request from \${escapeHtml(r.deviceName)}\`, "wants to share this list with this device")
+          (r) => incomingRowHtml(r.requestId, \`Pairing request from \${escapeHtml(r.deviceName)}\`, "wants to share this list with this device", r.sas)
         )
         .join("");
 
@@ -1236,7 +1323,10 @@ async function generateInvite() {
       loading.style.display = "none";
       return;
     }
-    const code = \`\${invite.url}?pair=\${invite.token}\`;
+    // pk carries this device's real public key through the SAME out-of-band channel as the
+    // code (QR / pasted line) — the other device anchors trust in it before any network call,
+    // so an active LAN attacker can't just swap in their own key mid-exchange unnoticed.
+    const code = \`\${invite.url}?pair=\${invite.token}&pk=\${encodeURIComponent(invite.publicKeyX)}\`;
     textarea.value = code;
     shortCode.textContent = invite.token;
     img.onload = () => {
@@ -1338,11 +1428,41 @@ document.querySelectorAll(".pair-tab").forEach((btn) => {
 });
 
 document.getElementById("devices-list").addEventListener("click", async (e) => {
-  if (!e.target.matches(".unpair")) return;
-  const id = e.target.dataset.id;
-  e.target.disabled = true;
-  await fetch(\`/api/peers/\${id}\`, { method: "DELETE" });
-  refreshDevicesPanel();
+  if (e.target.matches(".unpair")) {
+    const id = e.target.dataset.id;
+    e.target.disabled = true;
+    await fetch(\`/api/peers/\${id}\`, { method: "DELETE" });
+    refreshDevicesPanel();
+    return;
+  }
+  if (e.target.matches(".peer-revoke")) {
+    const id = e.target.dataset.id;
+    const action = e.target.dataset.action; // "revoke" or "restore"
+    e.target.disabled = true;
+    await fetch(\`/api/peers/\${id}/\${action}\`, { method: "POST" });
+    refreshDevicesPanel();
+    return;
+  }
+  if (e.target.matches(".peer-update-address")) {
+    const id = e.target.dataset.id;
+    const name = e.target.dataset.name;
+    const newUrl = prompt(\`New address for \${name} (e.g. http://192.168.1.42:8787) — its identity will be re-verified before this device trusts it:\`);
+    if (!newUrl) return;
+    e.target.disabled = true;
+    e.target.textContent = "Verifying…";
+    try {
+      const res = await fetch(\`/api/peers/\${id}/address\`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: newUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data.error || "Couldn't update the address.");
+    } catch {
+      alert("Couldn't reach that address.");
+    }
+    refreshDevicesPanel();
+  }
 });
 
 async function handleIncomingAction(e, kind) {
@@ -1383,17 +1503,26 @@ document.getElementById("access-viewers-list").addEventListener("click", async (
   refreshDevicesPanel();
 });
 
+function sasLine(sas) {
+  return sas ? \`Verify code: \${sas.slice(0, 3)} \${sas.slice(3)} — must match on both screens\` : "";
+}
+
 document.getElementById("pair-redeem-btn").addEventListener("click", async () => {
   const hostInput = document.getElementById("pair-host-input");
   const codeInput = document.getElementById("pair-code-input");
   const status = document.getElementById("pair-status-text");
   let host = hostInput.value.trim();
   let token = codeInput.value.trim().toUpperCase();
-  // Someone pasting the full "host?pair=CODE" line into the host field still works.
+  let publicKeyX = null;
+  // Someone pasting the full "host?pair=CODE&pk=..." line into the host field still works —
+  // pk is what lets this device verify the host's identity out-of-band (see generateInvite).
   if (host.includes("?pair=")) {
-    const [h, c] = host.split("?pair=");
+    const [h, rest] = host.split("?pair=");
     host = h.trim();
+    const params = new URLSearchParams(rest.includes("&") ? rest.slice(rest.indexOf("&")) : "");
+    const c = rest.split("&")[0];
     if (!token) token = c.trim().toUpperCase();
+    publicKeyX = params.get("pk");
   }
   if (!host || !token) {
     status.textContent = "Enter both the host address and the code.";
@@ -1405,14 +1534,14 @@ document.getElementById("pair-redeem-btn").addEventListener("click", async () =>
     const res = await fetch("/api/pair/redeem", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peerUrl, token }),
+      body: JSON.stringify({ peerUrl, token, publicKeyX: publicKeyX || undefined }),
     });
     const body = await res.json();
     if (!res.ok) {
       status.textContent = body.error || "Couldn't connect.";
       return;
     }
-    status.textContent = "Waiting for approval on the other device…";
+    status.textContent = \`Waiting for approval on the other device… \${sasLine(body.sas)}\`;
     clearInterval(outgoingPollTimer);
     let attempts = 0;
     outgoingPollTimer = setInterval(async () => {
@@ -1432,6 +1561,8 @@ document.getElementById("pair-redeem-btn").addEventListener("click", async () =>
       } else if (s.status === "denied") {
         clearInterval(outgoingPollTimer);
         status.textContent = "The other device declined the request.";
+      } else {
+        status.textContent = \`Waiting for approval on the other device… \${sasLine(s.sas || body.sas)}\`;
       }
     }, 2000);
   } catch {
@@ -1545,6 +1676,13 @@ document.querySelector(".page").addEventListener("click", async (e) => {
   } else if (e.target.matches("button.cancel-edit")) {
     editingId = null;
     render(allTodos);
+  } else if (e.target.matches(".badge") && e.target.dataset.category) {
+    // Reuse the existing search box as the "browse by project" filter, instead of
+    // adding another permanent tag/tab for something with unbounded cardinality.
+    const searchInput = document.querySelector(".search");
+    searchInput.value = e.target.dataset.category;
+    searchInput.dispatchEvent(new Event("input"));
+    searchInput.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 });
 
