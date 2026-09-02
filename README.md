@@ -69,16 +69,23 @@ web UI, and the optional Claude Code skill in one go.
 installed, and Node.js 18+ (check with `node --version` in a terminal — if
 that command isn't found, get Node from [nodejs.org](https://nodejs.org)).
 
-**1. Choose one shared data directory.** On a normal machine the default is
-`~/.todo-mcp`; for sandboxed agents choose an explicit durable directory:
+**1. Run the interactive setup wizard.** It creates and verifies one shared
+durable data directory, optionally installs the Claude Code claim skill, and
+can add a `todo_stats` helper to your shell startup:
 
 ```sh
-npx -y --prefix /tmp --package=@pasichdev/todo-mcp todo-mcp-setup --data-dir "$HOME/.local/state/todo-mcp"
+npx -y @pasichdev/todo-mcp setup
+```
+
+For automation or a non-interactive terminal, pass the directory explicitly:
+
+```sh
+npx -y @pasichdev/todo-mcp setup --data-dir "$HOME/.local/state/todo-mcp"
 ```
 
 Copy the printed `TODO_MCP_DATA_DIR` setting into every MCP host that should
-share this list. The setup command only creates and verifies the directory; it
-does not modify host configuration files.
+share this list. The wizard never replaces existing shell configuration; it
+only adds a sourced helper file after you confirm.
 
 **2. Register the server.** Open a terminal and run:
 
