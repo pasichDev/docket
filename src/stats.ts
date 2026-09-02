@@ -1,3 +1,4 @@
+import { isClaimActive } from "./mutations.js";
 import { readStore } from "./storage.js";
 
 const GREEN = "\x1b[38;2;52;211;153m"; // Todo — matches web UI's #34d399
@@ -17,7 +18,7 @@ async function main() {
   let out = `${GREEN}Todo ${todoOpen}${RESET}`;
   if (backlogOpen > 0) out += `   ${VIOLET}Backlog ${backlogOpen}${RESET}`;
 
-  const working = store.todos.filter((t) => t.workingAgent && !t.done);
+  const working = store.todos.filter((t) => t.workingAgent && !t.done && isClaimActive(t));
   if (working.length > 0) {
     const label = (t: (typeof working)[number]) => t.category ?? (t.title.length > 30 ? `${t.title.slice(0, 30)}…` : t.title);
     const items = working.map((t) => `${AMBER}▶ ${label(t)}${RESET} ${DIM}(${t.workingAgent})${RESET}`).join(", ");

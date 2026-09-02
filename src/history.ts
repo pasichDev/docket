@@ -3,6 +3,8 @@ import type { Todo } from "./types.js";
 export interface HistoryEntry {
   at: string;
   agent: string | null;
+  /** Which physical device made this change. Null for entries from before device-sync existed. */
+  deviceName: string | null;
   action: "created" | "edited" | "claimed" | "released" | "completed" | "moved";
   detail: string;
 }
@@ -19,14 +21,23 @@ export function diffDetail(changes: Record<string, { from: unknown; to: unknown 
     .join(", ");
 }
 
-export function pushHistory(item: Todo, agent: string | null, action: HistoryEntry["action"], detail: string): void {
+export function pushHistory(
+  item: Todo,
+  agent: string | null,
+  action: HistoryEntry["action"],
+  detail: string,
+  deviceName: string | null = null,
+): void {
   item.history = item.history ?? [];
-  item.history.push({ at: new Date().toISOString(), agent, action, detail });
+  item.history.push({ at: new Date().toISOString(), agent, deviceName, action, detail });
 }
 
 export function formatHistory(item: Todo): string {
   if (!item.history || item.history.length === 0) return `No history for #${item.id}.`;
   return item.history
-    .map((h) => `${h.at.slice(0, 19).replace("T", " ")}  ${h.action}  (${h.agent ?? "unknown"})  ${h.detail}`)
+    .map(
+      (h) =>
+        `${h.at.slice(0, 19).replace("T", " ")}  ${h.action}  (${h.agent ?? "unknown"}${h.deviceName ? ` on ${h.deviceName}` : ""})  ${h.detail}`,
+    )
     .join("\n");
 }

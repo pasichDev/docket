@@ -5,6 +5,8 @@ export type TodoPriority = "low" | "medium" | "high";
 
 export interface Todo {
   id: number;
+  /** Globally-unique, immutable identity used to match the same item across paired devices. Local `id` is per-machine only. */
+  uuid: string;
   title: string;
   description: string | null;
   done: boolean;
@@ -13,6 +15,8 @@ export interface Todo {
   priority: TodoPriority | null;
   /** ISO date only, e.g. "2026-09-15" — no time component. */
   dueDate: string | null;
+  /** Optional link back to where this item came from — a GitHub issue/PR, a Notion page, an Obsidian note, a Slack thread, anything with a URL. */
+  sourceUrl: string | null;
   /** MCP client name self-reported at connect time (clientInfo.name), or "web" for the HTTP UI. */
   agent: string | null;
   /** Per-connection token — one per MCP server process run (roughly one host session). Not a claude.ai session URL; that isn't exposed over MCP. */
@@ -22,10 +26,42 @@ export interface Todo {
   workingSince: string | null;
   /** Set by todo_claim: the claiming connection's session token (see `session` above) — lets two claims from the same agent name but different host sessions be told apart in the display. */
   workingSession: string | null;
+  /** Set by todo_claim: the claim auto-expires at this time unless renewed, so a claim from a device that vanished (crashed, offline for months) doesn't haunt the list forever. */
+  workingLeaseExpiresAt: string | null;
   createdAt: string;
+  /** Bumped on every mutation. Used as the fallback conflict resolver for fields with no per-field timestamp (old data, or fields not covered by FIELD_KEYS in mutations.ts). */
+  updatedAt: string;
+  /** Per-field last-write-wins timestamps, keyed by field name (see FIELD_KEYS in mutations.ts). Lets two independent edits to DIFFERENT fields both survive a merge instead of one clobbering the other. Missing/partial on data from before this existed — those fields fall back to `updatedAt`. */
+  fieldTimestamps: Partial<Record<string, string>>;
   completedAt: string | null;
+  /** Which physical device this item was created on (see src/device.ts). Null for items from before device-sync existed. */
+  deviceId: string | null;
+  deviceName: string | null;
   /** Append-only audit log: every create/edit/claim/release/complete, by whom (agent, including "web" for manual UI edits). */
   history: HistoryEntry[];
+}
+
+/** A deletion, recorded so a paired device doesn't resurrect the item on next sync. Pruned after RETENTION (see sync.ts). */
+export interface Tombstone {
+  uuid: string;
+  deletedAt: string;
+  deviceId: string | null;
+}
+
+/**
+ * A device this instance has paired with. `secret` authenticates AND encrypts sync
+ * traffic (HMAC signing + AES-256-GCM) — it is never transmitted: both sides derive
+ * the identical value independently via X25519 ECDH on the public keys exchanged
+ * during pairing (see device.ts / sync.ts), then HKDF. Never logged.
+ */
+export interface Peer {
+  id: string;
+  name: string;
+  url: string;
+  secret: string;
+  pairedAt: string;
+  lastSyncAt: string | null;
+  lastSyncOk: boolean;
 }
 
 export interface TodoStore {
@@ -34,4 +70,6 @@ export interface TodoStore {
   formatVersion: number;
   nextId: number;
   todos: Todo[];
+  /** Deletions from this device or merged in from a peer, for tombstone-based sync. */
+  deletedUuids: Tombstone[];
 }

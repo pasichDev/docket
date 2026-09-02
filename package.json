@@ -1,6 +1,6 @@
 {
   "name": "@pasichdev/todo-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A shared TODO/backlog MCP server with a web UI, agent claim/release tracking, and encrypted local storage.",
   "license": "MIT",
   "author": "pasichDev",
@@ -15,9 +15,17 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "mcp-server",
     "todo",
+    "todo-list",
+    "task-manager",
+    "backlog",
     "claude",
-    "claude-code"
+    "claude-code",
+    "claude-desktop",
+    "ai-agent",
+    "productivity",
+    "typescript"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -26,6 +34,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.test.js",
     "skills"
   ],
   "publishConfig": {
@@ -41,6 +50,7 @@
     "web": "node dist/web.js",
     "stats": "node dist/stats.js",
     "dev": "tsc --watch",
+    "test": "npm run build && node --test dist/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

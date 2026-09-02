@@ -1,23 +1,22 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
+import { withFileLock } from "./filelock.js";
 import { log } from "./log.js";
 import type { Todo, TodoStore } from "./types.js";
+import { uuidv7 } from "./uuid7.js";
 
 const STORE_PATH = join(homedir(), ".todo-mcp", "todos.json.enc");
 /** Pre-encryption path. Only read once, to migrate; never written again after that. */
 const LEGACY_PLAINTEXT_PATH = join(homedir(), ".todo-mcp", "todos.json");
 const LOCK_PATH = `${STORE_PATH}.lock`;
-const LOCK_STALE_MS = 10_000;
-const LOCK_RETRY_MS = 30;
-const LOCK_TIMEOUT_MS = 5_000;
 
 /** Bump this whenever the Todo/TodoStore shape changes in a way old code would misread. */
-export const CURRENT_FORMAT_VERSION = 3; // v3: added workingSession (which host session holds a claim)
+export const CURRENT_FORMAT_VERSION = 5; // v5: added fieldTimestamps + workingLeaseExpiresAt, for field-level merge and self-expiring claims
 
-const EMPTY_STORE: TodoStore = { formatVersion: CURRENT_FORMAT_VERSION, nextId: 1, todos: [] };
+const EMPTY_STORE: TodoStore = { formatVersion: CURRENT_FORMAT_VERSION, nextId: 1, todos: [], deletedUuids: [] };
 
 /**
  * Reads the raw JSON text of the store, transparently migrating a pre-encryption
@@ -74,25 +73,35 @@ async function loadStore(): Promise<TodoStore> {
 
   // Back-compat: todos written before the todo/backlog split have no `list`,
   // before categories have no `category`, before agent/session tracking have
-  // neither, before the title/description split have `text` instead of `title`.
+  // neither, before the title/description split have `text` instead of `title`,
+  // before device-sync have no uuid/updatedAt/deviceId/deviceName, before
+  // field-level merge have no fieldTimestamps/workingLeaseExpiresAt.
   parsed.todos = parsed.todos.map((raw: Todo & { text?: string }) => {
     const { text, ...todo } = raw;
     return {
       ...todo,
+      uuid: todo.uuid ?? uuidv7(),
       title: todo.title ?? text ?? "",
       description: todo.description ?? null,
       list: todo.list ?? "todo",
       category: todo.category ?? null,
       priority: todo.priority ?? null,
       dueDate: todo.dueDate ?? null,
+      sourceUrl: todo.sourceUrl ?? null,
       agent: todo.agent ?? null,
       session: todo.session ?? null,
       workingAgent: todo.workingAgent ?? null,
       workingSince: todo.workingSince ?? null,
       workingSession: todo.workingSession ?? null,
-      history: todo.history ?? [],
+      workingLeaseExpiresAt: todo.workingLeaseExpiresAt ?? null,
+      updatedAt: todo.updatedAt ?? todo.createdAt ?? new Date().toISOString(),
+      fieldTimestamps: todo.fieldTimestamps ?? {},
+      deviceId: todo.deviceId ?? null,
+      deviceName: todo.deviceName ?? null,
+      history: (todo.history ?? []).map((h) => ({ ...h, deviceName: h.deviceName ?? null })),
     };
   });
+  parsed.deletedUuids = parsed.deletedUuids ?? [];
   parsed.formatVersion = CURRENT_FORMAT_VERSION;
   return parsed;
 }
@@ -106,55 +115,46 @@ async function saveStore(store: TodoStore): Promise<void> {
   await rename(tmpPath, STORE_PATH);
 }
 
-async function acquireLock(): Promise<void> {
-  await mkdir(dirname(LOCK_PATH), { recursive: true });
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      const handle = await open(LOCK_PATH, "wx");
-      await handle.close();
-      return;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      // Another process's lock — reap it if it's stale (crashed holder).
-      try {
-        const info = await stat(LOCK_PATH);
-        if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
-          await rm(LOCK_PATH, { force: true });
-          continue;
-        }
-      } catch {
-        continue; // lock disappeared between EEXIST and stat — retry immediately
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`todo-mcp: timed out waiting for lock at ${LOCK_PATH}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
-    }
-  }
-}
-
-async function releaseLock(): Promise<void> {
-  await rm(LOCK_PATH, { force: true });
-}
-
 /**
  * Runs `fn` with the on-disk store, holding a cross-process advisory lock
  * for the whole read-modify-write so concurrent MCP server instances (one
  * per Claude Code session) can't race and silently drop each other's writes.
  */
 export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Promise<T> {
-  await acquireLock();
-  try {
+  return withFileLock(LOCK_PATH, async () => {
     const store = await loadStore();
     const result = await fn(store);
     await saveStore(store);
     return result;
-  } finally {
-    await releaseLock();
-  }
+  });
+}
+
+/**
+ * `withStore` narrowed to the overwhelmingly common case: mutate the one item
+ * with this id under the lock. Resolves to the item, or null if there is no
+ * such id — both entry points then turn that null into their own 404 wording.
+ */
+export async function withTodo(id: number, mutate: (item: Todo, store: TodoStore) => void): Promise<Todo | null> {
+  return withStore((store) => {
+    const item = store.todos.find((t) => t.id === id);
+    if (!item) return null;
+    mutate(item, store);
+    return item;
+  });
 }
 
 export async function readStore(): Promise<TodoStore> {
   return loadStore();
+}
+
+/**
+ * loadStore()'s back-compat migration (uuid/fieldTimestamps/etc. for legacy items) only
+ * fills gaps IN MEMORY — readStore() never saves. Call this once at process startup so
+ * every item gets a uuid that's actually written to disk before anything can read or sync
+ * it; otherwise a legacy item would get a FRESH random uuid on every lock-free read, and
+ * syncing it to a peer at two different moments would look like two different items —
+ * silent duplication of real data, not just a cosmetic gap.
+ */
+export async function migrateLegacyFields(): Promise<void> {
+  await withStore(() => {});
 }

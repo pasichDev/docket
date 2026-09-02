@@ -23,11 +23,27 @@ support — don't just dump everything into one string.
   filterable/searchable — set it whenever the item maps to a real ticket.
 - `priority` (optional): `"low" | "medium" | "high"`.
 - `dueDate` (optional): `"YYYY-MM-DD"`.
+- `sourceUrl` (**strongly recommended whenever there is one**) — a link back
+  to where this item came from: a GitHub issue/PR, a Notion page, an
+  Obsidian note's share/publish link, a Slack thread, a doc, a Linear/Jira
+  ticket — any URL. Set it whenever you create or already know about an item
+  that maps to something with a URL, so a human can jump straight back to
+  the source later instead of re-finding it. Shown as a small clickable link
+  chip on the card.
 - `todo_edit(id, ...)` changes only the fields you pass; pass `""` to clear
-  description/category/priority/dueDate.
+  description/category/priority/dueDate/sourceUrl.
 
-Use `todo_list(filter, list, category, agent, session, inProgress)` to query
-— it supports filtering by all of the above, not just open/done.
+Use `todo_list(filter, list, category, agent, session, inProgress, limit,
+offset)` to query — it supports filtering by all of the above, not just
+open/done, plus pagination for large lists.
+
+Other tools you have: `todo_history(id)` — full change log for one item, who
+did what and when. `todo_delete(id)` — permanently remove an item (destructive,
+confirm with the human first unless they clearly already decided). `todo_version()`
+— sanity-check the running server isn't stale (e.g. right after an update).
+`todo_check_update()` — read-only check for a newer todo-mcp version; if one's
+available, tell the human and let them run `todo-mcp update` themselves —
+never trigger it yourself.
 
 ## Claim workflow
 
@@ -43,6 +59,10 @@ duplicate effort across the shared clients/sessions.
    `todo_list(inProgress: true)` first — if it's already claimed by another
    agent, don't start the same item unless you're deliberately taking over
    (todo_claim will warn you and let you take over anyway).
+4. A claim self-expires after 15 minutes if never renewed, completed, or
+   released — `todo_list(inProgress: true)` only shows claims still inside
+   that window, so a claim you forgot to release will quietly stop blocking
+   other agents on its own rather than needing manual cleanup.
 
 ## When claiming doesn't apply
 

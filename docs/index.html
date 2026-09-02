@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>todo-mcp — one todo list, every AI tool</title>
+<meta name="description" content="A shared TODO/backlog MCP server for Claude Code, Claude Desktop, Warp and Codex — claim tracking, full history, a web dashboard, and encrypted local storage. One command to install." />
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #faf5ec; --text: #3d3229; --muted: #8a7a63; --muted2: #a8987f; --meta: #b4a488;
+    --card-bg: #ffffff; --card-border: #f0e2c9; --card-shadow: 0 2px 8px rgba(61,50,41,.05);
+    --sage: #3f7a50; --sage-bg: #e7f3ea;
+    --lavender: #7c4f9e; --lavender-bg: #f1e9f7;
+    --accent: #f5a623; --ink: #3d3229; --ink-text: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'Karla', system-ui, sans-serif; line-height: 1.5;
+  }
+  h1, h2, h3 { font-family: 'Fredoka', sans-serif; font-weight: 600; margin: 0; }
+  a { color: var(--sage); }
+  code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+
+  nav.top {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 22px 0; max-width: 1040px; margin: 0 auto; padding-left: 24px; padding-right: 24px;
+  }
+  nav.top .logo { font-size: 19px; font-weight: 700; }
+  nav.top .links { display: flex; gap: 20px; font-size: 14px; font-weight: 600; }
+  nav.top .links a { color: var(--muted); text-decoration: none; }
+  nav.top .links a:hover { color: var(--text); }
+
+  .hero { padding: 40px 0 20px; text-align: center; }
+  .hero h1 { font-size: 40px; letter-spacing: -.01em; }
+  .hero .tagline {
+    font-size: 19px; color: var(--muted); max-width: 620px; margin: 16px auto 0;
+  }
+  .badges { display: flex; gap: 8px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+  .badges img { height: 20px; }
+
+  .cta-row { display: flex; gap: 12px; justify-content: center; margin-top: 28px; flex-wrap: wrap; }
+  .btn {
+    font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 15px; text-decoration: none;
+    padding: 12px 22px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .btn.primary { background: var(--sage); color: #fff; box-shadow: 0 4px 14px rgba(63,122,80,.3); }
+  .btn.secondary { background: var(--card-bg); color: var(--text); box-shadow: 0 0 0 1px var(--card-border); }
+
+  .install-cmd {
+    max-width: 560px; margin: 22px auto 0; background: var(--ink); color: #f0e6d8;
+    border-radius: 12px; padding: 14px 18px; font-size: 14px; text-align: left;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .install-cmd code { color: #f0e6d8; }
+  .install-cmd .prompt { opacity: .5; margin-right: 8px; }
+
+  section { padding: 56px 0; }
+  .section-title { text-align: center; margin-bottom: 8px; font-size: 28px; }
+  .section-sub { text-align: center; color: var(--muted); max-width: 560px; margin: 0 auto 36px; }
+
+  .demo-shot {
+    border-radius: 20px; box-shadow: 0 12px 40px rgba(61,50,41,.14), 0 0 0 1px var(--card-border);
+    overflow: hidden; max-width: 900px; margin: 0 auto;
+  }
+  .demo-shot img { display: block; width: 100%; height: auto; }
+  .demo-tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; }
+  .demo-tabs button {
+    font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13px; cursor: pointer;
+    border: none; background: var(--card-bg); color: var(--muted2); box-shadow: 0 0 0 1px var(--card-border);
+    padding: 8px 18px; border-radius: 999px;
+  }
+  .demo-tabs button[data-active="true"] { background: var(--ink); color: var(--ink-text); box-shadow: none; }
+  .demo-pane { display: none; }
+  .demo-pane[data-active="true"] { display: block; }
+
+  .features {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px;
+  }
+  .feature-card {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 18px;
+    padding: 22px; box-shadow: var(--card-shadow);
+  }
+  .feature-card .icon {
+    width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    margin-bottom: 14px;
+  }
+  .feature-card h3 { font-size: 16px; margin-bottom: 6px; }
+  .feature-card p { font-size: 14px; color: var(--muted); margin: 0; }
+
+  .flow {
+    display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+    max-width: 900px; margin: 0 auto;
+  }
+  .flow-box {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px;
+    padding: 16px 20px; box-shadow: var(--card-shadow); text-align: center; min-width: 150px;
+  }
+  .flow-box.center { background: var(--accent); color: #fff; border: none; box-shadow: 0 6px 20px rgba(245,166,35,.3); }
+  .flow-box.store { background: var(--sage); color: #fff; border: none; }
+  .flow-box .label { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 14px; }
+  .flow-box .sub { font-size: 12px; opacity: .8; margin-top: 2px; }
+  .flow-stack { display: flex; flex-direction: column; gap: 8px; }
+  .flow-arrow { color: var(--muted2); font-size: 20px; }
+
+  .steps { display: flex; flex-direction: column; gap: 14px; max-width: 700px; margin: 0 auto; }
+  .step {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 18px;
+    padding: 20px 22px; box-shadow: var(--card-shadow); display: flex; gap: 16px;
+  }
+  .step .num {
+    font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 15px; color: #fff;
+    background: var(--sage); width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step .body h3 { font-size: 16px; margin-bottom: 6px; }
+  .step .body p { font-size: 14px; color: var(--muted); margin: 0 0 8px; }
+  .step pre {
+    background: var(--ink); color: #f0e6d8; border-radius: 10px; padding: 12px 14px;
+    font-size: 13px; overflow-x: auto; margin: 8px 0 0;
+  }
+  .step pre code { color: #f0e6d8; }
+  .step .optional { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--lavender); font-weight: 700; }
+
+  footer {
+    padding: 40px 0 60px; text-align: center; border-top: 1px solid var(--card-border); margin-top: 20px;
+  }
+  footer .links { display: flex; gap: 20px; justify-content: center; margin-bottom: 14px; flex-wrap: wrap; }
+  footer .links a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px; }
+  footer .links a:hover { color: var(--text); }
+  footer .fine { font-size: 12px; color: var(--meta); }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 30px; }
+    .install-cmd { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="logo">todo-mcp</div>
+  <div class="links">
+    <a href="#demo">Demo</a>
+    <a href="#install">Install</a>
+    <a href="https://github.com/pasichDev/todo-mcp">GitHub</a>
+    <a href="https://www.npmjs.com/package/@pasichdev/todo-mcp">npm</a>
+  </div>
+</nav>
+
+<div class="hero wrap">
+  <h1>One todo list, every AI tool you use.</h1>
+  <p class="tagline">
+    Claude Code, Claude Desktop, Warp, Codex — add an item in one, see it in
+    all of them, plus a web dashboard and your phone. Nothing gets lost
+    switching tools or starting a new session.
+  </p>
+  <div class="badges">
+    <img src="https://img.shields.io/npm/v/%40pasichdev%2Ftodo-mcp.svg" alt="npm version" />
+    <img src="https://github.com/pasichDev/todo-mcp/actions/workflows/ci.yml/badge.svg" alt="CI status" />
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT license" />
+  </div>
+  <div class="cta-row">
+    <a class="btn primary" href="#install">Get started</a>
+    <a class="btn secondary" href="https://github.com/pasichDev/todo-mcp">View on GitHub</a>
+  </div>
+  <div class="install-cmd">
+    <code><span class="prompt">$</span>claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp</code>
+  </div>
+</div>
+
+<section id="demo" class="wrap">
+  <h2 class="section-title">See it in action</h2>
+  <p class="section-sub">The web dashboard starts itself the moment your MCP client first uses the server — nothing to run by hand.</p>
+  <div class="demo-tabs">
+    <button data-pane="dark" data-active="true">Dark</button>
+    <button data-pane="light" data-active="false">Light</button>
+    <button data-pane="edit" data-active="false">Editing</button>
+  </div>
+  <div class="demo-pane" data-pane="dark" data-active="true">
+    <div class="demo-shot"><img src="assets/demo-dark.jpg" alt="todo-mcp web dashboard, dark theme, showing a claimed in-progress item" loading="lazy" /></div>
+  </div>
+  <div class="demo-pane" data-pane="light" data-active="false">
+    <div class="demo-shot"><img src="assets/demo-light.jpg" alt="todo-mcp web dashboard, light theme" loading="lazy" /></div>
+  </div>
+  <div class="demo-pane" data-pane="edit" data-active="false">
+    <div class="demo-shot"><img src="assets/demo-edit.png" alt="todo-mcp inline edit form, showing title, description, category, priority and due date fields" loading="lazy" /></div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2 class="section-title">What it adds beyond "just a list"</h2>
+  <p class="section-sub">Built for people who run more than one AI tool, or more than one session, at once.</p>
+  <div class="features">
+    <div class="feature-card">
+      <div class="icon" style="background:var(--sage-bg)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f7a50" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      </div>
+      <h3>See who's doing what</h3>
+      <p>Claim an item before starting — other sessions see it's taken (live pulsing highlight) instead of duplicating the work.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:var(--lavender-bg)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c4f9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v5h5"/></svg>
+      </div>
+      <h3>Full history</h3>
+      <p>Not just a checkbox — every create/edit/claim/complete is logged with who and when, per item.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:#fdeee0">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b8722f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h11"/></svg>
+      </div>
+      <h3>Todo vs. backlog</h3>
+      <p>Keep near-term, actionable work separate from things you want to park without losing them.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon" style="background:#fbdcd6">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b8402c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      </div>
+      <h3>Private by default</h3>
+      <p>The data file is AES-256-GCM encrypted on disk — nobody browsing your filesystem sees your tasks in plain text.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2 class="section-title">How it fits together</h2>
+  <p class="section-sub">Every client talks to the same server, which is the only thing that ever touches the data file — one source of truth, not four out-of-sync copies.</p>
+  <div class="flow">
+    <div class="flow-stack">
+      <div class="flow-box"><div class="label">Claude Code</div></div>
+      <div class="flow-box"><div class="label">Claude Desktop</div></div>
+      <div class="flow-box"><div class="label">Warp / Codex</div></div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box center"><div class="label">todo-mcp</div><div class="sub">MCP tools</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box store"><div class="label">Encrypted store</div><div class="sub">on your machine</div></div>
+    <div class="flow-arrow">←</div>
+    <div class="flow-stack">
+      <div class="flow-box"><div class="label">Web dashboard</div><div class="sub">:8787</div></div>
+      <div class="flow-box"><div class="label">Your phone</div><div class="sub">same Wi-Fi</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="wrap">
+  <h2 class="section-title">Installation guide</h2>
+  <p class="section-sub">Five minutes, no prior MCP experience needed.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <h3>Register the server</h3>
+        <p>Open a terminal and run:</p>
+        <pre><code>claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body">
+        <h3>Restart Claude Code</h3>
+        <p>Close and reopen it, or start a new session, so it picks up the new server.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <div class="body">
+        <h3>Try it</h3>
+        <p>Ask Claude something like <em>"add a todo: buy milk"</em>. If it uses the tool and confirms, you're set.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">4</div>
+      <div class="body">
+        <h3>Open the web UI</h3>
+        <p>Go to <code>http://localhost:8787</code> — it started itself the moment step 3 ran.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">5</div>
+      <div class="body">
+        <span class="optional">Optional</span>
+        <h3>Install the claim-tracking skill</h3>
+        <p>Teaches Claude Code to mark items in progress and check before duplicating work:</p>
+        <pre><code>/plugin marketplace add pasichDev/todo-mcp
+/plugin install todo-mcp-claim@todo-mcp</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="links">
+    <a href="https://github.com/pasichDev/todo-mcp">GitHub</a>
+    <a href="https://www.npmjs.com/package/@pasichdev/todo-mcp">npm</a>
+    <a href="https://registry.modelcontextprotocol.io">MCP Registry</a>
+    <a href="https://github.com/pasichDev/todo-mcp/blob/main/LICENSE">MIT License</a>
+  </div>
+  <div class="fine">todo-mcp — a personal project, open source, no account required.</div>
+</footer>
+
+<script>
+  document.querySelectorAll('.demo-tabs button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pane = btn.dataset.pane;
+      document.querySelectorAll('.demo-tabs button').forEach((b) => (b.dataset.active = String(b === btn)));
+      document.querySelectorAll('.demo-pane').forEach((p) => (p.dataset.active = String(p.dataset.pane === pane)));
+    });
+  });
+</script>
+
+</body>
+</html>

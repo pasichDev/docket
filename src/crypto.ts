@@ -33,8 +33,8 @@ async function getOrCreateKey(): Promise<Buffer> {
   return key;
 }
 
-export async function encryptToBuffer(plaintext: string): Promise<Buffer> {
-  const key = await getOrCreateKey();
+/** AES-256-GCM encrypt with an arbitrary 32-byte key — the building block both at-rest storage and peer-sync encryption share. */
+export function encryptWithKey(key: Buffer, plaintext: string): Buffer {
   const iv = randomBytes(IV_LEN);
   const cipher = createCipheriv(ALGO, key, iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
@@ -42,12 +42,20 @@ export async function encryptToBuffer(plaintext: string): Promise<Buffer> {
   return Buffer.concat([iv, authTag, ciphertext]);
 }
 
-export async function decryptFromBuffer(data: Buffer): Promise<string> {
-  const key = await getOrCreateKey();
+/** Throws (via GCM auth-tag verification) if `data` was truncated, corrupted, or encrypted under a different key. */
+export function decryptWithKey(key: Buffer, data: Buffer): string {
   const iv = data.subarray(0, IV_LEN);
   const authTag = data.subarray(IV_LEN, IV_LEN + AUTH_TAG_LEN);
   const ciphertext = data.subarray(IV_LEN + AUTH_TAG_LEN);
   const decipher = createDecipheriv(ALGO, key, iv);
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+}
+
+export async function encryptToBuffer(plaintext: string): Promise<Buffer> {
+  return encryptWithKey(await getOrCreateKey(), plaintext);
+}
+
+export async function decryptFromBuffer(data: Buffer): Promise<string> {
+  return decryptWithKey(await getOrCreateKey(), data);
 }
