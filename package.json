@@ -1,6 +1,6 @@
 {
   "name": "@pasichdev/docket",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "One shared workspace for your AI coding agents. Local-first and self-hostable.",
   "license": "MIT",
   "author": "pasichDev",

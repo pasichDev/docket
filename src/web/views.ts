@@ -133,7 +133,10 @@ export const PAGE = `<!doctype html>
   li button.del { color: var(--danger); }
   li button.edit { color: var(--text); }
   .card-body { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; }
-  .card-body .id { opacity: .4; font-weight: 700; font-size: 11px; font-variant-numeric: tabular-nums; font-family: 'Karla', sans-serif; }
+  .card-top-left .id {
+    opacity: .55; font-weight: 700; font-size: 11px; font-variant-numeric: tabular-nums; font-family: 'Karla', sans-serif;
+    white-space: nowrap; flex-shrink: 0;
+  }
   .card-body input[type=checkbox] {
     appearance: none; -webkit-appearance: none; width: 20px; height: 20px; margin: 2px 0 0; flex-shrink: 0;
     cursor: pointer; border: 2px solid var(--checkbox-border); border-radius: 7px; background: transparent;
@@ -144,7 +147,7 @@ export const PAGE = `<!doctype html>
     background-repeat: no-repeat; background-position: center; background-size: 12px 12px;
   }
   .card-body .txt { flex: 1; word-break: break-word; }
-  .card-title { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 16px; word-break: break-word; }
+  .card-title { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 16px; word-break: break-word; flex: 1 1 auto; min-width: 0; }
   .card-desc {
     font-family: 'Karla', sans-serif; font-weight: 400; font-size: 13px; color: var(--muted);
     line-height: 1.5; white-space: pre-wrap; word-break: break-word; margin-top: 2px;
@@ -770,11 +773,12 @@ function itemHtml(t) {
   const workingPill = t.workingAgent
     ? \`<span class="working-pill" style="background:\${agentColor(t.workingAgent)}"><span class="pulse"></span>working — \${escapeHtml(t.workingAgent)}</span>\`
     : "";
+  const idBadge = \`<span class="id" title="Cross-device id — the same on every paired device, unlike #\${t.id}">#\${t.id} · \${t.shortId}</span>\`;
   return \`
     <li class="\${t.done ? "done" : ""} \${t.workingAgent ? "working-card" : ""}" data-id="\${t.id}"\${cardStyle}>
       \${workingPill}
       <div class="card-top">
-        <span class="card-top-left">\${priorityFlag}\${listBadge}\${badge}\${via}\${deviceBadge}</span>
+        <span class="card-top-left">\${priorityFlag}\${badge}\${listBadge}\${idBadge}\${via}\${deviceBadge}</span>
         <span class="card-actions">
           <button class="edit" title="Edit">✎</button>
           <button class="del" title="Delete">✕</button>
@@ -782,7 +786,6 @@ function itemHtml(t) {
       </div>
       <div class="card-body">
         \${checkbox}
-        <span class="id" title="Cross-device id — the same on every paired device, unlike #\${t.id}">#\${t.id} · \${t.shortId}</span>
         <span class="card-title">\${escapeHtml(t.title)}</span>
         \${due}
       </div>
