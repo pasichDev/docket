@@ -17,10 +17,12 @@ const PAIR_RATE_WINDOW_MS = 5 * 60_000; // ...per source IP, per this window
 // No 0/O, 1/I/L — easy to misread across a room or off a low-res screen. 6 chars
 // from this 32-symbol set is ~1.07e9 combinations; with a 5-minute single-use TTL
 // and PAIR_RATE_LIMIT above, brute-forcing it isn't practical.
-const CODE_CHARSET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+// Exported for reuse by server-pairing codes (src/server/devices.ts, RFC §13) — same
+// unambiguous charset/length, no reason to invent a second one.
+export const CODE_CHARSET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
 const CODE_LENGTH = 6;
 
-function generateShortCode(): string {
+export function generateShortCode(): string {
   let code = "";
   for (let i = 0; i < CODE_LENGTH; i++) code += CODE_CHARSET[randomInt(CODE_CHARSET.length)];
   return code;
@@ -314,8 +316,10 @@ function sanitizeRemoteTodo(t: Todo): Todo {
     workingSince: nullableString(o.workingSince),
     workingSession: nullableString(o.workingSession),
     workingLeaseExpiresAt: nullableString(o.workingLeaseExpiresAt),
+    workingDeviceId: nullableString(o.workingDeviceId),
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
+    revision: typeof o.revision === "number" && Number.isInteger(o.revision) && o.revision > 0 ? o.revision : 1,
     fieldTimestamps: sanitizeFieldTimestamps(o.fieldTimestamps),
     completedAt: nullableString(o.completedAt),
     deviceId: nullableString(o.deviceId),

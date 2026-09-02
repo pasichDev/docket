@@ -1,6 +1,6 @@
 {
   "name": "@pasichdev/docket",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "A shared TODO/backlog MCP server with a web UI, agent claim/release tracking, and encrypted local storage.",
   "license": "MIT",
   "author": "pasichDev",
@@ -52,7 +52,7 @@
     "web": "node dist/web.js",
     "stats": "node dist/stats.js",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/*.test.js dist/web/*.test.js",
+    "test": "npm run build && node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

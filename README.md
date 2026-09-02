@@ -370,6 +370,94 @@ item back. A claim (`todo_claim`) syncs like any other
 field, but its 15-minute lease means a stale claim fades on its own instead
 of surviving forever in the replicated history.
 
+## Local vs self-hosted server
+
+By default docket runs entirely **local**: every MCP host on this machine talks to a
+process that reads/writes `~/.docket` directly — nothing changes here, ever, unless you
+opt in.
+
+If you have an always-on machine (a Raspberry Pi, a mini PC, a NAS, a home server, a VPS),
+you can instead point every device at one **self-hosted docket server**: one authoritative
+copy, a Web UI that's up even when your laptop is off, and claims that are instantly global
+instead of waiting on P2P replication. This is a different topology from
+[Devices & sync](#devices--sync) above (which replicates copies between peers) — a remote
+client does **not** also participate in P2P sync; the server is its only source of truth.
+
+```text
+Deployment
+
+● Local              Store everything on this device.
+○ Self-hosted server Use an existing docket server.
+```
+
+**Set it up:**
+
+```sh
+npx -y @pasichdev/docket setup
+```
+
+Choose "Self-hosted docket server", enter its address, and pair this device with a
+short-lived code — same explicit-approval model as [Devices & sync](#devices--sync)'s
+peer pairing, just against a server instead of another laptop. Or drive it directly:
+
+```sh
+docket pair https://todo.home.example
+```
+
+**Run the server** (on the always-on machine):
+
+```sh
+docket serve                        # binds 127.0.0.1:8788 by default — RFC-required explicit opt-in to bind wider
+docket serve --host 0.0.0.0         # accept LAN/remote connections (put a reverse proxy + HTTPS in front for anything off-LAN)
+docket devices pair                 # generate a pairing code for a new device
+docket devices pending              # review requests waiting for approval
+docket devices approve <requestId>  # approve one
+docket devices list                 # see every paired device
+docket devices revoke <deviceId>    # cut off one device immediately, without unpairing everyone else
+```
+
+**Check on it from any paired device:**
+
+```sh
+docket status
+```
+
+```text
+Mode: remote
+Server: https://todo.home.example
+Status: connected
+Latency: 18 ms
+Server version: 2.2.1
+Device: andrii-desktop
+Device authorization: active
+```
+
+**Move a workspace between modes** (RFC §28/§29 — always explicit, never an automatic
+merge):
+
+```sh
+docket backend use https://todo.home.example   # switch to remote; uploads local data only if the server is currently empty
+docket backend localize                        # download the server's workspace and switch back to local
+```
+
+**What's different in remote mode:**
+
+- **Every client is a thin forwarder** to the server's authoritative store — there is no
+  local writable replica, and (per the RFC's core invariant) none is ever silently created.
+- **A connectivity failure fails loudly.** If the server can't be reached, every read/write/
+  claim errors clearly instead of silently falling back to a local copy — that would create
+  exactly the split-brain state this design avoids.
+- **Claims are atomic**, not advisory-and-eventually-consistent: two devices racing to claim
+  the same item get one winner immediately (`409 already_claimed`), with explicit
+  `force: true` takeover available when that's what you actually want.
+- **`docket web`** opens the server's own Web UI instead of starting a second, separately
+  stateful local one.
+- **`docket backup`** on a client machine doesn't back up the (empty/unused) local store —
+  run backups on the server itself, same as always.
+
+**Headless deployment** (systemd unit, Docker image for `linux/amd64`/`linux/arm64`, safe
+upgrade steps): see [`docs/headless.md`](docs/headless.md).
+
 ## Updating
 
 ```sh
@@ -480,6 +568,38 @@ What Docket protects against, what it deliberately doesn't, and why:
   `npm audit signatures`; `docket update` also self-tests the freshly
   installed version before keeping it, and rolls back automatically if that
   fails.
+
+**Additions specific to a self-hosted server** (see
+[Local vs self-hosted server](#local-vs-self-hosted-server) above):
+
+- **A network observer between a client and the server** — every request is
+  authenticated with a per-device HMAC signature (timestamp + nonce + body
+  hash, so a captured request can't be replayed) on top of TLS; docket
+  refuses a non-loopback `http://` server URL unless you explicitly opt in
+  (`DOCKET_ALLOW_INSECURE_REMOTE`), and never silently downgrades HTTPS to
+  HTTP.
+- **A stolen or guessed pairing code** — same shape as peer pairing above:
+  short TTL, single use, per-source-IP rate limiting, and it only ever grants
+  access after a human explicitly approves the request on the server
+  (`docket devices approve`) — never automatically.
+- **Leaked device credentials** — revoking that one device
+  (`docket devices revoke <deviceId>`) cuts it off immediately without
+  needing to rotate anything shared by every other device, since each
+  device's server-auth secret is derived independently (ECDH + HKDF, domain-
+  separated from the P2P sync secret so the two protocols never share key
+  material).
+- **A compromised paired client** — in v1 every paired device gets full
+  read/write access to the server's workspace (no viewer/read-only role for
+  server clients yet); a compromised device can do anything a legitimate
+  client could until it's revoked.
+- **The server itself** — a self-hosted server is **not** end-to-end
+  encrypted against its own operator: it holds the authoritative plaintext
+  workspace in memory (and at rest, under the same at-rest encryption as
+  local mode) while running, and can read it. This is a deliberate, explicit
+  scope boundary (RFC §31) — self-hosting trades "nobody but this device can
+  read my data" for "one machine I control is the source of truth," which is
+  not the same guarantee as local mode's per-device isolation. Choose local
+  mode instead if that distinction matters for your threat model.
 
 ## Testing
 

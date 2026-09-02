@@ -14,7 +14,7 @@ const LEGACY_PLAINTEXT_PATH = await dataPath("todos.json");
 const LOCK_PATH = `${STORE_PATH}.lock`;
 
 /** Bump this whenever the Todo/TodoStore shape changes in a way old code would misread. */
-export const CURRENT_FORMAT_VERSION = 5; // v5: added fieldTimestamps + workingLeaseExpiresAt, for field-level merge and self-expiring claims
+export const CURRENT_FORMAT_VERSION = 7; // v7: added workingDeviceId (v6: revision, for optimistic-concurrency If-Match checks) — the claiming device's authenticated identity, so a remote server can gate claim takeovers on context.deviceId instead of the self-reported agent name
 
 const EMPTY_STORE: TodoStore = { formatVersion: CURRENT_FORMAT_VERSION, nextId: 1, todos: [], deletedUuids: [] };
 
@@ -93,7 +93,9 @@ async function loadStore(): Promise<TodoStore> {
       workingSince: todo.workingSince ?? null,
       workingSession: todo.workingSession ?? null,
       workingLeaseExpiresAt: todo.workingLeaseExpiresAt ?? null,
+      workingDeviceId: todo.workingDeviceId ?? null,
       updatedAt: todo.updatedAt ?? todo.createdAt ?? new Date().toISOString(),
+      revision: todo.revision ?? 1,
       fieldTimestamps: todo.fieldTimestamps ?? {},
       deviceId: todo.deviceId ?? null,
       deviceName: todo.deviceName ?? null,
@@ -132,6 +134,8 @@ function isNumericId(id: number | string): id is number {
   return typeof id === "number" || /^\d+$/.test(id);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function findTodoByAnyId(store: TodoStore, id: number | string): Todo | undefined {
   if (isNumericId(id)) {
     const byNumeric = store.todos.find((t) => t.id === Number(id));
@@ -139,6 +143,15 @@ export function findTodoByAnyId(store: TodoStore, id: number | string): Todo | u
     // short id without its "T-" prefix) is numeric-shaped but not numeric-meant — fall
     // through to the short id match below instead of reporting "not found".
     if (byNumeric || typeof id === "number") return byNumeric;
+  }
+  // Full uuid, matched directly against identity — not through shortId(). Needed for the
+  // remote API (RFC "Local and Self-Hosted Backend Modes" §19: uuid is the canonical remote
+  // identity; the local numeric id must never be part of that protocol), and harmless to
+  // accept everywhere else too since a bare uuid never collides with the short-id charset's
+  // "T-XXXXXX" shape.
+  if (typeof id === "string" && UUID_RE.test(id)) {
+    const byUuid = store.todos.find((t) => t.uuid === id);
+    if (byUuid) return byUuid;
   }
   const normalized = String(id).trim().toUpperCase();
   const withPrefix = normalized.startsWith("T-") ? normalized : `T-${normalized}`;

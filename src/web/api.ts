@@ -12,11 +12,13 @@ import {
 import { deriveSharedSecret, getDevicePublicKey, getDeviceRole, setDeviceRole } from "../device.js";
 import { exportToJson, exportToMarkdown, importFromJson, importFromMarkdown } from "../export.js";
 import { log } from "../log.js";
-import { applyEdits, completeTodo, createTodo, isClaimActive, isSafeUrl, shortId, tombstoneDelete } from "../mutations.js";
+import { isClaimActive, isSafeUrl, shortId } from "../mutations.js";
 import { listEvents, recordCreated, recordResolved } from "../notifications.js";
 import { addPeer, loadPeers, peerFingerprint, peerTrustState, removePeer, restorePeer, revokePeer, updatePeerUrl } from "../peers.js";
 import { computeAgentPresence } from "../presence.js";
-import { CURRENT_FORMAT_VERSION, readStore, withStore, withTodo } from "../storage.js";
+import type { MutationContext } from "../repository.js";
+import { CURRENT_FORMAT_VERSION, readStore, withStore } from "../storage.js";
+import { todoService } from "../todo-service.js";
 import {
   addIncomingRequest,
   addOutgoingRequest,
@@ -62,7 +64,13 @@ export function json(res: ServerResponse, status: number, body: unknown) {
 /** Far above any legitimate payload (imports included) — exists so one request to a reachable endpoint can't buffer an unbounded body into memory. */
 const MAX_JSON_BODY_BYTES = 10 * 1024 * 1024;
 
-export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+/**
+ * Exported (alongside readJsonBody below) so the remote server's device-signed routes
+ * (src/server/routes.ts) can hash the EXACT raw bytes a caller signed before parsing them
+ * — RFC "Local and Self-Hosted Backend Modes" §14's signature covers the raw body, and
+ * re-serializing a parsed object could disagree byte-for-byte with what was actually sent.
+ */
+export async function readRawBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
@@ -73,36 +81,42 @@ export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     if (total > MAX_JSON_BODY_BYTES) throw new Error(`request body exceeds ${MAX_JSON_BODY_BYTES} bytes`);
     chunks.push(chunk as Buffer);
   }
-  const raw = Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const raw = await readRawBody(req);
   return raw ? JSON.parse(raw) : {};
 }
 
-function isTodoList(value: unknown): value is TodoList {
+// Exported for reuse by the remote server's own request validation (src/server/routes.ts) —
+// the wire shapes match, so there's no reason for it to reinvent these.
+export function isTodoList(value: unknown): value is TodoList {
   return value === "todo" || value === "backlog";
 }
 
-function isPriority(value: unknown): value is TodoPriority {
+export function isPriority(value: unknown): value is TodoPriority {
   return value === "low" || value === "medium" || value === "high";
 }
 
-function isDate(value: unknown): value is string {
+export function isDate(value: unknown): value is string {
   return typeof value === "string" && DATE_RE.test(value);
 }
 
-function textOrNull(value: unknown): string | null {
+export function textOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function patchText(value: unknown): string | null | undefined {
+export function patchText(value: unknown): string | null | undefined {
   return typeof value === "string" ? textOrNull(value) : undefined;
 }
 
-function patchPriority(value: unknown): TodoPriority | null | undefined {
+export function patchPriority(value: unknown): TodoPriority | null | undefined {
   if (typeof value !== "string") return undefined;
   return isPriority(value) ? value : null;
 }
 
-function patchDate(value: unknown): string | null | undefined {
+export function patchDate(value: unknown): string | null | undefined {
   if (typeof value !== "string") return undefined;
   return isDate(value) ? value : null;
 }
@@ -161,6 +175,11 @@ export interface ApiContext {
   broadcastUpdate: () => void;
   sseClients: Set<ServerResponse>;
   sha256Hex: (val: string) => string;
+}
+
+/** Every web-originated mutation is attributed to agent "web", one connection, no session token — matching what every route already passed to createTodo/applyEdits/etc. directly before TodoService existed. */
+function webContext(ctx: ApiContext): MutationContext {
+  return { agent: "web", session: null, deviceId: ctx.deviceId, deviceName: ctx.deviceName };
 }
 
 export async function removePeerAndMaybeRevertRole(id: string, ctx: ApiContext): Promise<boolean> {
@@ -259,11 +278,11 @@ export async function handleApiRoute(
 
   // 6. Todos - List
   if (req.method === "GET" && url.pathname === "/api/todos") {
-    const store = await readStore();
+    const all = await todoService.list({});
     // shortId travels with each item so the web UI can show the same cross-device id an
     // MCP tool would — computed here, not client-side, so there's only one place deriving
     // it from uuid (see shortId() in mutations.ts).
-    const todos = store.todos.map((t) => ({ ...(isClaimActive(t) ? t : { ...t, workingAgent: null }), shortId: shortId(t.uuid) }));
+    const todos = all.map((t) => ({ ...(isClaimActive(t) ? t : { ...t, workingAgent: null }), shortId: shortId(t.uuid) }));
     json(res, 200, { todos });
     return true;
   }
@@ -276,23 +295,17 @@ export async function handleApiRoute(
       json(res, 400, { error: "title is required" });
       return true;
     }
-    const todo = await withStore((store) =>
-      createTodo(
-        store,
-        {
-          title,
-          description: textOrNull(body.description),
-          list: isTodoList(body.list) ? body.list : "todo",
-          category: textOrNull(body.category),
-          priority: isPriority(body.priority) ? body.priority : null,
-          dueDate: isDate(body.dueDate) ? body.dueDate : null,
-          sourceUrl: textOrNull(body.sourceUrl),
-          agent: "web",
-          session: null,
-        },
-        ctx.deviceId,
-        ctx.deviceName,
-      ),
+    const todo = await todoService.create(
+      {
+        title,
+        description: textOrNull(body.description),
+        list: isTodoList(body.list) ? body.list : "todo",
+        category: textOrNull(body.category),
+        priority: isPriority(body.priority) ? body.priority : null,
+        dueDate: isDate(body.dueDate) ? body.dueDate : null,
+        sourceUrl: textOrNull(body.sourceUrl),
+      },
+      webContext(ctx),
     );
     ctx.broadcastUpdate();
     json(res, 201, { todo });
@@ -303,7 +316,7 @@ export async function handleApiRoute(
   const completeMatch = url.pathname.match(/^\/api\/todos\/(\d+)\/complete$/);
   if (req.method === "POST" && completeMatch) {
     const id = Number(completeMatch[1]);
-    const todo = await withTodo(id, (item) => completeTodo(item, "web", ctx.deviceId, ctx.deviceName));
+    const todo = await todoService.complete(id, webContext(ctx));
     if (!todo) {
       json(res, 404, { error: `No todo with id #${id}` });
       return true;
@@ -328,7 +341,7 @@ export async function handleApiRoute(
       sourceUrl: patchText(body.sourceUrl),
       list: isTodoList(body.list) ? body.list : undefined,
     };
-    const todo = await withTodo(id, (item) => applyEdits(item, patch, "web", ctx.deviceId, ctx.deviceName));
+    const todo = await todoService.edit(id, patch, webContext(ctx));
     if (!todo) {
       json(res, 404, { error: `No todo with id #${id}` });
       return true;
@@ -341,7 +354,7 @@ export async function handleApiRoute(
   // 10. Todos - Delete
   if (req.method === "DELETE" && todoIdMatch) {
     const id = Number(todoIdMatch[1]);
-    const removed = await withTodo(id, (item, store) => tombstoneDelete(store, item, ctx.deviceId));
+    const removed = await todoService.delete(id, webContext(ctx));
     if (!removed) {
       json(res, 404, { error: `No todo with id #${id}` });
       return true;

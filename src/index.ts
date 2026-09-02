@@ -8,12 +8,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { createBackup, isBackupFile, restoreBackup } from "./backup.js";
+import { askQuestions as cliAskQuestions } from "./cli-prompt.js";
+import { DeploymentConfigError, resolveDeploymentConfig } from "./config.js";
 import { getDeviceId, getDeviceName } from "./device.js";
 import { exportToJson, exportToMarkdown, importFromJson, importFromMarkdown } from "./export.js";
 import { formatHistory } from "./history.js";
 import { installProcessLogging, log } from "./log.js";
-import { applyEdits, claimTodo, completeTodo, createTodo, formatAgentIdentity, isClaimActive, releaseTodo, shortId, tombstoneDelete } from "./mutations.js";
-import { CURRENT_FORMAT_VERSION, findTodoByAnyId, migrateLegacyFields, readStore, withStore, withTodo } from "./storage.js";
+import { formatAgentIdentity, isClaimActive, shortId } from "./mutations.js";
+import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } from "./remote/client.js";
+import { loadRemoteCredentials } from "./remote/credentials.js";
+import type { MutationContext } from "./repository.js";
+import { CURRENT_FORMAT_VERSION, migrateLegacyFields, readStore, withStore } from "./storage.js";
+import { TodoService, todoService as localTodoService } from "./todo-service.js";
 import type { Todo, TodoList } from "./types.js";
 import { checkForUpdate, getCurrentVersion, runUpdate } from "./update.js";
 
@@ -36,6 +42,56 @@ const idSchema = z.union([z.number().int(), z.string()]).describe("The todo id, 
 const WEB_PORT = Number(process.env.DOCKET_WEB_PORT ?? 8787);
 const deviceId = await getDeviceId();
 const deviceName = await getDeviceName();
+
+/**
+ * DeploymentMode selection (RFC "Local and Self-Hosted Backend Modes" §7/§10, Implementation
+ * Phase 2) — resolved lazily and memoized, on first actual need, NOT unconditionally at
+ * module load: local-only CLI utilities below (`docket stats`, `list`, `export`, `import`,
+ * `backup`, `restore` — all pre-existing, all deliberately still reading local storage
+ * directly, see the "known gaps" note near handleCli) must keep working exactly as before
+ * even on a machine with a misconfigured or unreachable remote mode, since they never
+ * touch mcpTodoService at all. Only the MCP tool handlers and the `serve`-adjacent startup
+ * path in main() below ever call getDeployment()/getMcpTodoService().
+ *
+ * Every existing install has no config file and no DOCKET_MODE, so `deployment.mode`
+ * resolves to "local" and getMcpTodoService() returns the SAME shared singleton
+ * (`localTodoService`) every MCP tool already called before this existed — zero
+ * behavioural change for them.
+ *
+ * A misconfigured remote mode (unpaired device, insecure URL, bad config) fails the first
+ * time it's actually needed — loud and immediate (surfaced through main()'s existing
+ * top-level `.catch` when starting the MCP server, or via withRemoteErrorHandling from a
+ * tool call), never a half-started MCP server whose every tool call mysteriously errors
+ * with no explanation.
+ */
+let deploymentPromise: ReturnType<typeof resolveDeploymentConfig> | null = null;
+function getDeployment(): ReturnType<typeof resolveDeploymentConfig> {
+  deploymentPromise ??= resolveDeploymentConfig();
+  return deploymentPromise;
+}
+
+let mcpTodoServicePromise: Promise<TodoService> | null = null;
+function getMcpTodoService(): Promise<TodoService> {
+  mcpTodoServicePromise ??= (async () => {
+    const deployment = await getDeployment();
+    if (deployment.mode !== "remote") return localTodoService;
+    const creds = await loadRemoteCredentials();
+    if (!creds) {
+      throw new DeploymentConfigError(
+        `docket: deployment mode is "remote" (server ${deployment.serverUrl}) but this device isn't paired yet.\n` +
+          `Run: docket pair ${deployment.serverUrl}`,
+      );
+    }
+    if (creds.serverUrl !== deployment.serverUrl) {
+      throw new DeploymentConfigError(
+        `docket: this device is paired with ${creds.serverUrl}, but the configured server is ${deployment.serverUrl}.\n` +
+          `Re-pair with \`docket pair ${deployment.serverUrl}\` if this is intentional.`,
+      );
+    }
+    return new TodoService(new RemoteTodoRepository({ serverUrl: deployment.serverUrl!, deviceId, deviceName, secret: creds.secret }));
+  })();
+  return mcpTodoServicePromise;
+}
 
 /**
  * Every MCP host spawns its own `node dist/index.js` per session, so this
@@ -84,8 +140,41 @@ function currentAgent(): string | null {
   return server.server.getClientVersion()?.name ?? null;
 }
 
+function currentContext(): MutationContext {
+  return { agent: currentAgent(), session: sessionToken, deviceId, deviceName };
+}
+
 function text(value: string) {
   return { content: [{ type: "text" as const, text: value }] };
+}
+
+function errorText(value: string) {
+  return { content: [{ type: "text" as const, text: value }], isError: true };
+}
+
+/**
+ * RFC §22's hard invariant, enforced at the one seam every mutating (and reading) tool
+ * handler shares: a remote connectivity/protocol failure must surface as a clear,
+ * actionable MCP tool error — never an unhandled crash of the whole stdio connection, and
+ * never silently treated as "no such item" (TodoService.notFoundToNull — see
+ * todo-service.ts — only ever catches TodoNotFoundError, so these two error types always
+ * reach here). In local mode neither error type can ever be thrown (LocalTodoRepository
+ * has no network calls), so this wrapper is a no-op there.
+ */
+function withRemoteErrorHandling<Args extends unknown[], R>(
+  handler: (...args: Args) => Promise<R>,
+): (...args: Args) => Promise<R | ReturnType<typeof errorText>> {
+  return async (...args: Args) => {
+    try {
+      return await handler(...args);
+    } catch (err) {
+      if (err instanceof RemoteUnavailableError || err instanceof RemoteProtocolError) {
+        log(`remote error: ${err.message}`);
+        return errorText(err.message);
+      }
+      throw err;
+    }
+  };
 }
 
 /** Edit convention for every optional tool field: omitted leaves it alone, an explicit "" clears it. */
@@ -184,18 +273,10 @@ server.registerTool(
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
-  async ({ title, description, list, category, priority, dueDate, sourceUrl }) => {
-    const agent = currentAgent();
-    const todo = await withStore((store) =>
-      createTodo(
-        store,
-        { title, description, list, category, priority, dueDate, sourceUrl, agent, session: sessionToken },
-        deviceId,
-        deviceName,
-      ),
-    );
+  withRemoteErrorHandling(async ({ title, description, list, category, priority, dueDate, sourceUrl }) => {
+    const todo = await (await getMcpTodoService()).create({ title, description, list, category, priority, dueDate, sourceUrl }, currentContext());
     return text(`Added [${todo.list}] ${formatTodo(todo)}${duplicationWarning(todo.title, todo.description)}`);
-  },
+  }),
 );
 
 server.registerTool(
@@ -216,8 +297,7 @@ server.registerTool(
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
-  async ({ id, title, description, category, priority, dueDate, sourceUrl, list }) => {
-    const agent = currentAgent();
+  withRemoteErrorHandling(async ({ id, title, description, category, priority, dueDate, sourceUrl, list }) => {
     const patch = {
       title,
       description: clearable(description),
@@ -227,10 +307,10 @@ server.registerTool(
       sourceUrl: clearable(sourceUrl),
       list,
     };
-    const todo = await withTodo(id, (item) => applyEdits(item, patch, agent, deviceId, deviceName));
+    const todo = await (await getMcpTodoService()).edit(id, patch, currentContext());
     if (!todo) return text(`No todo with id #${id}`);
     return text(`Updated ${formatTodo(todo)}${duplicationWarning(todo.title, todo.description)}`);
-  },
+  }),
 );
 
 server.registerTool(
@@ -242,18 +322,14 @@ server.registerTool(
     inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
-  async ({ id }) => {
-    const agent = currentAgent();
-    const claimed = await withStore((store) => {
-      const item = findTodoByAnyId(store, id);
-      if (!item) return null;
-      return { item, previousAgent: claimTodo(item, agent, sessionToken, deviceId, deviceName) };
-    });
+  withRemoteErrorHandling(async ({ id }) => {
+    const context = currentContext();
+    const claimed = await (await getMcpTodoService()).claim(id, context);
     if (!claimed) return text(`No todo with id #${id}`);
-    const { item, previousAgent } = claimed;
-    const warning = previousAgent && previousAgent !== agent ? ` (note: was already claimed by ${previousAgent} — taking over)` : "";
-    return text(`Claimed ${formatTodo(item)}${warning}`);
-  },
+    const { todo, previousAgent } = claimed;
+    const warning = previousAgent && previousAgent !== context.agent ? ` (note: was already claimed by ${previousAgent} — taking over)` : "";
+    return text(`Claimed ${formatTodo(todo)}${warning}`);
+  }),
 );
 
 server.registerTool(
@@ -264,12 +340,11 @@ server.registerTool(
     inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
-  async ({ id }) => {
-    const agent = currentAgent();
-    const todo = await withTodo(id, (item) => releaseTodo(item, agent, deviceId, deviceName));
+  withRemoteErrorHandling(async ({ id }) => {
+    const todo = await (await getMcpTodoService()).release(id, currentContext());
     if (!todo) return text(`No todo with id #${id}`);
     return text(`Released ${formatTodo(todo)}`);
-  },
+  }),
 );
 
 server.registerTool(
@@ -295,26 +370,15 @@ server.registerTool(
     },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
-  async ({ filter, list, category, agent, session, inProgress, limit, offset }) => {
-    const store = await readStore();
-    const matched = store.todos.filter((todo) => {
-      if (filter === "open" && todo.done) return false;
-      if (filter === "done" && !todo.done) return false;
-      if (list !== "all" && todo.list !== list) return false;
-      if (category && todo.category !== category) return false;
-      if (agent && todo.agent !== agent) return false;
-      if (session && todo.session !== session) return false;
-      if (inProgress && !isClaimActive(todo)) return false;
-      return true;
-    });
-
+  withRemoteErrorHandling(async ({ filter, list, category, agent, session, inProgress, limit, offset }) => {
+    const matched = await (await getMcpTodoService()).list({ filter, list, category, agent, session, inProgress });
     const sorted = sortTodos(matched);
     const total = sorted.length;
     const start = offset ?? 0;
     const paginated = limit !== undefined || offset !== undefined ? sorted.slice(start, limit !== undefined ? start + limit : undefined) : sorted;
 
     return text(formatResult(paginated, filter, list, { limit, offset, total }));
-  },
+  }),
 );
 
 server.registerTool(
@@ -325,12 +389,11 @@ server.registerTool(
     inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
-  async ({ id }) => {
-    const agent = currentAgent();
-    const todo = await withTodo(id, (item) => completeTodo(item, agent, deviceId, deviceName));
+  withRemoteErrorHandling(async ({ id }) => {
+    const todo = await (await getMcpTodoService()).complete(id, currentContext());
     if (!todo) return text(`No todo with id #${id}`);
     return text(`Completed ${formatTodo(todo)}`);
-  },
+  }),
 );
 
 server.registerTool(
@@ -341,12 +404,11 @@ server.registerTool(
     inputSchema: { id: idSchema },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
-  async ({ id }) => {
-    const store = await readStore();
-    const item = store.todos.find((t) => t.id === id);
+  withRemoteErrorHandling(async ({ id }) => {
+    const item = await (await getMcpTodoService()).get(id);
     if (!item) return text(`No todo with id #${id}`);
     return text(formatHistory(item));
-  },
+  }),
 );
 
 server.registerTool(
@@ -393,13 +455,13 @@ server.registerTool(
     inputSchema: { id: idSchema },
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
-  async ({ id }) => {
-    const agent = currentAgent();
-    const removed = await withTodo(id, (item, store) => tombstoneDelete(store, item, deviceId));
+  withRemoteErrorHandling(async ({ id }) => {
+    const context = currentContext();
+    const removed = await (await getMcpTodoService()).delete(id, context);
     if (!removed) return text(`No todo with id #${id}`);
-    log(`deleted #${removed.id} "${removed.title}" by ${agent ?? "unknown"}`);
+    log(`deleted #${removed.id} "${removed.title}" by ${context.agent ?? "unknown"}`);
     return text(`Deleted #${removed.id} ${removed.title}`);
-  },
+  }),
 );
 
 function printHelp() {
@@ -422,12 +484,22 @@ Commands:
   update                Check, confirm, install, self-test, and roll back on failure
   help, --help, -h      Show this help message
 
+  serve                 Run an authoritative docket server for remote/self-hosted mode (see \`docket serve --help\`-equivalent docs)
+  devices <sub>         Manage devices paired with a \`docket serve\` running on THIS machine (pair, pending, approve, deny, list, revoke, restore)
+  pair <serverUrl>      Pair THIS device with a remote docket server (RFC "Local and Self-Hosted Backend Modes" §13)
+  status                Show deployment mode, and connection/store health (local: store+web+peers; remote: server+latency+device authorization)
+  backend use <url>     Switch this device to a self-hosted server, migrating local data to it if the server is empty
+  backend localize      Download the current remote server's workspace and switch back to local mode
+
 Export options:
   --format, -f <fmt>    Export format: "json" (default) or "markdown" / "md"
   --out, -o <file>      Write export output directly to file
 
 Environment variables:
-  DOCKET_WEB_PORT     Port for the local web UI (default: 8787)
+  DOCKET_WEB_PORT           Port for the local web UI (default: 8787)
+  DOCKET_MODE               "local" (default) or "remote" — see \`docket pair\` and ~/.config/docket/config.json
+  DOCKET_SERVER_URL         Server URL to use when DOCKET_MODE=remote
+  DOCKET_ALLOW_INSECURE_REMOTE  Set to "1" to allow a non-HTTPS remote server URL (trusted LAN dev only)
 
 Disaster recovery:
   \`export\`/\`import\` move just the todo list, in the clear, between tools.
@@ -445,33 +517,6 @@ Examples:
   docket backup ./docket.backup
   docket restore ./docket.backup
 `);
-}
-
-/**
- * Reads answers to several prompts in order from ONE readline interface.
- *
- * NOT the same as calling `rl.question()` twice on the same interface — under piped/
- * non-TTY stdin (a script, `printf ... | docket restore ...`, CI), a second `question()`
- * call on a readline interface whose input stream already delivered all its buffered data
- * simply never resolves and the process exits silently (code 0) without asking or reading
- * anything further — confirmed against this Node version. The async-iterator protocol
- * (`for await` over the interface) does not have this problem and works identically on a
- * real TTY, so every multi-prompt CLI flow here goes through this helper instead.
- */
-async function askQuestions(prompts: string[]): Promise<string[]> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answers: string[] = [];
-  try {
-    const lines = rl[Symbol.asyncIterator]();
-    for (const prompt of prompts) {
-      process.stdout.write(prompt);
-      const { value, done } = await lines.next();
-      answers.push(done ? "" : value);
-    }
-  } finally {
-    rl.close();
-  }
-  return answers;
 }
 
 async function handleCli(args: string[]): Promise<boolean> {
@@ -519,6 +564,15 @@ async function handleCli(args: string[]): Promise<boolean> {
   }
 
   if (cmd === "web") {
+    // RFC §26: in remote mode, `docket web` opens the SERVER's Web UI — never a second,
+    // separately-stateful local one. (Serving the server's own Web UI pages from here is
+    // Phase 4/RFC §26 scope; this stops short of the wrong behavior without yet building
+    // the right one.)
+    const deployment = await getDeployment();
+    if (deployment.mode === "remote") {
+      console.log(`This workspace is hosted by ${deployment.serverUrl} — open its Web UI directly in a browser.`);
+      return true;
+    }
     await ensureWebUiRunning();
     console.log(`Web UI available at: http://localhost:${WEB_PORT}`);
     return true;
@@ -585,6 +639,15 @@ async function handleCli(args: string[]): Promise<boolean> {
   }
 
   if (cmd === "backup") {
+    // RFC §30: a client machine's local store is unused/empty in remote mode — backing it
+    // up would look like it succeeded while silently protecting nothing. Backups belong on
+    // the server, which is the only place authoritative state actually lives.
+    const deployment = await getDeployment();
+    if (deployment.mode === "remote") {
+      console.log(`This workspace is hosted by ${deployment.serverUrl}.`);
+      console.log("Backups must be created on the server: run `docket backup <file>` there instead.");
+      return true;
+    }
     const file = args[1];
     if (!file) {
       console.error("Error: Please provide an output file. Example: docket backup ./docket.backup");
@@ -623,7 +686,7 @@ async function handleCli(args: string[]): Promise<boolean> {
       console.error(`Error: ${file} doesn't look like a docket backup file.`);
       process.exit(1);
     }
-    const [password, proceed] = await askQuestions([
+    const [password, proceed] = await cliAskQuestions([
       "Backup password: ",
       "This REPLACES this device's identity, todos, and paired-peer list with the backup's (the current files are renamed aside as .bak, not deleted). Continue? [y/N] ",
     ]);
@@ -668,10 +731,25 @@ async function main() {
     process.stderr.write("docket: waiting for an MCP client on stdio. Run `docket help` for CLI usage.\n");
   }
 
+  // Resolve deployment mode (and, in remote mode, actually construct the repository —
+  // this is where an unpaired device or mismatched server fails) BEFORE connecting the
+  // transport, so a misconfigured remote mode never presents the host with a connection
+  // that then mysteriously errors on the first tool call — it fails at startup instead,
+  // through this function's existing top-level `.catch` (RFC §22: fail loud).
+  const deployment = await getDeployment();
+  if (deployment.mode === "remote") await getMcpTodoService();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  await migrateLegacyFields();
-  await ensureWebUiRunning();
+  // Both of these touch/create LOCAL on-disk state (todos.json.enc's legacy-field
+  // migration, and a second locally-stateful Web UI process) — skipped entirely in remote
+  // mode, per RFC §22/§38: "Remote Mode owns no local writable replica at all." Without
+  // this guard, a remote-mode MCP session would silently create an empty local store the
+  // very first time it ran, exactly the split-brain risk that invariant exists to prevent.
+  if (deployment.mode === "local") {
+    await migrateLegacyFields();
+    await ensureWebUiRunning();
+  }
 }
 
 main().catch((err) => {

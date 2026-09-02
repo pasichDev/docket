@@ -76,7 +76,23 @@ async function runMcpHandshake(env: NodeJS.ProcessEnv): Promise<{ tools: string[
     await send(3, "tools/call", { name: "todo_list", arguments: {} });
     return { tools, listResult, stderr: stderrBuffer };
   } finally {
-    child.kill();
+    // kill() alone only sends the signal — it doesn't wait for the process to actually let
+    // go of the data directory's file handles before this function returns, so a caller's
+    // immediately-following rm() can race a still-shutting-down process and hit ENOTEMPTY
+    // (more likely the busier the machine is — e.g. many spawned child processes running
+    // concurrently across the rest of `npm test`). Waiting for 'exit' first (bounded, in
+    // case it's already gone or never responds) makes cleanup deterministic instead of
+    // flaky — same fix as server/serve.e2e.test.ts's stopServe().
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        child.kill();
+      });
+    }
   }
 }
 
@@ -88,6 +104,6 @@ test("MCP startup: initialize -> initialized -> tools/list -> todo_list succeeds
       assert.ok(tools.includes(expected), `expected tools/list to include ${expected}, got: ${tools.join(", ")}`);
     }
   } finally {
-    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

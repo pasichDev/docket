@@ -72,11 +72,12 @@ export const FIELD_KEYS = [
   "workingSince",
   "workingSession",
   "workingLeaseExpiresAt",
+  "workingDeviceId",
 ] as const satisfies readonly (keyof Todo)[];
 export type FieldKey = (typeof FIELD_KEYS)[number];
 
-/** The four fields that describe one claim — always stamped together, so claim/release/complete can't drift apart. */
-const CLAIM_FIELDS: readonly FieldKey[] = ["workingAgent", "workingSince", "workingSession", "workingLeaseExpiresAt"];
+/** The five fields that describe one claim — always stamped together, so claim/release/complete can't drift apart. */
+const CLAIM_FIELDS: readonly FieldKey[] = ["workingAgent", "workingSince", "workingSession", "workingLeaseExpiresAt", "workingDeviceId"];
 
 /** How long a claim survives without being renewed (a fresh todo_claim call) before it's treated as abandoned. */
 export const CLAIM_LEASE_MS = 15 * 60_000;
@@ -105,8 +106,10 @@ export function createTodo(store: TodoStore, input: NewTodoInput, deviceId: stri
     workingSince: null,
     workingSession: null,
     workingLeaseExpiresAt: null,
+    workingDeviceId: null,
     createdAt: now,
     updatedAt: now,
+    revision: 1,
     fieldTimestamps: {},
     completedAt: null,
     deviceId,
@@ -128,6 +131,7 @@ export function createTodo(store: TodoStore, input: NewTodoInput, deviceId: stri
 export function touch(item: Todo, deviceId: string, deviceName: string, changedFields: readonly FieldKey[] = []): void {
   const now = new Date().toISOString();
   item.updatedAt = now;
+  item.revision = (item.revision ?? 1) + 1;
   item.deviceId = deviceId;
   item.deviceName = deviceName;
   item.fieldTimestamps = item.fieldTimestamps ?? {};
@@ -187,6 +191,7 @@ function clearClaim(item: Todo): void {
   item.workingSince = null;
   item.workingSession = null;
   item.workingLeaseExpiresAt = null;
+  item.workingDeviceId = null;
 }
 
 /** Marks the item as actively worked on by `agent`, returning whichever agent's still-active claim it took over (null if it was free). */
@@ -210,6 +215,7 @@ export function claimTodo(
   item.workingAgent = agent;
   item.workingSession = session;
   item.workingLeaseExpiresAt = leaseExpiry();
+  item.workingDeviceId = deviceId;
   const detail = isRenewal ? "lease renewed" : previousAgent && previousAgent !== agent ? `took over from ${previousAgent}` : "claimed";
   pushHistory(item, agent, "claimed", detail, deviceName);
   touch(item, deviceId, deviceName, CLAIM_FIELDS);

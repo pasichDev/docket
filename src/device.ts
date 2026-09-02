@@ -6,7 +6,15 @@ import { withFileLock } from "./filelock.js";
 
 const DEVICE_PATH = await dataPath("device.json");
 const DEVICE_LOCK_PATH = `${DEVICE_PATH}.lock`;
-const HKDF_INFO = Buffer.from("docket-sync-v1");
+// Domain-separated per RFC "Local and Self-Hosted Backend Modes" §12: each protocol gets
+// its own HKDF info string so the SAME ECDH shared point never yields the same derived
+// bytes for two different purposes — a device pairing with both a P2P peer and a remote
+// server ends up with two unrelated secrets, even against the same peer public key.
+// P2P_SYNC_HKDF_INFO's literal value is unchanged from before this constant existed
+// ("docket-sync-v1", not "docket/p2p-sync/v1") — renaming it would derive different bytes
+// and silently break every already-paired peer's stored secret.
+const P2P_SYNC_HKDF_INFO = Buffer.from("docket-sync-v1");
+const SERVER_AUTH_HKDF_INFO = Buffer.from("docket/server-auth/v1");
 
 interface X25519Jwk {
   x: string;
@@ -134,12 +142,13 @@ export async function setDeviceRole(role: DeviceRole): Promise<void> {
 }
 
 /**
- * Derives the shared sync secret with a peer, given their public key coordinate.
- * ECDH is commutative — the peer performs the same computation with our public
- * key and its own private key and arrives at the identical result, so the secret
- * itself never crosses the network in either direction.
+ * ECDH is commutative — the other side performs the same computation with our public key
+ * and its own private key and arrives at the identical result, so the secret itself never
+ * crosses the network in either direction. `info` is the HKDF domain-separation label
+ * (RFC §12) — callers never pass a raw Buffer directly so the two purposes below can't
+ * accidentally share one.
  */
-export async function deriveSharedSecret(peerPublicKeyX: string): Promise<string> {
+async function deriveSecret(peerPublicKeyX: string, info: Buffer): Promise<string> {
   const identity = await getOrCreateIdentity();
   const privateKey = createPrivateKey({
     key: { kty: "OKP", crv: "X25519", x: identity.privateKeyJwk.x, d: identity.privateKeyJwk.d },
@@ -147,6 +156,23 @@ export async function deriveSharedSecret(peerPublicKeyX: string): Promise<string
   });
   const publicKey = createPublicKey({ key: { kty: "OKP", crv: "X25519", x: peerPublicKeyX }, format: "jwk" });
   const shared = diffieHellman({ privateKey, publicKey });
-  const derived = hkdfSync("sha256", shared, Buffer.alloc(0), HKDF_INFO, 32);
+  const derived = hkdfSync("sha256", shared, Buffer.alloc(0), info, 32);
   return Buffer.from(derived).toString("hex");
+}
+
+/** Derives the shared P2P sync secret with a paired peer device (see sync.ts). */
+export async function deriveSharedSecret(peerPublicKeyX: string): Promise<string> {
+  return deriveSecret(peerPublicKeyX, P2P_SYNC_HKDF_INFO);
+}
+
+/**
+ * Derives this device's per-device authentication secret with a `docket serve` server,
+ * given the server's own X25519 public key (RFC "Local and Self-Hosted Backend Modes"
+ * §12-14). Same ECDH primitive as deriveSharedSecret, but a different HKDF label, so
+ * pairing with a remote server never produces the same bytes as pairing with a P2P peer
+ * even against the same public key. Used to HMAC-sign every remote API request
+ * (src/remote/device-auth.ts) — never to encrypt a payload the way the P2P secret does.
+ */
+export async function deriveServerAuthSecret(serverPublicKeyX: string): Promise<string> {
+  return deriveSecret(serverPublicKeyX, SERVER_AUTH_HKDF_INFO);
 }

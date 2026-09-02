@@ -28,12 +28,16 @@ export interface Todo {
   workingSession: string | null;
   /** Set by todo_claim: the claim auto-expires at this time unless renewed, so a claim from a device that vanished (crashed, offline for months) doesn't haunt the list forever. */
   workingLeaseExpiresAt: string | null;
+  /** Set by todo_claim: the claiming device's id (see src/device.ts). Unlike `agent`/`session`, this is the one claim field a remote server can check against its own AUTHENTICATED caller identity (context.deviceId) rather than a self-reported header — see repository.ts's claim() requireFree check. */
+  workingDeviceId: string | null;
   createdAt: string;
   /** Bumped on every mutation. Used as the fallback conflict resolver for fields with no per-field timestamp (old data, or fields not covered by FIELD_KEYS in mutations.ts). */
   updatedAt: string;
   /** Per-field last-write-wins timestamps, keyed by field name (see FIELD_KEYS in mutations.ts). Lets two independent edits to DIFFERENT fields both survive a merge instead of one clobbering the other. Missing/partial on data from before this existed — those fields fall back to `updatedAt`. */
   fieldTimestamps: Partial<Record<string, string>>;
   completedAt: string | null;
+  /** Bumped on every mutation (see touch() in mutations.ts). Optimistic-concurrency counter — a future remote server uses it for If-Match/409 checks; local mode doesn't check it against anything yet. Legacy items default to 1 on migration (see storage.ts). */
+  revision: number;
   /** Which physical device this item was created on (see src/device.ts). Null for items from before device-sync existed. */
   deviceId: string | null;
   deviceName: string | null;

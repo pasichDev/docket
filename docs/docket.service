@@ -1,0 +1,51 @@
+# systemd unit for a headless docket server (RFC "Local and Self-Hosted Backend Modes"
+# §24, Implementation Phase 5). Install and enable:
+#
+#   sudo useradd --system --home /var/lib/docket --create-home docket
+#   sudo npm install -g @pasichdev/docket        # or: git clone + npm ci + npm run build
+#   which docket                                 # confirm ExecStart's path below matches
+#   sudo cp docs/docket.service /etc/systemd/system/docket.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now docket
+#   sudo journalctl -u docket -f                 # follow logs
+#
+# Pair a device from THIS machine once it's running:
+#   sudo -u docket DOCKET_DATA_DIR=/var/lib/docket docket devices pair
+#
+# See docs/headless.md for the full walkthrough (including safe upgrades) and RFC §9 for
+# why --host must be given explicitly to bind beyond 127.0.0.1.
+
+[Unit]
+Description=docket server
+Documentation=https://github.com/pasichDev/docket#readme
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=docket
+Group=docket
+Environment=DOCKET_DATA_DIR=/var/lib/docket
+# Uncomment to accept connections from other machines on your LAN (RFC §9: binding to all
+# interfaces must be an explicit, deliberate choice — never the silent default):
+# Environment=DOCKET_SERVER_HOST=0.0.0.0
+ExecStart=/usr/local/bin/docket serve
+Restart=on-failure
+RestartSec=5s
+# docket serve handles SIGTERM itself (closes the HTTP server and every open SSE
+# connection before exiting) — systemd's default TERM-then-KILL behaviour is sufficient,
+# no custom ExecStop is needed.
+TimeoutStopSec=15s
+
+# Hardening — a headless box's docket process should only ever need its own data
+# directory, nothing else on the filesystem or in the kernel.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/docket
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

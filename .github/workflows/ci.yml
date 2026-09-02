@@ -16,4 +16,4 @@ jobs:
           node-version: "lts/*"
       - run: npm ci
       - run: npm run build
-      - run: node --test dist/*.test.js dist/web/*.test.js
+      - run: node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js

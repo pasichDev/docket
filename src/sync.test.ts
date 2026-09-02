@@ -208,8 +208,10 @@ test("mergeSyncPayload: an edit AFTER a peer's delete resurrects the item (edit-
     workingSince: null,
     workingSession: null,
     workingLeaseExpiresAt: null,
+    workingDeviceId: null,
     createdAt: "2020-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z", // long after the tombstone
+    revision: 1,
     fieldTimestamps: {},
     completedAt: null,
     deviceId: "device-b",
