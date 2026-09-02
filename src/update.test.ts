@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { checkForUpdate, compareVersions, detectInstallKind, getCurrentVersion, getLatestVersion } from "./update.js";
+import { checkForUpdate, compareVersions, createSelfTestEnvironment, detectInstallKind, getCurrentVersion, getLatestVersion } from "./update.js";
 
 test("detectInstallKind: a path under a global npm node_modules install", () => {
   const p = "/usr/local/lib/node_modules/@pasichdev/todo-mcp/dist/index.js";
@@ -17,6 +17,22 @@ test("detectInstallKind: an npx cache path", () => {
 
 test("detectInstallKind: anything else is a dev clone", () => {
   assert.equal(detectInstallKind("/Users/me/repo/todo-mcp/dist/index.js"), "dev-clone");
+});
+
+test("createSelfTestEnvironment: isolates updater smoke tests from inherited todo-mcp state", () => {
+  const environment = createSelfTestEnvironment({
+    HOME: "/real-home",
+    TODO_MCP_DATA_DIR: "/shared-state",
+    XDG_STATE_HOME: "/shared-xdg-state",
+    KEEP_ME: "yes",
+  }, "/scratch-home", 23456);
+
+  assert.deepEqual(environment, {
+    HOME: "/scratch-home",
+    TODO_MCP_DATA_DIR: "/scratch-home/data",
+    TODO_MCP_WEB_PORT: "23456",
+    KEEP_ME: "yes",
+  });
 });
 
 test("compareVersions: orders by major, then minor, then patch", () => {

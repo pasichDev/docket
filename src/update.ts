@@ -103,9 +103,23 @@ function getGlobalNpmRoot(): Promise<string> {
   });
 }
 
+export function createSelfTestEnvironment(
+  parentEnvironment: NodeJS.ProcessEnv,
+  scratchHome: string,
+  port: number,
+): NodeJS.ProcessEnv {
+  const { TODO_MCP_DATA_DIR: _dataDirectory, XDG_STATE_HOME: _stateHome, ...environment } = parentEnvironment;
+  return {
+    ...environment,
+    HOME: scratchHome,
+    TODO_MCP_DATA_DIR: join(scratchHome, "data"),
+    TODO_MCP_WEB_PORT: String(port),
+  };
+}
+
 /**
  * Boots the newly-installed web.js as a throwaway child — its own scratch port and scratch
- * HOME, so it can never touch real data or the real port — and confirms it actually starts
+ * HOME and data directory, so it can never touch real data or the real port — and confirms it actually starts
  * and answers /api/version before the update is considered good. Never throws; returns false
  * on any failure so the caller can decide to roll back.
  */
@@ -118,7 +132,7 @@ async function selfTest(): Promise<boolean> {
     const globalRoot = await getGlobalNpmRoot();
     const webEntry = join(globalRoot, PACKAGE_NAME, "dist", "web.js");
     child = spawn(process.execPath, [webEntry], {
-      env: { ...process.env, HOME: scratchHome, TODO_MCP_WEB_PORT: String(port) },
+      env: createSelfTestEnvironment(process.env, scratchHome, port),
       stdio: "ignore",
     });
     const deadline = Date.now() + 8000;

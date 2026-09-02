@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { createTodo, touch } from "./mutations.js";
-import {
+import type { Todo, TodoStore } from "./types.js";
+
+const originalDataDirectory = process.env.TODO_MCP_DATA_DIR;
+const dataDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-sync-test-"));
+process.env.TODO_MCP_DATA_DIR = dataDirectory;
+const {
   confirmProof,
   decryptSyncPayload,
   encryptSyncPayload,
@@ -9,9 +17,14 @@ import {
   signSyncRequest,
   verifyConfirmProof,
   verifySyncRequest,
-  type SyncPayload,
-} from "./sync.js";
-import type { Todo, TodoStore } from "./types.js";
+} = await import("./sync.js");
+import type { SyncPayload } from "./sync.js";
+
+test.after(() => {
+  if (originalDataDirectory === undefined) delete process.env.TODO_MCP_DATA_DIR;
+  else process.env.TODO_MCP_DATA_DIR = originalDataDirectory;
+  return rm(dataDirectory, { recursive: true, force: true });
+});
 
 function emptyStore(): TodoStore {
   return { formatVersion: 5, nextId: 1, todos: [], deletedUuids: [] };

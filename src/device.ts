@@ -1,9 +1,11 @@
 import { createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { hostname, homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { chmod, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
+import { dataPath } from "./data-dir.js";
+import { withFileLock } from "./filelock.js";
 
-const DEVICE_PATH = join(homedir(), ".todo-mcp", "device.json");
+const DEVICE_PATH = await dataPath("device.json");
+const DEVICE_LOCK_PATH = `${DEVICE_PATH}.lock`;
 const HKDF_INFO = Buffer.from("todo-mcp-sync-v1");
 
 interface X25519Jwk {
@@ -34,8 +36,16 @@ let cached: DeviceIdentity | null = null;
 
 /** device.json holds the X25519 private key — exactly as sensitive as the peers/todos encryption keys, so it gets the same owner-only permissions (writeFile's mode is masked by umask on some platforms; the explicit chmod re-asserts it). */
 async function writeIdentity(identity: DeviceIdentity): Promise<void> {
-  await writeFile(DEVICE_PATH, JSON.stringify(identity, null, 2), { mode: 0o600 });
-  await chmod(DEVICE_PATH, 0o600);
+  const temporaryPath = `${DEVICE_PATH}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, JSON.stringify(identity, null, 2), { mode: 0o600 });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, DEVICE_PATH);
+    await chmod(DEVICE_PATH, 0o600);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 type StoredIdentity = Partial<DeviceIdentity> & { id: string; name: string };
@@ -60,30 +70,35 @@ async function readIdentityFile(): Promise<StoredIdentity | null> {
  */
 async function getOrCreateIdentity(): Promise<DeviceIdentity> {
   if (cached) return cached;
-  const stored = await readIdentityFile();
+  return withFileLock(DEVICE_LOCK_PATH, async () => {
+    // Another process can create the identity while this process waits for the
+    // lock. Recheck inside the critical section before generating any keypair.
+    if (cached) return cached;
+    const stored = await readIdentityFile();
 
-  if (stored?.publicKeyX && stored.privateKeyJwk && stored.role) {
-    cached = stored as DeviceIdentity;
-    // Self-heal a device.json created before permissions were tightened to owner-only.
-    await chmod(DEVICE_PATH, 0o600).catch(() => {});
-    return cached;
-  }
+    if (stored?.publicKeyX && stored.privateKeyJwk && stored.role) {
+      cached = stored as DeviceIdentity;
+      // Self-heal a device.json created before permissions were tightened to owner-only.
+      await chmod(DEVICE_PATH, 0o600).catch(() => {});
+      return cached;
+    }
 
-  // Either brand new, or an older device.json missing fields added since — in the
-  // latter case keep the existing id/name and fill in only what's absent. A device
-  // with no recorded role has never joined anyone else's group, so: host.
-  const keys = stored?.publicKeyX && stored.privateKeyJwk
-    ? { publicKeyX: stored.publicKeyX, privateKeyJwk: stored.privateKeyJwk }
-    : generateX25519();
-  cached = {
-    id: stored?.id ?? randomUUID(),
-    name: stored?.name ?? hostname().replace(/\.local$/, ""),
-    role: stored?.role ?? "host",
-    ...keys,
-  };
-  await mkdir(dirname(DEVICE_PATH), { recursive: true });
-  await writeIdentity(cached);
-  return cached;
+    // Either brand new, or an older device.json missing fields added since — in the
+    // latter case keep the existing id/name and fill in only what's absent. A device
+    // with no recorded role has never joined anyone else's group, so: host.
+    const keys = stored?.publicKeyX && stored.privateKeyJwk
+      ? { publicKeyX: stored.publicKeyX, privateKeyJwk: stored.privateKeyJwk }
+      : generateX25519();
+    const identity: DeviceIdentity = {
+      id: stored?.id ?? randomUUID(),
+      name: stored?.name ?? hostname().replace(/\.local$/, ""),
+      role: stored?.role ?? "host",
+      ...keys,
+    };
+    await writeIdentity(identity);
+    cached = identity;
+    return identity;
+  });
 }
 
 function generateX25519(): { publicKeyX: string; privateKeyJwk: X25519Jwk } {

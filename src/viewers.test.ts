@@ -1,50 +1,71 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
-// viewers.ts resolves its on-disk path from homedir() once at module load, so each
-// test needs a process-fresh module instance pointed at its own temp HOME — otherwise
-// tests would read/write the real ~/.todo-mcp/viewers.json.enc.
-async function freshViewersModule() {
-  process.env.HOME = await mkdtemp(join(tmpdir(), "todo-mcp-viewers-test-"));
-  return import(`./viewers.js?t=${Date.now()}-${Math.random()}`);
+const exec = promisify(execFile);
+const viewersModule = pathToFileURL(join(process.cwd(), "dist", "viewers.js")).href;
+
+async function runViewers<T>(directory: string, action: string): Promise<T> {
+  const script = `
+    const viewers = await import(${JSON.stringify(viewersModule)});
+    const first = { id: "v1", tokenHash: "abc123", label: "A", approvedAt: "2026-01-01T00:00:00.000Z", lastSeenAt: null };
+    const second = { id: "v2", tokenHash: "def456", label: "B", approvedAt: "2026-01-01T00:00:00.000Z", lastSeenAt: null };
+    const action = ${JSON.stringify(action)};
+    let result;
+    if (action === "load") result = await viewers.loadViewers();
+    else if (action === "add") { await viewers.addViewer(first); result = await viewers.loadViewers(); }
+    else if (action === "seed") { await viewers.addViewer(first); await viewers.addViewer(second); result = true; }
+    else if (action === "remove-unknown") result = await viewers.removeViewer("does-not-exist");
+    else if (action === "remove") result = await viewers.removeViewer("v1");
+    else if (action === "touch") { await viewers.touchViewer("v1"); result = await viewers.loadViewers(); }
+    process.stdout.write(JSON.stringify(result));
+  `;
+  const { stdout } = await exec(process.execPath, ["--input-type=module", "--eval", script], {
+    env: { ...process.env, TODO_MCP_DATA_DIR: directory },
+  });
+  return JSON.parse(stdout) as T;
 }
 
-const originalHome = process.env.HOME;
-test.after(() => {
-  if (originalHome) process.env.HOME = originalHome;
-});
+async function withViewerDirectory<T>(fn: (directory: string) => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), "todo-mcp-viewers-test-"));
+  try {
+    return await fn(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 
-test("loadViewers: empty on a fresh install", async () => {
-  const mod = await freshViewersModule();
-  assert.deepEqual(await mod.loadViewers(), []);
-});
+test("loadViewers: empty on a fresh install", () => withViewerDirectory(async (directory) => {
+  assert.deepEqual(await runViewers(directory, "load"), []);
+}));
 
-test("addViewer/loadViewers: persists and round-trips", async () => {
-  const mod = await freshViewersModule();
-  await mod.addViewer({ id: "v1", tokenHash: "abc123", label: "Browser (test)", approvedAt: "2026-01-01T00:00:00.000Z", lastSeenAt: null });
-  const viewers = await mod.loadViewers();
-  assert.equal(viewers.length, 1);
-  assert.equal(viewers[0].id, "v1");
-  assert.equal(viewers[0].tokenHash, "abc123");
-});
+test("addViewer/loadViewers: encrypted data is readable in a fresh runtime", () => withViewerDirectory(async (directory) => {
+  await runViewers(directory, "add");
+  const viewers = await runViewers<Array<{ id: string; tokenHash: string }>>(directory, "load");
+  assert.deepEqual(viewers, [{
+    id: "v1",
+    tokenHash: "abc123",
+    label: "A",
+    approvedAt: "2026-01-01T00:00:00.000Z",
+    lastSeenAt: null,
+  }]);
+}));
 
-test("removeViewer: removes an existing entry, reports false for an unknown id", async () => {
-  const mod = await freshViewersModule();
-  await mod.addViewer({ id: "v1", tokenHash: "abc123", label: "Browser (test)", approvedAt: "2026-01-01T00:00:00.000Z", lastSeenAt: null });
-  assert.equal(await mod.removeViewer("does-not-exist"), false);
-  assert.equal(await mod.removeViewer("v1"), true);
-  assert.deepEqual(await mod.loadViewers(), []);
-});
+test("removeViewer: removes an existing entry and reports false for an unknown id", () => withViewerDirectory(async (directory) => {
+  await runViewers(directory, "add");
+  assert.equal(await runViewers(directory, "remove-unknown"), false);
+  assert.equal(await runViewers(directory, "remove"), true);
+  assert.deepEqual(await runViewers(directory, "load"), []);
+}));
 
-test("touchViewer: updates lastSeenAt on the matching entry only", async () => {
-  const mod = await freshViewersModule();
-  await mod.addViewer({ id: "v1", tokenHash: "abc123", label: "A", approvedAt: "2026-01-01T00:00:00.000Z", lastSeenAt: null });
-  await mod.addViewer({ id: "v2", tokenHash: "def456", label: "B", approvedAt: "2026-01-01T00:00:00.000Z", lastSeenAt: null });
-  await mod.touchViewer("v1");
-  const viewers: Array<{ id: string; lastSeenAt: string | null }> = await mod.loadViewers();
-  assert.ok(viewers.find((v) => v.id === "v1")!.lastSeenAt !== null);
-  assert.equal(viewers.find((v) => v.id === "v2")!.lastSeenAt, null);
-});
+test("touchViewer: updates the matching entry only across fresh runtimes", () => withViewerDirectory(async (directory) => {
+  await runViewers(directory, "seed");
+  const viewers = await runViewers<Array<{ id: string; lastSeenAt: string | null }>>(directory, "touch");
+  assert.ok(viewers.find((viewer) => viewer.id === "v1")!.lastSeenAt !== null);
+  assert.equal(viewers.find((viewer) => viewer.id === "v2")!.lastSeenAt, null);
+}));

@@ -1,9 +1,8 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { dataPath } from "./data-dir.js";
 
-const KEY_PATH = join(homedir(), ".todo-mcp", "key");
+const KEY_PATH = await dataPath("key");
 const ALGO = "aes-256-gcm";
 const IV_LEN = 12;
 const AUTH_TAG_LEN = 16;
@@ -26,7 +25,6 @@ async function getOrCreateKey(): Promise<Buffer> {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   const key = randomBytes(32);
-  await mkdir(dirname(KEY_PATH), { recursive: true });
   await writeFile(KEY_PATH, key, { mode: 0o600 });
   await chmod(KEY_PATH, 0o600); // writeFile's mode is masked by umask on some platforms — re-assert.
   cachedKey = key;

@@ -1,16 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { readFile, rename, writeFile } from "node:fs/promises";
+import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { withFileLock } from "./filelock.js";
 import { log } from "./log.js";
 import type { Todo, TodoStore } from "./types.js";
 import { uuidv7 } from "./uuid7.js";
 
-const STORE_PATH = join(homedir(), ".todo-mcp", "todos.json.enc");
+const STORE_PATH = await dataPath("todos.json.enc");
 /** Pre-encryption path. Only read once, to migrate; never written again after that. */
-const LEGACY_PLAINTEXT_PATH = join(homedir(), ".todo-mcp", "todos.json");
+const LEGACY_PLAINTEXT_PATH = await dataPath("todos.json");
 const LOCK_PATH = `${STORE_PATH}.lock`;
 
 /** Bump this whenever the Todo/TodoStore shape changes in a way old code would misread. */
@@ -41,7 +40,6 @@ async function readRawStoreJson(): Promise<string | null> {
     throw err;
   }
   log(`storage: migrating legacy plaintext todos.json -> encrypted todos.json.enc`);
-  await mkdir(dirname(STORE_PATH), { recursive: true });
   const tmpPath = `${STORE_PATH}.${randomUUID()}.tmp`;
   const encrypted = await encryptToBuffer(plaintext);
   await writeFile(tmpPath, encrypted, { mode: 0o600 });
@@ -108,7 +106,6 @@ async function loadStore(): Promise<TodoStore> {
 
 async function saveStore(store: TodoStore): Promise<void> {
   store.formatVersion = CURRENT_FORMAT_VERSION;
-  await mkdir(dirname(STORE_PATH), { recursive: true });
   const tmpPath = `${STORE_PATH}.${randomUUID()}.tmp`;
   const encrypted = await encryptToBuffer(JSON.stringify(store, null, 2));
   await writeFile(tmpPath, encrypted, { mode: 0o600 });

@@ -325,7 +325,7 @@ become a new entry point into the network. Unpairing from every peer
 restores host status.
 
 **How the trust works:** each device generates its own X25519 identity key
-pair on first run (`~/.todo-mcp/device.json`) and never transmits its
+pair on first run (`device.json` in todo-mcp's resolved data directory) and never transmits its
 private half. Pairing exchanges only the two devices' *public* keys; each
 side then independently derives the same shared secret via ECDH + HKDF —
 the secret itself never crosses the network in either direction, so
@@ -362,7 +362,16 @@ you on a broken one.
 
 ## Data & encryption
 
-Data lives in `~/.todo-mcp/`:
+Data lives in the retained legacy location `~/.todo-mcp/` by default. Set
+`TODO_MCP_DATA_DIR` to explicitly select a shared location. If creation of a
+missing default-home directory is blocked, an explicitly configured
+`$XDG_STATE_HOME` is used. If existing legacy data is inaccessible or read-only,
+startup refuses rather than silently splitting the store; set
+`TODO_MCP_DATA_DIR` to an approved writable durable location. If neither durable
+location is writable, startup names `TODO_MCP_DATA_DIR` as the required fix rather
+than creating a second list in a disposable cache. To share
+one list across multiple isolated MCP hosts, set the same
+`TODO_MCP_DATA_DIR` in each host's configuration.
 
 - `todos.json.enc` — the store, AES-256-GCM encrypted
 - `key` — a locally generated 256-bit key, written once with `chmod 600`

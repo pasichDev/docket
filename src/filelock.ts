@@ -1,16 +1,14 @@
-import { mkdir, open, rm, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { open, rm, stat } from "node:fs/promises";
 
 const LOCK_STALE_MS = 10_000;
 const LOCK_RETRY_MS = 30;
 const LOCK_TIMEOUT_MS = 5_000;
 
 async function acquireLock(lockPath: string): Promise<void> {
-  await mkdir(dirname(lockPath), { recursive: true });
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
     try {
-      const handle = await open(lockPath, "wx");
+      const handle = await open(lockPath, "wx", 0o600);
       await handle.close();
       return;
     } catch (err) {

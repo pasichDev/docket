@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { readFile, rename, writeFile } from "node:fs/promises";
+import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { withFileLock } from "./filelock.js";
 
@@ -20,7 +19,7 @@ export interface Viewer {
   lastSeenAt: string | null;
 }
 
-const VIEWERS_PATH = join(homedir(), ".todo-mcp", "viewers.json.enc");
+const VIEWERS_PATH = await dataPath("viewers.json.enc");
 const LOCK_PATH = `${VIEWERS_PATH}.lock`;
 
 export async function loadViewers(): Promise<Viewer[]> {
@@ -35,7 +34,6 @@ export async function loadViewers(): Promise<Viewer[]> {
 }
 
 async function saveViewers(viewers: Viewer[]): Promise<void> {
-  await mkdir(dirname(VIEWERS_PATH), { recursive: true });
   const tmpPath = `${VIEWERS_PATH}.${randomUUID()}.tmp`;
   const encrypted = await encryptToBuffer(JSON.stringify(viewers, null, 2));
   await writeFile(tmpPath, encrypted, { mode: 0o600 });

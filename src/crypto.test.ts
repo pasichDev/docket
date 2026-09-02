@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { decryptWithKey, encryptWithKey } from "./crypto.js";
+
+const originalDataDirectory = process.env.TODO_MCP_DATA_DIR;
+const dataDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-crypto-test-"));
+process.env.TODO_MCP_DATA_DIR = dataDirectory;
+const { decryptWithKey, encryptWithKey } = await import("./crypto.js");
+
+test.after(() => {
+  if (originalDataDirectory === undefined) delete process.env.TODO_MCP_DATA_DIR;
+  else process.env.TODO_MCP_DATA_DIR = originalDataDirectory;
+  return rm(dataDirectory, { recursive: true, force: true });
+});
 
 test("encryptWithKey/decryptWithKey: round-trips", () => {
   const key = randomBytes(32);

@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { readFile, rename, writeFile } from "node:fs/promises";
+import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { withFileLock } from "./filelock.js";
 import type { Peer } from "./types.js";
 
-const PEERS_PATH = join(homedir(), ".todo-mcp", "peers.json.enc");
+const PEERS_PATH = await dataPath("peers.json.enc");
 const LOCK_PATH = `${PEERS_PATH}.lock`;
 
 /**
@@ -26,7 +25,6 @@ export async function loadPeers(): Promise<Peer[]> {
 }
 
 async function savePeers(peers: Peer[]): Promise<void> {
-  await mkdir(dirname(PEERS_PATH), { recursive: true });
   const tmpPath = `${PEERS_PATH}.${randomUUID()}.tmp`;
   const encrypted = await encryptToBuffer(JSON.stringify(peers, null, 2));
   await writeFile(tmpPath, encrypted, { mode: 0o600 });
