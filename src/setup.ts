@@ -2,10 +2,11 @@
 import { resolveDataDirectory } from "./data-dir.js";
 import { execFile, type ExecFileException } from "node:child_process";
 import { createInterface } from "node:readline/promises";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +71,20 @@ async function installClaimSkill(): Promise<void> {
   }
 }
 
+async function installCodexSkill(): Promise<void> {
+  const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  const source = join(packageRoot, "skills", "todo-mcp-claim");
+  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+  const destination = join(codexHome, "skills", "todo-mcp-claim");
+  try {
+    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+    await cp(source, destination, { recursive: true, force: true });
+    console.log(`Installed the todo-mcp-claim skill for Codex at ${destination}.`);
+  } catch (error) {
+    console.warn(`Could not install the Codex skill: ${(error as Error).message}`);
+  }
+}
+
 async function commandExists(command: string): Promise<boolean> {
   try { await execFileAsync("which", [command]); return true; } catch { return false; }
 }
@@ -122,7 +137,8 @@ export async function runInteractiveSetup(args: string[] = process.argv.slice(3)
 
     console.log(`\ntodo-mcp data directory: ${dataDirectory}`);
     if (process.stdin.isTTY && await askYesNo(rl, "Configure detected MCP agents automatically?")) await configureHosts(dataDirectory);
-    if (process.stdin.isTTY && await askYesNo(rl, "Install the optional todo-mcp-claim skill for Claude Code?")) await installClaimSkill();
+    if (process.stdin.isTTY && await askYesNo(rl, "Install the todo-mcp-claim skill for Claude Code?")) await installClaimSkill();
+    if (process.stdin.isTTY && await askYesNo(rl, "Install the todo-mcp-claim skill for Codex?")) await installCodexSkill();
     if (process.stdin.isTTY && await askYesNo(rl, "Install the todo_stats terminal helper and shell startup entry?")) await installStatsIntegration(dataDirectory);
     console.log("\nUse this same directory in every MCP host that should share the list:\n");
     console.log("Codex (config.toml):");

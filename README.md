@@ -71,7 +71,7 @@ that command isn't found, get Node from [nodejs.org](https://nodejs.org)).
 
 **1. Run the interactive setup wizard.** It creates and verifies one shared
 durable data directory, configures detected MCP hosts, optionally installs the
-Claude Code claim skill, and can add a `todo_stats` helper to your shell startup:
+claim skill for Claude Code and Codex, and can add a `todo_stats` helper to your shell startup:
 
 ```sh
 npx -y @pasichdev/todo-mcp setup
