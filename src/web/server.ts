@@ -13,12 +13,12 @@ import { GATE_PAGE, PAGE } from "./views.js";
 
 installProcessLogging("web");
 
-export const PORT = Number(process.env.TODO_MCP_WEB_PORT ?? 8787);
+export const PORT = Number(process.env.DOCKET_WEB_PORT ?? 8787);
 const SYNC_INTERVAL_MS = 15_000;
 
 export const UI_SESSION_TOKEN = randomBytes(32).toString("hex");
-export const UI_SESSION_COOKIE = "todo_ui";
-export const VIEWER_COOKIE = "todo_viewer";
+export const UI_SESSION_COOKIE = "docket_ui";
+export const VIEWER_COOKIE = "docket_viewer";
 
 export function hasUiSession(req: IncomingMessage): boolean {
   const cookieHeader = req.headers.cookie ?? "";
@@ -243,7 +243,7 @@ export async function startWebServer(port: number = PORT): Promise<Server> {
 
   server.listen(port, "0.0.0.0", () => {
     log(`web listening on 0.0.0.0:${port}${LAN_URL ? ` (LAN: ${LAN_URL})` : ""}`);
-    console.log(`todo-mcp web UI: http://localhost:${port}${LAN_URL ? ` (LAN: ${LAN_URL})` : ""}`);
+    console.log(`docket web UI: http://localhost:${port}${LAN_URL ? ` (LAN: ${LAN_URL})` : ""}`);
   });
 
   // Pull-based gossip sync with paired devices

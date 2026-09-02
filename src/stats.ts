@@ -29,6 +29,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("todo-mcp stats failed:", err);
+  console.error("docket stats failed:", err);
   process.exit(1);
 });

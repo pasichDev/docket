@@ -1,18 +1,19 @@
 {
-  "name": "@pasichdev/todo-mcp",
-  "version": "2.2.0",
+  "name": "@pasichdev/docket",
+  "version": "2.2.1",
   "description": "A shared TODO/backlog MCP server with a web UI, agent claim/release tracking, and encrypted local storage.",
   "license": "MIT",
   "author": "pasichDev",
-  "homepage": "https://github.com/pasichDev/todo-mcp#readme",
+  "homepage": "https://github.com/pasichDev/docket#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pasichDev/todo-mcp.git"
+    "url": "git+https://github.com/pasichDev/docket.git"
   },
   "bugs": {
-    "url": "https://github.com/pasichDev/todo-mcp/issues"
+    "url": "https://github.com/pasichDev/docket/issues"
   },
   "keywords": [
+    "docket",
     "mcp",
     "model-context-protocol",
     "mcp-server",
@@ -30,8 +31,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "todo-mcp": "dist/launcher.js",
-    "todo-mcp-setup": "dist/setup.js"
+    "docket": "dist/launcher.js",
+    "docket-setup": "dist/setup.js"
   },
   "files": [
     "dist",
@@ -41,7 +42,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "mcpName": "io.github.pasichDev/todo-mcp",
+  "mcpName": "io.github.pasichDev/docket",
   "engines": {
     "node": ">=18"
   },

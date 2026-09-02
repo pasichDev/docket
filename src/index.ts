@@ -33,7 +33,7 @@ const httpUrlSchema = z.string().url().refine((u) => ["http:", "https:"].include
 // device for the same item, e.g. "T-7K2F9A" — see shortId() in mutations.ts.
 const idSchema = z.union([z.number().int(), z.string()]).describe("The todo id, e.g. 3, or the cross-device short id, e.g. T-7K2F9A");
 
-const WEB_PORT = Number(process.env.TODO_MCP_WEB_PORT ?? 8787);
+const WEB_PORT = Number(process.env.DOCKET_WEB_PORT ?? 8787);
 const deviceId = await getDeviceId();
 const deviceName = await getDeviceName();
 
@@ -71,7 +71,7 @@ async function ensureWebUiRunning(): Promise<void> {
 // Read from package.json rather than a hardcoded literal, so this can't drift out of
 // sync with the actual published version the way it silently did before.
 const serverVersion = await getCurrentVersion(SCRIPT_PATH).catch(() => "0.0.0-unknown");
-const server = new McpServer({ name: "todo-mcp", version: serverVersion });
+const server = new McpServer({ name: "docket", version: serverVersion });
 const startedAt = new Date().toISOString();
 
 // One token per process run — each MCP host (Claude Code, Warp, Codex...)
@@ -354,19 +354,19 @@ server.registerTool(
   {
     title: "Server version",
     description:
-      "Report this todo-mcp process's data format version and start time. Use to sanity-check whether your MCP connection is running stale code (e.g. right after an update) — if todo_list output looks wrong (missing/undefined fields), check this first and reconnect if the process looks old.",
+      "Report this docket process's data format version and start time. Use to sanity-check whether your MCP connection is running stale code (e.g. right after an update) — if todo_list output looks wrong (missing/undefined fields), check this first and reconnect if the process looks old.",
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
-  async () => text(`todo-mcp formatVersion=${CURRENT_FORMAT_VERSION}, process started ${startedAt}, pid ${process.pid}`),
+  async () => text(`docket formatVersion=${CURRENT_FORMAT_VERSION}, process started ${startedAt}, pid ${process.pid}`),
 );
 
 server.registerTool(
   "todo_check_update",
   {
-    title: "Check for todo-mcp update",
+    title: "Check for docket update",
     description:
-      "Check whether a newer version of todo-mcp is published on npm. Read-only — never installs anything. If one is available, tell the user and let THEM decide whether to run `todo-mcp update` in their own terminal (it asks for confirmation before installing).",
+      "Check whether a newer version of docket is published on npm. Read-only — never installs anything. If one is available, tell the user and let THEM decide whether to run `docket update` in their own terminal (it asks for confirmation before installing).",
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
@@ -376,7 +376,7 @@ server.registerTool(
       if (result.installKind === "dev-clone") return text("This is a local git clone, not an npm install — use `git pull` to update.");
       if (result.installKind === "npx") return text("Running via npx — always gets the latest published version automatically, nothing to check.");
       if (result.updateAvailable) {
-        return text(`Update available: ${result.currentVersion} → ${result.latestVersion}. The user can run \`todo-mcp update\` in a terminal to install it.`);
+        return text(`Update available: ${result.currentVersion} → ${result.latestVersion}. The user can run \`docket update\` in a terminal to install it.`);
       }
       return text(`Already up to date (${result.currentVersion}).`);
     } catch (err) {
@@ -404,10 +404,10 @@ server.registerTool(
 
 function printHelp() {
   console.log(`
-todo-mcp - Shared TODO/backlog MCP server & task manager
+docket - Shared TODO/backlog MCP server & task manager
 
 Usage:
-  todo-mcp [command] [options]
+  docket [command] [options]
 
 Commands:
   (no args)             Start MCP server over stdio (when spawned by AI host)
@@ -427,7 +427,7 @@ Export options:
   --out, -o <file>      Write export output directly to file
 
 Environment variables:
-  TODO_MCP_WEB_PORT     Port for the local web UI (default: 8787)
+  DOCKET_WEB_PORT     Port for the local web UI (default: 8787)
 
 Disaster recovery:
   \`export\`/\`import\` move just the todo list, in the clear, between tools.
@@ -438,12 +438,12 @@ Disaster recovery:
   separately; either alone is useless, but losing BOTH means the backup is unrecoverable.
 
 Examples:
-  todo-mcp stats
-  todo-mcp list all
-  todo-mcp export --format markdown > backup.md
-  todo-mcp import backup.md
-  todo-mcp backup ./todo-mcp.backup
-  todo-mcp restore ./todo-mcp.backup
+  docket stats
+  docket list all
+  docket export --format markdown > backup.md
+  docket import backup.md
+  docket backup ./docket.backup
+  docket restore ./docket.backup
 `);
 }
 
@@ -451,7 +451,7 @@ Examples:
  * Reads answers to several prompts in order from ONE readline interface.
  *
  * NOT the same as calling `rl.question()` twice on the same interface — under piped/
- * non-TTY stdin (a script, `printf ... | todo-mcp restore ...`, CI), a second `question()`
+ * non-TTY stdin (a script, `printf ... | docket restore ...`, CI), a second `question()`
  * call on a readline interface whose input stream already delivered all its buffered data
  * simply never resolves and the process exits silently (code 0) without asking or reading
  * anything further — confirmed against this Node version. The async-iterator protocol
@@ -528,7 +528,7 @@ async function handleCli(args: string[]): Promise<boolean> {
     const result = await checkForUpdate(SCRIPT_PATH);
     if (result.installKind === "dev-clone") console.log("Local git clone — run `git pull` and `npm run build` to update.");
     else if (result.installKind === "npx") console.log("Running via npx — always latest, nothing to check.");
-    else if (result.updateAvailable) console.log(`Update available: ${result.currentVersion} → ${result.latestVersion}. Run \`todo-mcp update\`.`);
+    else if (result.updateAvailable) console.log(`Update available: ${result.currentVersion} → ${result.latestVersion}. Run \`docket update\`.`);
     else console.log(`Up to date (${result.currentVersion}).`);
     return true;
   }
@@ -569,7 +569,7 @@ async function handleCli(args: string[]): Promise<boolean> {
   if (cmd === "import") {
     const file = args[1];
     if (!file) {
-      console.error("Error: Please provide a file to import. Example: todo-mcp import ./tasks.json");
+      console.error("Error: Please provide a file to import. Example: docket import ./tasks.json");
       process.exit(1);
     }
     const raw = await readFile(file, "utf8");
@@ -587,7 +587,7 @@ async function handleCli(args: string[]): Promise<boolean> {
   if (cmd === "backup") {
     const file = args[1];
     if (!file) {
-      console.error("Error: Please provide an output file. Example: todo-mcp backup ./todo-mcp.backup");
+      console.error("Error: Please provide an output file. Example: docket backup ./docket.backup");
       process.exit(1);
     }
     const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -608,19 +608,19 @@ async function handleCli(args: string[]): Promise<boolean> {
     }
     const bundle = await createBackup(password);
     await writeFile(file, bundle);
-    console.log(`Backup written to ${file} (${bundle.length} bytes, encrypted). Restore it with \`todo-mcp restore ${file}\` — on this or any other machine.`);
+    console.log(`Backup written to ${file} (${bundle.length} bytes, encrypted). Restore it with \`docket restore ${file}\` — on this or any other machine.`);
     return true;
   }
 
   if (cmd === "restore") {
     const file = args[1];
     if (!file) {
-      console.error("Error: Please provide a backup file. Example: todo-mcp restore ./todo-mcp.backup");
+      console.error("Error: Please provide a backup file. Example: docket restore ./docket.backup");
       process.exit(1);
     }
     const buf = await readFile(file);
     if (!isBackupFile(buf)) {
-      console.error(`Error: ${file} doesn't look like a todo-mcp backup file.`);
+      console.error(`Error: ${file} doesn't look like a docket backup file.`);
       process.exit(1);
     }
     const [password, proceed] = await askQuestions([
@@ -632,7 +632,7 @@ async function handleCli(args: string[]): Promise<boolean> {
       return true;
     }
     const { restoredFiles } = await restoreBackup(buf, password);
-    console.log(`Restored: ${restoredFiles.join(", ")}. Restart todo-mcp (and any running MCP host) for the restored identity to take effect.`);
+    console.log(`Restored: ${restoredFiles.join(", ")}. Restart docket (and any running MCP host) for the restored identity to take effect.`);
     return true;
   }
 
@@ -659,13 +659,13 @@ async function main() {
   // No args from here on. This used to also treat a TTY stdin as "a human at a terminal,
   // print help and exit" instead of starting the MCP server — but some MCP hosts allocate
   // a pty-like stdin for the subprocesses they spawn even though nothing interactive is
-  // going on, which made todo-mcp print its help text and return without ever calling
+  // going on, which made docket print its help text and return without ever calling
   // server.connect(): the host saw its connection close immediately, an otherwise
   // unexplained "MCP startup failure". Print a one-line hint on stderr (stdout has to
   // stay clean for JSON-RPC either way) but always start the server underneath, so a real
   // host is never silently starved of a server regardless of what its stdin looks like.
   if (process.stdin.isTTY) {
-    process.stderr.write("todo-mcp: waiting for an MCP client on stdio. Run `todo-mcp help` for CLI usage.\n");
+    process.stderr.write("docket: waiting for an MCP client on stdio. Run `docket help` for CLI usage.\n");
   }
 
   const transport = new StdioServerTransport();
@@ -676,6 +676,6 @@ async function main() {
 
 main().catch((err) => {
   log(`mcp failed to start: ${err.stack ?? err.message}`);
-  console.error("todo-mcp failed to start:", err);
+  console.error("docket failed to start:", err);
   process.exit(1);
 });

@@ -19,12 +19,12 @@ test("exportToJson / importFromJson round-trip", () => {
     store,
     {
       title: "Write documentation",
-      description: "Comprehensive docs for todo-mcp",
+      description: "Comprehensive docs for docket",
       list: "todo",
       category: "DOCS",
       priority: "high",
       dueDate: "2026-09-10",
-      sourceUrl: "https://github.com/pasichDev/todo-mcp",
+      sourceUrl: "https://github.com/pasichDev/docket",
       agent: "test",
       session: null,
     },
@@ -56,7 +56,7 @@ test("exportToJson / importFromJson round-trip", () => {
   assert.equal(targetStore.todos[0].category, "DOCS");
   assert.equal(targetStore.todos[0].priority, "high");
   assert.equal(targetStore.todos[0].dueDate, "2026-09-10");
-  assert.equal(targetStore.todos[0].sourceUrl, "https://github.com/pasichDev/todo-mcp");
+  assert.equal(targetStore.todos[0].sourceUrl, "https://github.com/pasichDev/docket");
   assert.equal(targetStore.todos[1].list, "backlog");
 });
 
@@ -71,7 +71,7 @@ test("exportToMarkdown / importFromMarkdown round-trip", () => {
       category: "BUG",
       priority: "high",
       dueDate: "2026-09-15",
-      sourceUrl: "https://github.com/pasichDev/todo-mcp/issues/1",
+      sourceUrl: "https://github.com/pasichDev/docket/issues/1",
       agent: "test",
       session: null,
     },
@@ -98,7 +98,7 @@ test("exportToMarkdown / importFromMarkdown round-trip", () => {
   assert.ok(mdStr.includes("## Todo"));
   assert.ok(mdStr.includes("## Backlog"));
   assert.ok(mdStr.includes("- [x] Fix bug in sync [BUG] !high due:2026-09-15"));
-  assert.ok(mdStr.includes("🔗 https://github.com/pasichDev/todo-mcp/issues/1"));
+  assert.ok(mdStr.includes("🔗 https://github.com/pasichDev/docket/issues/1"));
   assert.ok(mdStr.includes("- [ ] Future research !low"));
 
   const targetStore = makeStore();
@@ -110,7 +110,7 @@ test("exportToMarkdown / importFromMarkdown round-trip", () => {
   assert.equal(targetStore.todos[0].category, "BUG");
   assert.equal(targetStore.todos[0].priority, "high");
   assert.equal(targetStore.todos[0].dueDate, "2026-09-15");
-  assert.equal(targetStore.todos[0].sourceUrl, "https://github.com/pasichDev/todo-mcp/issues/1");
+  assert.equal(targetStore.todos[0].sourceUrl, "https://github.com/pasichDev/docket/issues/1");
   assert.equal(targetStore.todos[0].description, "Details line 1\nDetails line 2");
   assert.equal(targetStore.todos[1].list, "backlog");
   assert.equal(targetStore.todos[1].title, "Future research");

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-const PACKAGE_NAME = "@pasichdev/todo-mcp";
+const PACKAGE_NAME = "@pasichdev/docket";
 
 export type InstallKind = "global-npm" | "npx" | "dev-clone";
 
@@ -108,12 +108,12 @@ export function createSelfTestEnvironment(
   scratchHome: string,
   port: number,
 ): NodeJS.ProcessEnv {
-  const { TODO_MCP_DATA_DIR: _dataDirectory, XDG_STATE_HOME: _stateHome, ...environment } = parentEnvironment;
+  const { DOCKET_DATA_DIR: _dataDirectory, XDG_STATE_HOME: _stateHome, ...environment } = parentEnvironment;
   return {
     ...environment,
     HOME: scratchHome,
-    TODO_MCP_DATA_DIR: join(scratchHome, "data"),
-    TODO_MCP_WEB_PORT: String(port),
+    DOCKET_DATA_DIR: join(scratchHome, "data"),
+    DOCKET_WEB_PORT: String(port),
   };
 }
 
@@ -127,7 +127,7 @@ async function selfTest(): Promise<boolean> {
   let scratchHome: string | null = null;
   let child: ReturnType<typeof spawn> | null = null;
   try {
-    scratchHome = await mkdtemp(join(tmpdir(), "todo-mcp-selftest-"));
+    scratchHome = await mkdtemp(join(tmpdir(), "docket-selftest-"));
     const port = 20000 + Math.floor(Math.random() * 10000);
     const globalRoot = await getGlobalNpmRoot();
     const webEntry = join(globalRoot, PACKAGE_NAME, "dist", "web.js");

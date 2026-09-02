@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 /**
- * Spawns the real published entrypoint (dist/launcher.js, what `todo-mcp` resolves to)
+ * Spawns the real published entrypoint (dist/launcher.js, what `docket` resolves to)
  * over stdio — the exact path any MCP host (Claude Code, Codex, Claude Desktop, ...) uses
  * — and drives a real initialize -> initialized -> tools/list -> tools/call handshake.
  * A silent hang here (never resolving, never printing anything actionable to stderr) is
@@ -68,7 +68,7 @@ async function runMcpHandshake(env: NodeJS.ProcessEnv): Promise<{ tools: string[
     await send(1, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "todo-mcp-startup-test", version: "1.0" },
+      clientInfo: { name: "docket-startup-test", version: "1.0" },
     });
     await send(null, "notifications/initialized", {});
     const listResult = (await send(2, "tools/list", {})) as { tools: Array<{ name: string }> };
@@ -81,9 +81,9 @@ async function runMcpHandshake(env: NodeJS.ProcessEnv): Promise<{ tools: string[
 }
 
 test("MCP startup: initialize -> initialized -> tools/list -> todo_list succeeds over stdio with a scratch data directory", async () => {
-  const dataDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-mcp-startup-test-"));
+  const dataDirectory = await mkdtemp(join(tmpdir(), "docket-mcp-startup-test-"));
   try {
-    const { tools } = await runMcpHandshake({ ...process.env, TODO_MCP_DATA_DIR: dataDirectory, TODO_MCP_WEB_PORT: "0" });
+    const { tools } = await runMcpHandshake({ ...process.env, DOCKET_DATA_DIR: dataDirectory, DOCKET_WEB_PORT: "0" });
     for (const expected of ["todo_add", "todo_edit", "todo_list", "todo_claim", "todo_complete", "todo_check_update"]) {
       assert.ok(tools.includes(expected), `expected tools/list to include ${expected}, got: ${tools.join(", ")}`);
     }

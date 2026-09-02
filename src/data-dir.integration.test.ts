@@ -78,7 +78,7 @@ async function initialize(child: ChildProcessWithoutNullStreams): Promise<unknow
 test("built MCP server falls back to XDG state when HOME is not writable", {
   skip: process.platform === "win32" || process.getuid?.() === 0,
 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "todo-mcp-data-dir-e2e-"));
+  const root = await mkdtemp(join(tmpdir(), "docket-data-dir-e2e-"));
   const blockedHome = join(root, "home");
   const stateHome = join(root, "state");
   let versionRequests = 0;
@@ -104,20 +104,20 @@ test("built MCP server falls back to XDG state when HOME is not writable", {
     await chmod(blockedHome, 0o500);
     const port = await listen(versionEndpoint);
     endpointListening = true;
-    const { TODO_MCP_DATA_DIR: _dataDirectory, XDG_STATE_HOME: _stateDirectory, ...environment } = process.env;
+    const { DOCKET_DATA_DIR: _dataDirectory, XDG_STATE_HOME: _stateDirectory, ...environment } = process.env;
     child = spawn(process.execPath, [join(process.cwd(), "dist", "index.js")], {
       env: {
         ...environment,
         HOME: blockedHome,
         XDG_STATE_HOME: stateHome,
-        TODO_MCP_WEB_PORT: String(port),
+        DOCKET_WEB_PORT: String(port),
       },
       stdio: "pipe",
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       standardError += chunk;
-      if (/todo-mcp: cannot use .*; using operator-configured XDG_STATE_HOME at .* for local state/.test(standardError)) {
+      if (/docket: cannot use .*; using operator-configured XDG_STATE_HOME at .* for local state/.test(standardError)) {
         resolveFallbackWarning?.();
         resolveFallbackWarning = undefined;
       }
@@ -131,18 +131,18 @@ test("built MCP server falls back to XDG state when HOME is not writable", {
     await after(versionRequest, "MCP server did not probe the configured web endpoint");
     await after(fallbackWarning, "MCP server did not emit the fallback warning on stderr");
     assert.equal(
-      standardError.match(/todo-mcp: cannot use .*; using operator-configured XDG_STATE_HOME at .* for local state/g)?.length,
+      standardError.match(/docket: cannot use .*; using operator-configured XDG_STATE_HOME at .* for local state/g)?.length,
       1,
       "fallback warning is emitted exactly once on stderr",
     );
 
-    const dataDirectory = join(stateHome, "todo-mcp");
+    const dataDirectory = join(stateHome, "docket");
     await access(join(dataDirectory, "device.json"));
     await access(join(dataDirectory, "todos.json.enc"));
     assert.equal((await stat(join(dataDirectory, "device.json"))).mode & 0o777, 0o600);
     assert.equal((await stat(join(dataDirectory, "todos.json.enc"))).mode & 0o777, 0o600);
     assert.equal((await stat(join(dataDirectory, "server.log"))).mode & 0o777, 0o600);
-    await assert.rejects(access(join(blockedHome, ".todo-mcp")));
+    await assert.rejects(access(join(blockedHome, ".docket")));
     assert.equal(versionRequests, 1, "the healthy endpoint prevents auto-starting a detached web server");
   } finally {
     const cleanup = await Promise.allSettled([

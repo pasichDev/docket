@@ -26,13 +26,13 @@ async function runViewers<T>(directory: string, action: string): Promise<T> {
     process.stdout.write(JSON.stringify(result));
   `;
   const { stdout } = await exec(process.execPath, ["--input-type=module", "--eval", script], {
-    env: { ...process.env, TODO_MCP_DATA_DIR: directory },
+    env: { ...process.env, DOCKET_DATA_DIR: directory },
   });
   return JSON.parse(stdout) as T;
 }
 
 async function withViewerDirectory<T>(fn: (directory: string) => Promise<T>): Promise<T> {
-  const directory = await mkdtemp(join(tmpdir(), "todo-mcp-viewers-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "docket-viewers-test-"));
   try {
     return await fn(directory);
   } finally {

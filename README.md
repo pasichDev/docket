@@ -1,8 +1,8 @@
-# todo-mcp
+# Docket
 
-[![npm](https://img.shields.io/npm/v/%40pasichdev%2Ftodo-mcp.svg)](https://www.npmjs.com/package/@pasichdev/todo-mcp)
-[![CI](https://github.com/pasichDev/todo-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/todo-mcp/actions/workflows/ci.yml)
-[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.pasichDev%2Ftodo--mcp-blue)](https://registry.modelcontextprotocol.io)
+[![npm](https://img.shields.io/npm/v/%40pasichdev%2Fdocket.svg)](https://www.npmjs.com/package/@pasichdev/docket)
+[![CI](https://github.com/pasichDev/docket/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/docket/actions/workflows/ci.yml)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-io.github.pasichDev%2Fdocket-blue)](https://registry.modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **One todo list, shared by every AI tool you use.** Claude Code, Claude
@@ -16,7 +16,7 @@ Claude Code · Claude Desktop · Cursor · Windsurf · Warp · Codex
                        MCP
                         |
                         v
-                    todo-mcp  ---->  Encrypted list (your machine)
+                    Docket  ---->  Encrypted list (your machine)
                         |                     ^
                         v                     |
               Web dashboard :8787  -----------'
@@ -56,7 +56,7 @@ for.
 - **Optional multi-device sync** — pair your laptop and desktop and the same
   list follows you, with an explicit approve/deny handshake on both ends
   (see [Devices & sync](#devices--sync)).
-- **Self-updating** — `todo-mcp check-update` / `todo-mcp update` check npm
+- **Self-updating** — `docket check-update` / `docket update` check npm
   for a newer version, ask for confirmation, and verify the new version
   actually starts before keeping it (see [Updating](#updating)).
 
@@ -74,7 +74,7 @@ durable data directory, configures detected MCP hosts, optionally installs the
 claim skill for Claude Code and Codex, and can add a `todo_stats` helper to your shell startup:
 
 ```sh
-npx -y @pasichdev/todo-mcp setup
+npx -y @pasichdev/docket setup
 ```
 
 The wizard writes host configuration automatically when Codex, Claude Code,
@@ -82,20 +82,20 @@ Cursor, or Windsurf is detected. For automation or a non-interactive terminal,
 pass the directory explicitly:
 
 ```sh
-npx -y @pasichdev/todo-mcp setup --data-dir "$HOME/.local/state/todo-mcp"
+npx -y @pasichdev/docket setup --data-dir "$HOME/.local/state/docket"
 ```
 
-The printed `TODO_MCP_DATA_DIR` is the value used in those host entries. The
+The printed `DOCKET_DATA_DIR` is the value used in those host entries. The
 wizard merges existing JSON configuration and does not replace unrelated
 servers.
 
 **2. Register the server.** Open a terminal and run:
 
 ```sh
-claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp
+claude mcp add docket -- npx -y @pasichdev/docket
 ```
 
-This just tells Claude Code how to start todo-mcp — nothing is downloaded
+This just tells Claude Code how to start Docket — nothing is downloaded
 yet. `npx` fetches and runs it the first time it's actually used.
 
 **3. Restart Claude Code** (close and reopen it, or start a new session) so
@@ -115,8 +115,8 @@ and to check first before starting something another session already
 claimed. In Claude Code:
 
 ```
-/plugin marketplace add pasichDev/todo-mcp
-/plugin install todo-mcp-claim@todo-mcp
+/plugin marketplace add pasichDev/docket
+/plugin install docket-claim@docket
 ```
 
 Nothing to configure afterward — it applies automatically.
@@ -126,35 +126,35 @@ Using a different MCP host (Claude Desktop, Cursor, Windsurf, Zed, Warp, Codex)?
 
 ## CLI Commands & Backup
 
-`todo-mcp` is also a full terminal utility with subcommands for inspection, backup, and quick access:
+`docket` is also a full terminal utility with subcommands for inspection, backup, and quick access:
 
 ```sh
 # Terminal stats widget (great for tmux / prompt scripts)
-npx @pasichdev/todo-mcp stats
+npx @pasichdev/docket stats
 
 # Quick task list in your terminal
-npx @pasichdev/todo-mcp list
-npx @pasichdev/todo-mcp list all
+npx @pasichdev/docket list
+npx @pasichdev/docket list all
 
 # Export tasks to Markdown or JSON
-npx @pasichdev/todo-mcp export --format markdown > tasks.md
-npx @pasichdev/todo-mcp export --format json --out backup.json
+npx @pasichdev/docket export --format markdown > tasks.md
+npx @pasichdev/docket export --format json --out backup.json
 
 # Import tasks from Markdown or JSON
-npx @pasichdev/todo-mcp import tasks.md
-npx @pasichdev/todo-mcp import backup.json
+npx @pasichdev/docket import tasks.md
+npx @pasichdev/docket import backup.json
 
 # Encrypted full-device backup/restore — identity, todos, and paired peers, not just the
 # task list (see "Data & encryption" below for what's in it and the recovery flow)
-npx @pasichdev/todo-mcp backup ./todo-mcp.backup
-npx @pasichdev/todo-mcp restore ./todo-mcp.backup
+npx @pasichdev/docket backup ./docket.backup
+npx @pasichdev/docket restore ./docket.backup
 
 # Open or verify Web UI dashboard
-npx @pasichdev/todo-mcp web
+npx @pasichdev/docket web
 
 # Check for / install a newer version (global installs only — see Updating)
-npx @pasichdev/todo-mcp check-update
-npx @pasichdev/todo-mcp update
+npx @pasichdev/docket check-update
+npx @pasichdev/docket update
 ```
 
 ## Full feature reference
@@ -186,9 +186,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```json
 {
   "mcpServers": {
-    "todo-mcp": {
+    "docket": {
       "command": "npx",
-      "args": ["-y", "@pasichdev/todo-mcp"]
+      "args": ["-y", "@pasichdev/docket"]
     }
   }
 }
@@ -199,9 +199,9 @@ Add to `.cursor/mcp.json` or Global MCP settings:
 ```json
 {
   "mcpServers": {
-    "todo-mcp": {
+    "docket": {
       "command": "npx",
-      "args": ["-y", "@pasichdev/todo-mcp"]
+      "args": ["-y", "@pasichdev/docket"]
     }
   }
 }
@@ -212,9 +212,9 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 ```json
 {
   "mcpServers": {
-    "todo-mcp": {
+    "docket": {
       "command": "npx",
-      "args": ["-y", "@pasichdev/todo-mcp"]
+      "args": ["-y", "@pasichdev/docket"]
     }
   }
 }
@@ -225,11 +225,11 @@ Add to `~/.config/zed/settings.json`:
 ```json
 {
   "context_servers": {
-    "todo-mcp": {
+    "docket": {
       "command": {
         "env": {},
         "path": "npx",
-        "args": ["-y", "@pasichdev/todo-mcp"]
+        "args": ["-y", "@pasichdev/docket"]
       }
     }
   }
@@ -239,11 +239,11 @@ Add to `~/.config/zed/settings.json`:
 ### From source
 
 ```sh
-git clone https://github.com/pasichDev/todo-mcp.git
-cd todo-mcp
+git clone https://github.com/pasichDev/docket.git
+cd docket
 npm install
 npm run build
-claude mcp add todo-mcp -- node "$(pwd)/dist/index.js"
+claude mcp add docket -- node "$(pwd)/dist/index.js"
 ```
 
 ## Tools
@@ -259,32 +259,32 @@ claude mcp add todo-mcp -- node "$(pwd)/dist/index.js"
 | `todo_history(id)` | Full change log for one item — who did what, when. |
 | `todo_version()` | Report the running process's data-format version and start time. |
 | `todo_delete(id)` | Permanently remove an item. |
-| `todo_check_update()` | Check npm for a newer todo-mcp version. Read-only — never installs anything; tells you to run `todo-mcp update` yourself. |
+| `todo_check_update()` | Check npm for a newer Docket version. Read-only — never installs anything; tells you to run `docket update` yourself. |
 
-See [`skills/todo-mcp-claim/SKILL.md`](skills/todo-mcp-claim/SKILL.md) for
+See [`skills/docket-claim/SKILL.md`](skills/docket-claim/SKILL.md) for
 the full field/workflow reference written for an agent to follow.
 
 ## Claude Code skill
 
 Covered in step 5 of the [Installation guide](#installation-guide) above.
-The non-interactive form: `claude plugin marketplace add pasichDev/todo-mcp`
-then `claude plugin install todo-mcp-claim@todo-mcp`. Source:
-[`skills/todo-mcp-claim/SKILL.md`](skills/todo-mcp-claim/SKILL.md).
+The non-interactive form: `claude plugin marketplace add pasichDev/docket`
+then `claude plugin install docket-claim@docket`. Source:
+[`skills/docket-claim/SKILL.md`](skills/docket-claim/SKILL.md).
 
-## Using todo-mcp with other agents
+## Using Docket with other agents
 
 The MCP tools themselves work the same in every host — no extra setup needed
 beyond [Install](#install) above. The claim-workflow *guidance* (when to
 `todo_claim`/`todo_release`, which fields to set) ships as an installable
 plugin for Claude Code only; every other agent reads its instructions from a
 plain file in your own project, so copy the body of
-[`skills/todo-mcp-claim/SKILL.md`](skills/todo-mcp-claim/SKILL.md) — everything
+[`skills/docket-claim/SKILL.md`](skills/docket-claim/SKILL.md) — everything
 below the `---` frontmatter — into whichever your agent already looks for:
 
 | Agent | File |
 |---|---|
 | Codex CLI, and any agent following the emerging convention | `AGENTS.md` |
-| Cursor | `.cursor/rules/todo-mcp.mdc` (or `.cursorrules`) |
+| Cursor | `.cursor/rules/docket.mdc` (or `.cursorrules`) |
 | Windsurf | `.windsurfrules` |
 | Claude Desktop / Claude web | `CLAUDE.md` |
 | Warp | Warp's own custom-instructions setting |
@@ -295,7 +295,7 @@ everywhere — only the destination filename changes.
 ## Web UI & Security
 
 A real-time read/write dashboard on `http://localhost:8787` (override with
-`TODO_MCP_WEB_PORT`) — light/dark theme, search, sort, inline edit,
+`DOCKET_WEB_PORT`) — light/dark theme, search, sort, inline edit,
 undo-delete.
 
 ### Auto-start & Process Lifecycle
@@ -350,7 +350,7 @@ become a new entry point into the network. Unpairing from every peer
 restores host status.
 
 **How the trust works:** each device generates its own X25519 identity key
-pair on first run (`device.json` in todo-mcp's resolved data directory) and never transmits its
+pair on first run (`device.json` in Docket's resolved data directory) and never transmits its
 private half. Pairing exchanges only the two devices' *public* keys; each
 side then independently derives the same shared secret via ECDH + HKDF —
 the secret itself never crosses the network in either direction, so
@@ -373,11 +373,11 @@ of surviving forever in the replicated history.
 ## Updating
 
 ```sh
-todo-mcp check-update   # read-only — reports current vs. latest, installs nothing
-todo-mcp update         # checks, asks for confirmation, then installs
+docket check-update   # read-only — reports current vs. latest, installs nothing
+docket update         # checks, asks for confirmation, then installs
 ```
 
-`update` only applies to a **global npm install** (`npm install -g @pasichdev/todo-mcp`).
+`update` only applies to a **global npm install** (`npm install -g @pasichdev/docket`).
 Running via `npx` always fetches the latest published version on its own, so there's
 nothing to update; a `git clone` checkout is updated with `git pull && npm run build`.
 `update` never installs anything without asking first, and after installing it boots the
@@ -390,20 +390,20 @@ you on a broken one.
 that cryptographically ties the published package to the exact GitHub Actions run and
 commit that built it, verifiable via `npm audit signatures`. This is deliberate instead
 of a custom signing scheme: it reuses npm's own trusted infrastructure rather than
-todo-mcp managing its own signing keys.
+Docket managing its own signing keys.
 
 ## Data & encryption
 
-Data lives in the retained legacy location `~/.todo-mcp/` by default. Set
-`TODO_MCP_DATA_DIR` to explicitly select a shared location. If creation of a
+Data lives in the retained legacy location `~/.docket/` by default. Set
+`DOCKET_DATA_DIR` to explicitly select a shared location. If creation of a
 missing default-home directory is blocked, an explicitly configured
 `$XDG_STATE_HOME` is used. If existing legacy data is inaccessible or read-only,
 startup refuses rather than silently splitting the store; set
-`TODO_MCP_DATA_DIR` to an approved writable durable location. If neither durable
-location is writable, startup names `TODO_MCP_DATA_DIR` as the required fix rather
+`DOCKET_DATA_DIR` to an approved writable durable location. If neither durable
+location is writable, startup names `DOCKET_DATA_DIR` as the required fix rather
 than creating a second list in a disposable cache. To share
 one list across multiple isolated MCP hosts, set the same
-`TODO_MCP_DATA_DIR` in each host's configuration.
+`DOCKET_DATA_DIR` in each host's configuration.
 
 - `todos.json.enc` — the store, AES-256-GCM encrypted
 - `key` — a locally generated 256-bit key, written once with `chmod 600`
@@ -417,12 +417,12 @@ one list across multiple isolated MCP hosts, set the same
 If you upgrade from a version before encryption was added, the old plaintext
 `todos.json` is migrated automatically on first read and kept as `todos.json.bak`.
 
-**Encrypted backup/restore:** `todo-mcp backup <file>` bundles this whole data
+**Encrypted backup/restore:** `docket backup <file>` bundles this whole data
 directory — identity, at-rest key, todos, and paired peers — into one
 password-protected file (AES-256-GCM, key derived with scrypt), so a lost or
 wiped machine can be brought back on the same or different hardware and still
 be recognized by every device it was paired with, instead of showing up as a
-new, unpaired one. `todo-mcp restore <file>` decrypts and writes it back,
+new, unpaired one. `docket restore <file>` decrypts and writes it back,
 renaming whatever's currently on disk aside as `.pre-restore-*.bak` first
 rather than overwriting it outright. Store the backup file and its password
 separately — either one alone is useless, but losing **both** makes the
@@ -430,7 +430,7 @@ backup itself unrecoverable, same as losing the file with no backup at all.
 
 ## Threat model
 
-What todo-mcp protects against, what it deliberately doesn't, and why:
+What Docket protects against, what it deliberately doesn't, and why:
 
 - **Disk / at-rest exposure** — see "Data & encryption" above: local-machine
   AES-256-GCM protects against accidental exposure (a stray `git add -A`, a
@@ -463,7 +463,7 @@ What todo-mcp protects against, what it deliberately doesn't, and why:
   access until the host explicitly revokes that viewer (Devices panel); it
   is not scoped further (no read-only mode, no per-token expiry today).
   Treat a viewer link/token the way you'd treat a shared password.
-- **A compromised device** — todo-mcp does not detect or contain this; a
+- **A compromised device** — Docket does not detect or contain this; a
   device that's been compromised can read/write everything that device could
   already read/write (its own todos, and anything its paired peers sync to
   it). Revoking or unpairing it from the Devices panel of an *uncompromised*
@@ -477,7 +477,7 @@ What todo-mcp protects against, what it deliberately doesn't, and why:
 - **A malicious/tampered update** — `npm publish --provenance` (see
   "Updating" above) cryptographically ties every published version to the
   exact GitHub Actions run and commit that built it, verifiable via
-  `npm audit signatures`; `todo-mcp update` also self-tests the freshly
+  `npm audit signatures`; `docket update` also self-tests the freshly
   installed version before keeping it, and rolls back automatically if that
   fails.
 

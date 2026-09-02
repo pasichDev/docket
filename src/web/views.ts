@@ -1051,12 +1051,12 @@ function tickSyncedLabel() {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  try { localStorage.setItem("todo-mcp-theme", theme); } catch {}
+  try { localStorage.setItem("docket-theme", theme); } catch {}
 }
 
 (function initTheme() {
   let stored = null;
-  try { stored = localStorage.getItem("todo-mcp-theme"); } catch {}
+  try { stored = localStorage.getItem("docket-theme"); } catch {}
   applyTheme(stored === "light" ? "light" : "dark");
 })();
 

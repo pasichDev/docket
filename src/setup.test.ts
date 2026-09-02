@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { automationDefault, parseDataDirectoryArg } from "./setup.js";
 
 test("parseDataDirectoryArg: reads an explicit data directory", () => {
-  assert.equal(parseDataDirectoryArg(["--data-dir", "/srv/todo-mcp"]), "/srv/todo-mcp");
+  assert.equal(parseDataDirectoryArg(["--data-dir", "/srv/docket"]), "/srv/docket");
 });
 
 test("parseDataDirectoryArg: returns undefined when omitted", () => {

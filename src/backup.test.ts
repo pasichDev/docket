@@ -10,27 +10,27 @@ import { test } from "node:test";
 // trivially constructible by anyone who knows the format; this is exactly the
 // capability a real attacker handing someone a crafted ".backup" file would have.
 function buildRawBackup(password: string, files: Record<string, string>): Buffer {
-  const plaintext = JSON.stringify({ magic: "todo-mcp-backup-v1", createdAt: new Date().toISOString(), files });
+  const plaintext = JSON.stringify({ magic: "docket-backup-v1", createdAt: new Date().toISOString(), files });
   const salt = randomBytes(16);
   const key = scryptSync(password, salt, 32, { N: 2 ** 14, r: 8, p: 1 });
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  const header = Buffer.from(JSON.stringify({ magic: "todo-mcp-backup-v1", salt: salt.toString("base64"), iv: iv.toString("base64") }), "utf8");
+  const header = Buffer.from(JSON.stringify({ magic: "docket-backup-v1", salt: salt.toString("base64"), iv: iv.toString("base64") }), "utf8");
   const headerLen = Buffer.alloc(4);
   headerLen.writeUInt32BE(header.length);
   return Buffer.concat([headerLen, header, authTag, ciphertext]);
 }
 
-const originalDataDirectory = process.env.TODO_MCP_DATA_DIR;
-const dataDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-backup-test-"));
-process.env.TODO_MCP_DATA_DIR = dataDirectory;
+const originalDataDirectory = process.env.DOCKET_DATA_DIR;
+const dataDirectory = await mkdtemp(join(tmpdir(), "docket-backup-test-"));
+process.env.DOCKET_DATA_DIR = dataDirectory;
 const { createBackup, isBackupFile, restoreBackup } = await import("./backup.js");
 
 test.after(async () => {
-  if (originalDataDirectory === undefined) delete process.env.TODO_MCP_DATA_DIR;
-  else process.env.TODO_MCP_DATA_DIR = originalDataDirectory;
+  if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;
+  else process.env.DOCKET_DATA_DIR = originalDataDirectory;
   return rm(dataDirectory, { recursive: true, force: true });
 });
 
@@ -65,12 +65,12 @@ test("restoreBackup: the wrong password is rejected with a clear error, not sile
   await assert.rejects(() => restoreBackup(bundle, "wrong-password"), /wrong password/);
 });
 
-test("restoreBackup: a file that isn't a todo-mcp backup at all is rejected up front", async () => {
-  await assert.rejects(() => restoreBackup(Buffer.from("just some random file contents"), "any"), /not a todo-mcp backup file/);
+test("restoreBackup: a file that isn't a docket backup at all is rejected up front", async () => {
+  await assert.rejects(() => restoreBackup(Buffer.from("just some random file contents"), "any"), /not a docket backup file/);
 });
 
 test("restoreBackup: a path-traversal filename in the bundle's own files map is ignored, not written outside the data directory (regression: a crafted backup could otherwise write arbitrary files, since a backup is self-encrypted — the attacker controls both the plaintext and the password)", async () => {
-  const outsideTarget = join(tmpdir(), `todo-mcp-restore-escape-${Date.now()}.txt`);
+  const outsideTarget = join(tmpdir(), `docket-restore-escape-${Date.now()}.txt`);
   await rm(outsideTarget, { force: true });
   const malicious = buildRawBackup("pw", {
     "../../../../../../../../tmp/PWNED": Buffer.from("owned").toString("base64"),

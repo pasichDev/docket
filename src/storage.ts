@@ -62,9 +62,9 @@ async function loadStore(): Promise<TodoStore> {
 
   if (fileVersion > CURRENT_FORMAT_VERSION) {
     const msg =
-      `todo-mcp: todos.json.enc is format v${fileVersion}, this process only understands up to ` +
+      `docket: todos.json.enc is format v${fileVersion}, this process only understands up to ` +
       `v${CURRENT_FORMAT_VERSION} — it's running stale code. Rebuild (npm run build in ` +
-      `~/repo/todo-mcp) and reconnect this MCP client / restart the web server before ` +
+      `~/repo/docket) and reconnect this MCP client / restart the web server before ` +
       `reading or writing, instead of guessing at unfamiliar fields.`;
     log(`loadStore: refusing stale read — ${msg}`);
     throw new Error(msg);

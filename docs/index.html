@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>todo-mcp — one todo list, every AI tool</title>
+<title>Docket — one todo list, every AI tool</title>
 <meta name="description" content="A shared TODO/backlog MCP server for Claude Code, Claude Desktop, Warp and Codex — claim tracking, full history, a web dashboard, and encrypted local storage. One command to install." />
 <link rel="icon" href="data:," />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap">
@@ -144,12 +144,12 @@
 <body>
 
 <nav class="top">
-  <div class="logo">todo-mcp</div>
+  <div class="logo">Docket</div>
   <div class="links">
     <a href="#demo">Demo</a>
     <a href="#install">Install</a>
-    <a href="https://github.com/pasichDev/todo-mcp">GitHub</a>
-    <a href="https://www.npmjs.com/package/@pasichdev/todo-mcp">npm</a>
+    <a href="https://github.com/pasichDev/docket">GitHub</a>
+    <a href="https://www.npmjs.com/package/@pasichdev/docket">npm</a>
   </div>
 </nav>
 
@@ -161,16 +161,16 @@
     switching tools or starting a new session.
   </p>
   <div class="badges">
-    <img src="https://img.shields.io/npm/v/%40pasichdev%2Ftodo-mcp.svg" alt="npm version" />
-    <img src="https://github.com/pasichDev/todo-mcp/actions/workflows/ci.yml/badge.svg" alt="CI status" />
+    <img src="https://img.shields.io/npm/v/%40pasichdev%2Fdocket.svg" alt="npm version" />
+    <img src="https://github.com/pasichDev/docket/actions/workflows/ci.yml/badge.svg" alt="CI status" />
     <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT license" />
   </div>
   <div class="cta-row">
     <a class="btn primary" href="#install">Get started</a>
-    <a class="btn secondary" href="https://github.com/pasichDev/todo-mcp">View on GitHub</a>
+    <a class="btn secondary" href="https://github.com/pasichDev/docket">View on GitHub</a>
   </div>
   <div class="install-cmd">
-    <code><span class="prompt">$</span>claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp</code>
+    <code><span class="prompt">$</span>claude mcp add docket -- npx -y @pasichdev/docket</code>
   </div>
 </div>
 
@@ -183,13 +183,13 @@
     <button data-pane="edit" data-active="false">Editing</button>
   </div>
   <div class="demo-pane" data-pane="dark" data-active="true">
-    <div class="demo-shot"><img src="assets/demo-dark.jpg" alt="todo-mcp web dashboard, dark theme, showing a claimed in-progress item" loading="lazy" /></div>
+    <div class="demo-shot"><img src="assets/demo-dark.jpg" alt="Docket web dashboard, dark theme, showing a claimed in-progress item" loading="lazy" /></div>
   </div>
   <div class="demo-pane" data-pane="light" data-active="false">
-    <div class="demo-shot"><img src="assets/demo-light.jpg" alt="todo-mcp web dashboard, light theme" loading="lazy" /></div>
+    <div class="demo-shot"><img src="assets/demo-light.jpg" alt="Docket web dashboard, light theme" loading="lazy" /></div>
   </div>
   <div class="demo-pane" data-pane="edit" data-active="false">
-    <div class="demo-shot"><img src="assets/demo-edit.png" alt="todo-mcp inline edit form, showing title, description, category, priority and due date fields" loading="lazy" /></div>
+    <div class="demo-shot"><img src="assets/demo-edit.png" alt="Docket inline edit form, showing title, description, category, priority and due date fields" loading="lazy" /></div>
   </div>
 </section>
 
@@ -238,7 +238,7 @@
       <div class="flow-box"><div class="label">Warp / Codex</div></div>
     </div>
     <div class="flow-arrow">→</div>
-    <div class="flow-box center"><div class="label">todo-mcp</div><div class="sub">MCP tools</div></div>
+    <div class="flow-box center"><div class="label">Docket</div><div class="sub">MCP tools</div></div>
     <div class="flow-arrow">→</div>
     <div class="flow-box store"><div class="label">Encrypted store</div><div class="sub">on your machine</div></div>
     <div class="flow-arrow">←</div>
@@ -258,7 +258,7 @@
       <div class="body">
         <h3>Register the server</h3>
         <p>Open a terminal and run:</p>
-        <pre><code>claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp</code></pre>
+        <pre><code>claude mcp add docket -- npx -y @pasichdev/docket</code></pre>
       </div>
     </div>
     <div class="step">
@@ -288,8 +288,8 @@
         <span class="optional">Optional</span>
         <h3>Install the claim-tracking skill</h3>
         <p>Teaches Claude Code to mark items in progress and check before duplicating work:</p>
-        <pre><code>/plugin marketplace add pasichDev/todo-mcp
-/plugin install todo-mcp-claim@todo-mcp</code></pre>
+        <pre><code>/plugin marketplace add pasichDev/docket
+/plugin install docket-claim@docket</code></pre>
       </div>
     </div>
   </div>
@@ -297,12 +297,12 @@
 
 <footer>
   <div class="links">
-    <a href="https://github.com/pasichDev/todo-mcp">GitHub</a>
-    <a href="https://www.npmjs.com/package/@pasichdev/todo-mcp">npm</a>
+    <a href="https://github.com/pasichDev/docket">GitHub</a>
+    <a href="https://www.npmjs.com/package/@pasichdev/docket">npm</a>
     <a href="https://registry.modelcontextprotocol.io">MCP Registry</a>
-    <a href="https://github.com/pasichDev/todo-mcp/blob/main/LICENSE">MIT License</a>
+    <a href="https://github.com/pasichDev/docket/blob/main/LICENSE">MIT License</a>
   </div>
-  <div class="fine">todo-mcp — a personal project, open source, no account required.</div>
+  <div class="fine">Docket — a personal project, open source, no account required.</div>
 </footer>
 
 <script>

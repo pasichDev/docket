@@ -24,7 +24,7 @@ async function acquireLock(lockPath: string): Promise<void> {
         continue; // lock disappeared between EEXIST and stat — retry immediately
       }
       if (Date.now() > deadline) {
-        throw new Error(`todo-mcp: timed out waiting for lock at ${lockPath}`);
+        throw new Error(`docket: timed out waiting for lock at ${lockPath}`);
       }
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
     }
@@ -38,7 +38,7 @@ async function releaseLock(lockPath: string): Promise<void> {
 /**
  * Cross-process advisory file lock (a `<path>.lock` sentinel file, reaped if
  * its holder crashed) so concurrent processes touching the same file — e.g.
- * one todo-mcp instance per MCP host session, or a sync tick racing a human
+ * one docket instance per MCP host session, or a sync tick racing a human
  * clicking Approve — can't interleave a read-modify-write and silently drop
  * each other's changes.
  */

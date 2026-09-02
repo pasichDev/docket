@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.pasichDev/todo-mcp",
+  "name": "io.github.pasichDev/docket",
   "description": "Shared TODO/backlog MCP server with claim tracking, web UI, and encrypted local storage.",
   "repository": {
-    "url": "https://github.com/pasichDev/todo-mcp",
+    "url": "https://github.com/pasichDev/docket",
     "source": "github"
   },
-  "version": "2.2.0",
+  "version": "2.2.1",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "@pasichdev/todo-mcp",
-      "version": "2.2.0",
+      "identifier": "@pasichdev/docket",
+      "version": "2.2.1",
       "transport": {
         "type": "stdio"
       }

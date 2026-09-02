@@ -5,14 +5,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { Peer } from "./types.js";
 
-const originalDataDirectory = process.env.TODO_MCP_DATA_DIR;
-const dataDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-peers-test-"));
-process.env.TODO_MCP_DATA_DIR = dataDirectory;
+const originalDataDirectory = process.env.DOCKET_DATA_DIR;
+const dataDirectory = await mkdtemp(join(tmpdir(), "docket-peers-test-"));
+process.env.DOCKET_DATA_DIR = dataDirectory;
 const { addPeer, loadPeers, markPeerSynced, peerFingerprint, peerTrustState, restorePeer, revokePeer } = await import("./peers.js");
 
 test.after(async () => {
-  if (originalDataDirectory === undefined) delete process.env.TODO_MCP_DATA_DIR;
-  else process.env.TODO_MCP_DATA_DIR = originalDataDirectory;
+  if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;
+  else process.env.DOCKET_DATA_DIR = originalDataDirectory;
   return rm(dataDirectory, { recursive: true, force: true });
 });
 

@@ -493,7 +493,7 @@ export async function pullFromPeer(
         return true;
       }
       if (body.reason === "protocol-incompatible") {
-        const msg = `this peer requires sync protocol v${body.minVersion}+ — this device is running an older todo-mcp; update it (npm install -g todo-mcp@latest) to resume syncing`;
+        const msg = `this peer requires sync protocol v${body.minVersion}+ — this device is running an older docket; update it (npm install -g docket@latest) to resume syncing`;
         log(`sync: pull from peer ${peer.name} (${peer.id}) rejected — ${msg}`);
         await markPeerSynced(peer.id, false, { error: msg });
         return false;

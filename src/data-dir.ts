@@ -36,12 +36,12 @@ function isAccessStyleError(error: unknown): boolean {
 }
 
 function configurationError(message: string): Error {
-  return new Error(`${message} Set TODO_MCP_DATA_DIR to a writable durable directory.`);
+  return new Error(`${message} Set DOCKET_DATA_DIR to a writable durable directory.`);
 }
 
 /** Confirm the chosen directory accepts owner-only files, not merely mkdir calls. */
 async function verifyWriteAccess(directory: string): Promise<void> {
-  const probePath = join(directory, `.todo-mcp-write-probe-${process.pid}-${randomUUID()}`);
+  const probePath = join(directory, `.docket-write-probe-${process.pid}-${randomUUID()}`);
   const handle = await open(probePath, "wx", 0o600);
   try {
     await handle.close();
@@ -59,7 +59,7 @@ async function legacyExists(path: string, inspect: InspectDirectory): Promise<bo
   } catch (error) {
     if (errorCode(error) === "ENOENT") return false;
     if (isAccessStyleError(error)) {
-      throw configurationError(`todo-mcp: cannot inspect existing legacy state at ${path}.`);
+      throw configurationError(`docket: cannot inspect existing legacy state at ${path}.`);
     }
     throw error;
   }
@@ -71,9 +71,9 @@ async function makeUsable(directory: string, mkdir: MakeDirectory, probe: ProbeD
 }
 
 /**
- * Finds and creates the directory used for todo-mcp's local state.
+ * Finds and creates the directory used for docket's local state.
  *
- * Existing installations retain ~/.todo-mcp. Automatic migration to a second
+ * Existing installations retain ~/.docket. Automatic migration to a second
  * location is only safe when an operator has explicitly supplied
  * XDG_STATE_HOME; cache directories are never used for authoritative state.
  */
@@ -82,7 +82,7 @@ export async function resolveDataDirectory(options: ResolveDataDirectoryOptions 
   const mkdir = options.mkdir ?? createDirectory;
   const inspect = options.inspect ?? stat;
   const probe = options.probe ?? verifyWriteAccess;
-  const explicitDirectory = environment.TODO_MCP_DATA_DIR;
+  const explicitDirectory = environment.DOCKET_DATA_DIR;
 
   if (explicitDirectory) {
     await makeUsable(explicitDirectory, mkdir, probe);
@@ -90,10 +90,10 @@ export async function resolveDataDirectory(options: ResolveDataDirectoryOptions 
   }
 
   const homeDirectory = options.homeDirectory ?? homedir();
-  const legacyDirectory = join(homeDirectory, ".todo-mcp");
+  const legacyDirectory = join(homeDirectory, ".docket");
   const legacyWasPresent = await legacyExists(legacyDirectory, inspect);
   const stateDirectory = environment.XDG_STATE_HOME
-    ? join(environment.XDG_STATE_HOME, "todo-mcp")
+    ? join(environment.XDG_STATE_HOME, "docket")
     : undefined;
   const candidates = [legacyDirectory, stateDirectory]
     .filter((directory): directory is string => directory !== undefined)
@@ -105,7 +105,7 @@ export async function resolveDataDirectory(options: ResolveDataDirectoryOptions 
       await makeUsable(directory, mkdir, probe);
       if (directory !== legacyDirectory) {
         options.warn?.(
-          `todo-mcp: cannot use ${legacyDirectory}; using operator-configured XDG_STATE_HOME at ${directory} for local state\n`,
+          `docket: cannot use ${legacyDirectory}; using operator-configured XDG_STATE_HOME at ${directory} for local state\n`,
         );
       }
       return directory;
@@ -115,14 +115,14 @@ export async function resolveDataDirectory(options: ResolveDataDirectoryOptions 
       // the initial inspection and mkdir/probe, and falling back then would split
       // an existing store from its key.
       if (directory === legacyDirectory && (legacyWasPresent || await legacyExists(legacyDirectory, inspect))) {
-        throw configurationError(`todo-mcp: existing legacy state at ${legacyDirectory} is not writable.`);
+        throw configurationError(`docket: existing legacy state at ${legacyDirectory} is not writable.`);
       }
       failures.push({ directory, error });
     }
   }
 
   const attempted = failures.map(({ directory }) => directory).join(", ") || legacyDirectory;
-  throw configurationError(`todo-mcp: no writable durable data directory is available (tried ${attempted}).`);
+  throw configurationError(`docket: no writable durable data directory is available (tried ${attempted}).`);
 }
 
 // Resolve once per process. Apart from keeping every persistent file together, this

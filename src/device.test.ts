@@ -28,13 +28,13 @@ async function runDevice<T>(directory: string, action: string, argument?: string
     process.stdout.write(JSON.stringify(result));
   `;
   const { stdout } = await exec(process.execPath, ["--input-type=module", "--eval", script], {
-    env: { ...process.env, TODO_MCP_DATA_DIR: directory },
+    env: { ...process.env, DOCKET_DATA_DIR: directory },
   });
   return JSON.parse(stdout) as T;
 }
 
 async function withDeviceDirectory<T>(fn: (directory: string) => Promise<T>): Promise<T> {
-  const directory = await mkdtemp(join(tmpdir(), "todo-mcp-device-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "docket-device-test-"));
   try {
     return await fn(directory);
   } finally {
@@ -77,8 +77,8 @@ test("getDevicePublicKey: returns a base64url X25519 coordinate", () => withDevi
 }));
 
 test("deriveSharedSecret: two independently initialized devices derive the identical secret", async () => {
-  const firstDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-device-a-test-"));
-  const secondDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-device-b-test-"));
+  const firstDirectory = await mkdtemp(join(tmpdir(), "docket-device-a-test-"));
+  const secondDirectory = await mkdtemp(join(tmpdir(), "docket-device-b-test-"));
   try {
     const firstPublicKey = await runDevice<string>(firstDirectory, "public-key");
     const secondPublicKey = await runDevice<string>(secondDirectory, "public-key");

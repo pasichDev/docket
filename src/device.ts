@@ -6,7 +6,7 @@ import { withFileLock } from "./filelock.js";
 
 const DEVICE_PATH = await dataPath("device.json");
 const DEVICE_LOCK_PATH = `${DEVICE_PATH}.lock`;
-const HKDF_INFO = Buffer.from("todo-mcp-sync-v1");
+const HKDF_INFO = Buffer.from("docket-sync-v1");
 
 interface X25519Jwk {
   x: string;

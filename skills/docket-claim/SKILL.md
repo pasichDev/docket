@@ -1,11 +1,11 @@
 ---
-name: todo-mcp-claim
-description: Use whenever adding, editing, or working an item tracked in todo-mcp (the shared todo_add/todo_edit/todo_list/todo_claim MCP tools) — set the fields the tools actually support (title + optional description, category, priority, dueDate), and claim/release around substantive work so other agents/sessions sharing the same list see what's in progress.
+name: docket-claim
+description: Use whenever adding, editing, or working an item tracked in docket (the shared todo_add/todo_edit/todo_list/todo_claim MCP tools) — set the fields the tools actually support (title + optional description, category, priority, dueDate), and claim/release around substantive work so other agents/sessions sharing the same list see what's in progress.
 ---
 
-# todo-mcp: full tool surface + claim workflow
+# docket: full tool surface + claim workflow
 
-todo-mcp is a shared backlog/todo list across multiple AI clients (Claude
+docket is a shared backlog/todo list across multiple AI clients (Claude
 Code, Warp, Codex, or any other MCP host) and multiple concurrent sessions,
 with a web UI (default `http://localhost:8787`). Use the fields the tools
 support — don't just dump everything into one string.
@@ -41,8 +41,8 @@ Other tools you have: `todo_history(id)` — full change log for one item, who
 did what and when. `todo_delete(id)` — permanently remove an item (destructive,
 confirm with the human first unless they clearly already decided). `todo_version()`
 — sanity-check the running server isn't stale (e.g. right after an update).
-`todo_check_update()` — read-only check for a newer todo-mcp version; if one's
-available, tell the human and let them run `todo-mcp update` themselves —
+`todo_check_update()` — read-only check for a newer docket version; if one's
+available, tell the human and let them run `docket update` themselves —
 never trigger it yourself.
 
 ## Claim workflow

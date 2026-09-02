@@ -5,14 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-const originalDataDirectory = process.env.TODO_MCP_DATA_DIR;
-const dataDirectory = await mkdtemp(join(tmpdir(), "todo-mcp-crypto-test-"));
-process.env.TODO_MCP_DATA_DIR = dataDirectory;
+const originalDataDirectory = process.env.DOCKET_DATA_DIR;
+const dataDirectory = await mkdtemp(join(tmpdir(), "docket-crypto-test-"));
+process.env.DOCKET_DATA_DIR = dataDirectory;
 const { decryptWithKey, encryptWithKey } = await import("./crypto.js");
 
 test.after(() => {
-  if (originalDataDirectory === undefined) delete process.env.TODO_MCP_DATA_DIR;
-  else process.env.TODO_MCP_DATA_DIR = originalDataDirectory;
+  if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;
+  else process.env.DOCKET_DATA_DIR = originalDataDirectory;
   return rm(dataDirectory, { recursive: true, force: true });
 });
 

@@ -10,7 +10,7 @@ import { getDataDirectory } from "./data-dir.js";
 // as sensitive as the live data directory either way, and re-encrypting a copy would be
 // pure extra risk (a second place a bug could leak plaintext) for no benefit.
 const BACKUP_FILES = ["device.json", "key", "todos.json.enc", "peers.json.enc", "viewers.json.enc"];
-const MAGIC = "todo-mcp-backup-v1";
+const MAGIC = "docket-backup-v1";
 // RFC 7914's own "interactive login" recommendation (N=2^14, r=8, p=1) — strong enough to
 // meaningfully slow down offline password guessing against a stolen backup file, while
 // staying under Node's default scrypt maxmem (32MiB) and fast enough for an interactive
@@ -39,7 +39,7 @@ export async function createBackup(password: string): Promise<Buffer> {
       // added) — absence just means restore has nothing to write back for that one.
     }
   }
-  if (Object.keys(files).length === 0) throw new Error("nothing to back up — no todo-mcp data directory found");
+  if (Object.keys(files).length === 0) throw new Error("nothing to back up — no docket data directory found");
 
   const plaintext = JSON.stringify({ magic: MAGIC, createdAt: new Date().toISOString(), files });
   const salt = randomBytes(SALT_LEN);
@@ -68,22 +68,22 @@ export function isBackupFile(buf: Buffer): boolean {
 /**
  * Decrypts and writes every file the backup contains back into the (live) data directory.
  * Overwrites this device's current identity/todos/peers/viewers — the caller is
- * responsible for confirming that with the human first; see `todo-mcp restore` in index.ts.
+ * responsible for confirming that with the human first; see `docket restore` in index.ts.
  * Anything currently on disk is renamed aside (never deleted outright) before being
  * replaced, so a restore into the wrong directory or with a stale backup is still
  * recoverable afterwards.
  */
 export async function restoreBackup(buf: Buffer, password: string): Promise<{ restoredFiles: string[] }> {
-  if (buf.length < 4) throw new Error("not a todo-mcp backup file");
+  if (buf.length < 4) throw new Error("not a docket backup file");
   const headerLen = buf.readUInt32BE(0);
   let header: { magic?: string; salt?: string; iv?: string };
   try {
     header = JSON.parse(buf.subarray(4, 4 + headerLen).toString("utf8"));
   } catch {
-    throw new Error("not a todo-mcp backup file");
+    throw new Error("not a docket backup file");
   }
   if (header.magic !== MAGIC || typeof header.salt !== "string" || typeof header.iv !== "string") {
-    throw new Error("not a todo-mcp backup file");
+    throw new Error("not a docket backup file");
   }
   const authTag = buf.subarray(4 + headerLen, 4 + headerLen + AUTH_TAG_LEN);
   const ciphertext = buf.subarray(4 + headerLen + AUTH_TAG_LEN);
