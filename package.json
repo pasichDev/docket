@@ -1,7 +1,7 @@
 {
   "name": "@pasichdev/docket",
   "version": "2.3.0",
-  "description": "A shared TODO/backlog MCP server with a web UI, agent claim/release tracking, and encrypted local storage.",
+  "description": "One shared workspace for your AI coding agents. Local-first and self-hostable.",
   "license": "MIT",
   "author": "pasichDev",
   "homepage": "https://github.com/pasichDev/docket#readme",

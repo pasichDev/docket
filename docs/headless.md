@@ -2,9 +2,8 @@
 
 Running `docket serve` on an always-on machine with no display — a Raspberry Pi, an old
 mini PC, a NAS, a VPS, a home server — so your todo list keeps working (and stays reachable
-from your phone) even when every laptop is off. See the RFC's ["Local and Self-Hosted
-Backend Modes"](../README.md#local-vs-self-hosted-server) section for the product picture;
-this document is the operational how-to.
+from your phone) even when every laptop is off. See [`self-hosting.md`](self-hosting.md)
+for the product picture and setup walkthrough; this document is the operational how-to.
 
 Everything here works entirely from a terminal — no GUI step is required.
 
@@ -61,8 +60,7 @@ todo.home.example {
 ```
 
 For trusted-LAN-only development, plain HTTP is allowed but requires an explicit opt-in on
-every client — see the README's [Local vs self-hosted server](../README.md#local-vs-self-hosted-server)
-section.
+every client — see [`security.md`](security.md#4-self-hosted-clientserver-traffic).
 
 ## Option B: Docker / docker-compose
 

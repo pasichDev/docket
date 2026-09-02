@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.pasichDev/docket",
-  "description": "Shared TODO/backlog MCP server with claim tracking, web UI, and encrypted local storage.",
+  "description": "One shared workspace for your AI coding agents. Local-first and self-hostable.",
   "repository": {
     "url": "https://github.com/pasichDev/docket",
     "source": "github"
