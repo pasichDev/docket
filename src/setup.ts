@@ -2,7 +2,7 @@
 import { resolveDataDirectory } from "./data-dir.js";
 import { execFile, type ExecFileException } from "node:child_process";
 import { createInterface } from "node:readline/promises";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -70,6 +70,47 @@ async function installClaimSkill(): Promise<void> {
   }
 }
 
+async function commandExists(command: string): Promise<boolean> {
+  try { await execFileAsync("which", [command]); return true; } catch { return false; }
+}
+
+async function configureHosts(dataDirectory: string): Promise<void> {
+  const serverArgs = ["-y", "--prefix", "/tmp", "--package=@pasichdev/todo-mcp", "todo-mcp"];
+  const envArg = `TODO_MCP_DATA_DIR=${dataDirectory}`;
+  const configure = async (command: string, args: string[], label: string): Promise<void> => {
+    try {
+      const result = await execFileAsync(command, args);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      console.log(`Configured ${label}.`);
+    } catch (error) {
+      console.warn(`Skipped ${label}: ${(error as ExecFileException).message ?? "command failed"}`);
+    }
+  };
+  if (await commandExists("codex")) {
+    await execFileAsync("codex", ["mcp", "remove", "todo-mcp"]).catch(() => undefined);
+    await configure("codex", ["mcp", "add", "todo-mcp", "--env", envArg, "--", "npx", ...serverArgs], "Codex");
+  }
+  if (await commandExists("claude")) {
+    await execFileAsync("claude", ["mcp", "remove", "--scope", "user", "todo-mcp"]).catch(() => undefined);
+    await configure("claude", ["mcp", "add", "--scope", "user", "-e", envArg, "todo-mcp", "--", "npx", ...serverArgs], "Claude Code MCP");
+  }
+
+  for (const target of [`${homedir()}/.cursor/mcp.json`, `${homedir()}/.codeium/windsurf/mcp_config.json`]) {
+    try {
+      const { dirname } = await import("node:path");
+      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+      let config: Record<string, unknown> = {};
+      try { config = JSON.parse(await readFile(target, "utf8")) as Record<string, unknown>; } catch { /* new file */ }
+      const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
+      servers["todo-mcp"] = { command: "npx", args: serverArgs, env: { TODO_MCP_DATA_DIR: dataDirectory } };
+      config.mcpServers = servers;
+      await writeFile(target, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+      console.log(`Configured ${target}.`);
+    } catch { /* host is not installed or config is not writable */ }
+  }
+}
+
 export async function runInteractiveSetup(args: string[] = process.argv.slice(3)): Promise<void> {
   const configured = parseDataDirectoryArg(args);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -80,6 +121,7 @@ export async function runInteractiveSetup(args: string[] = process.argv.slice(3)
     const dataDirectory = await resolveDataDirectory({ environment, warn: (message) => process.stderr.write(message) });
 
     console.log(`\ntodo-mcp data directory: ${dataDirectory}`);
+    if (process.stdin.isTTY && await askYesNo(rl, "Configure detected MCP agents automatically?")) await configureHosts(dataDirectory);
     if (process.stdin.isTTY && await askYesNo(rl, "Install the optional todo-mcp-claim skill for Claude Code?")) await installClaimSkill();
     if (process.stdin.isTTY && await askYesNo(rl, "Install the todo_stats terminal helper and shell startup entry?")) await installStatsIntegration(dataDirectory);
     console.log("\nUse this same directory in every MCP host that should share the list:\n");

@@ -70,22 +70,24 @@ installed, and Node.js 18+ (check with `node --version` in a terminal — if
 that command isn't found, get Node from [nodejs.org](https://nodejs.org)).
 
 **1. Run the interactive setup wizard.** It creates and verifies one shared
-durable data directory, optionally installs the Claude Code claim skill, and
-can add a `todo_stats` helper to your shell startup:
+durable data directory, configures detected MCP hosts, optionally installs the
+Claude Code claim skill, and can add a `todo_stats` helper to your shell startup:
 
 ```sh
 npx -y @pasichdev/todo-mcp setup
 ```
 
-For automation or a non-interactive terminal, pass the directory explicitly:
+The wizard writes host configuration automatically when Codex, Claude Code,
+Cursor, or Windsurf is detected. For automation or a non-interactive terminal,
+pass the directory explicitly:
 
 ```sh
 npx -y @pasichdev/todo-mcp setup --data-dir "$HOME/.local/state/todo-mcp"
 ```
 
-Copy the printed `TODO_MCP_DATA_DIR` setting into every MCP host that should
-share this list. The wizard never replaces existing shell configuration; it
-only adds a sourced helper file after you confirm.
+The printed `TODO_MCP_DATA_DIR` is the value used in those host entries. The
+wizard merges existing JSON configuration and does not replace unrelated
+servers.
 
 **2. Register the server.** Open a terminal and run:
 
