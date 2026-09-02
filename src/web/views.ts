@@ -728,7 +728,7 @@ function itemHtml(t) {
     ? \`<span style="display:flex"><svg viewBox="0 0 18 18" width="18" height="18"><rect x="1.5" y="1.5" width="15" height="15" rx="6" fill="\${sageHex()}"/><path d="M5 9.2 7.6 11.8 13 6" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>\`
     : '<input type="checkbox" />';
   const due = t.dueDate
-    ? \`<span class="due \${isOverdue(t) ? "overdue" : ""}">\${isOverdue(t) ? "overdue " : ""}\${t.dueDate}</span>\`
+    ? \`<span class="due \${isOverdue(t) ? "overdue" : ""}">\${isOverdue(t) ? "overdue " : ""}\${escapeHtml(t.dueDate)}</span>\`
     : "";
   const via = t.agent
     ? \`<span class="via" title="\${t.session ? \`session \${escapeHtml(t.session)}\` : "no session (web)"}"><span class="adot" style="background:\${agentColor(t.agent)}"></span>via \${escapeHtml(t.agent)}\${t.session ? \` <span class="session">#\${escapeHtml(t.session)}</span>\` : ""}</span>\`
@@ -781,9 +781,9 @@ function historyHtml(t) {
     .map(
       (h) => \`
         <div class="history-row">
-          <span class="history-when">\${h.at.slice(0, 16).replace("T", " ")}</span>
+          <span class="history-when">\${escapeHtml(h.at.slice(0, 16).replace("T", " "))}</span>
           <span class="history-agent" style="color:\${agentColor(h.agent)}">\${escapeHtml(h.agent || "unknown")}</span>
-          <span class="history-action">\${h.action}</span>
+          <span class="history-action">\${escapeHtml(h.action)}</span>
           <span class="history-detail">\${escapeHtml(h.detail)}</span>
         </div>\`
     )
@@ -1038,6 +1038,12 @@ let devicesPollTimer = null;
 let outgoingPollTimer = null;
 let isHostBrowserFlag = false;
 const seenRequestIds = new Set();
+// requestId -> "approve" | "deny" while that action's fetch is in flight — the periodic
+// poll (every 4s while the modal is open) rebuilds these rows from scratch, and approve
+// in particular can take a few seconds (network round-trip to the other device), so
+// without this a poll landing mid-request would revert the row to its normal buttons
+// and make the click look like it did nothing.
+const pendingRequestActions = new Map();
 
 function timeAgo(iso) {
   if (!iso) return "never";
@@ -1105,6 +1111,27 @@ async function pollNotifications() {
   }
 }
 
+// Approve in particular involves a real network round-trip to the requesting device
+// (up to a few seconds) — render its busy state (both buttons disabled, the clicked
+// one relabeled) whenever this id is mid-flight, so a periodic poll landing during
+// that window doesn't revert it to plain "Approve"/"Deny" and make the click look
+// like it did nothing.
+function incomingRowHtml(id, name, meta) {
+  const action = pendingRequestActions.get(id);
+  const approveLabel = action === "approve" ? "Approving…" : "Approve";
+  const denyLabel = action === "deny" ? "Denying…" : "Deny";
+  const disabled = action ? "disabled" : "";
+  return \`
+    <div class="incoming-row" data-id="\${id}">
+      <span>
+        <span class="name">\${name}</span>
+        <span class="meta">\${meta}</span>
+      </span>
+      <button class="approve" data-id="\${id}" type="button" \${disabled}>\${approveLabel}</button>
+      <button class="deny" data-id="\${id}" type="button" \${disabled}>\${denyLabel}</button>
+    </div>\`;
+}
+
 async function refreshDevicesPanel() {
   try {
     const { peers } = await (await fetch("/api/peers")).json();
@@ -1159,15 +1186,7 @@ async function refreshDevicesPanel() {
       incomingEl.hidden = pairingRequests.length === 0;
       incomingEl.innerHTML = pairingRequests
         .map(
-          (r) => \`
-        <div class="incoming-row" data-id="\${r.requestId}">
-          <span>
-            <span class="name">Pairing request from \${escapeHtml(r.deviceName)}</span>
-            <span class="meta">wants to share this list with this device</span>
-          </span>
-          <button class="approve" data-id="\${r.requestId}" type="button">Approve</button>
-          <button class="deny" data-id="\${r.requestId}" type="button">Deny</button>
-        </div>\`
+          (r) => incomingRowHtml(r.requestId, \`Pairing request from \${escapeHtml(r.deviceName)}\`, "wants to share this list with this device")
         )
         .join("");
 
@@ -1176,15 +1195,7 @@ async function refreshDevicesPanel() {
       accessIncomingEl.hidden = accessRequests.length === 0;
       accessIncomingEl.innerHTML = accessRequests
         .map(
-          (r) => \`
-        <div class="incoming-row" data-id="\${r.requestId}">
-          <span>
-            <span class="name">Access request from \${escapeHtml(r.ip)}</span>
-            <span class="meta">wants to view/edit this list in a browser</span>
-          </span>
-          <button class="approve" data-id="\${r.requestId}" type="button">Approve</button>
-          <button class="deny" data-id="\${r.requestId}" type="button">Deny</button>
-        </div>\`
+          (r) => incomingRowHtml(r.requestId, \`Access request from \${escapeHtml(r.ip)}\`, "wants to view/edit this list in a browser")
         )
         .join("");
 
@@ -1334,33 +1345,35 @@ document.getElementById("devices-list").addEventListener("click", async (e) => {
   refreshDevicesPanel();
 });
 
-document.getElementById("devices-incoming").addEventListener("click", async (e) => {
+async function handleIncomingAction(e, kind) {
   const id = e.target.dataset.id;
-  if (!id) return;
-  if (e.target.matches(".approve")) {
-    e.target.disabled = true;
-    await fetch(\`/api/pair/approve/\${id}\`, { method: "POST" });
-    refreshDevicesPanel();
-  } else if (e.target.matches(".deny")) {
-    e.target.disabled = true;
-    await fetch(\`/api/pair/deny/\${id}\`, { method: "POST" });
-    refreshDevicesPanel();
+  if (!id || pendingRequestActions.has(id)) return; // already mid-flight — ignore a second click
+  const action = e.target.matches(".approve") ? "approve" : e.target.matches(".deny") ? "deny" : null;
+  if (!action) return;
+  pendingRequestActions.set(id, action);
+  // Toggle the existing buttons directly rather than re-rendering the row from its own
+  // .textContent — the name/meta text came from another device over the network, and
+  // round-tripping it back through innerHTML without re-escaping would be a stored-XSS
+  // hole. incomingRowHtml() (used by refreshDevicesPanel) is the only place that builds
+  // this markup from scratch, always straight from freshly-escaped server JSON.
+  const row = e.target.closest(".incoming-row");
+  if (row) {
+    const approve = row.querySelector(".approve");
+    const deny = row.querySelector(".deny");
+    approve.disabled = true;
+    deny.disabled = true;
+    (action === "approve" ? approve : deny).textContent = action === "approve" ? "Approving…" : "Denying…";
   }
-});
+  try {
+    await fetch(\`/api/\${kind}/\${action}/\${id}\`, { method: "POST" });
+  } finally {
+    pendingRequestActions.delete(id);
+  }
+  refreshDevicesPanel();
+}
 
-document.getElementById("access-incoming").addEventListener("click", async (e) => {
-  const id = e.target.dataset.id;
-  if (!id) return;
-  if (e.target.matches(".approve")) {
-    e.target.disabled = true;
-    await fetch(\`/api/access/approve/\${id}\`, { method: "POST" });
-    refreshDevicesPanel();
-  } else if (e.target.matches(".deny")) {
-    e.target.disabled = true;
-    await fetch(\`/api/access/deny/\${id}\`, { method: "POST" });
-    refreshDevicesPanel();
-  }
-});
+document.getElementById("devices-incoming").addEventListener("click", (e) => handleIncomingAction(e, "pair"));
+document.getElementById("access-incoming").addEventListener("click", (e) => handleIncomingAction(e, "access"));
 
 document.getElementById("access-viewers-list").addEventListener("click", async (e) => {
   if (!e.target.matches(".unpair")) return;

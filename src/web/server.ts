@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { getDeviceId, getDeviceName, getDeviceRole } from "../device.js";
 import { installProcessLogging, log } from "../log.js";
@@ -46,6 +47,28 @@ export function isLocalRequest(req: IncomingMessage): boolean {
   const addr = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
   if (addr === "127.0.0.1" || addr === "::1") return true;
   return LAN_IP !== null && addr === LAN_IP;
+}
+
+/**
+ * DNS-rebinding guard. Authorization here leans on "the request came from this
+ * machine / holds a cookie", but a malicious website can point its OWN domain's
+ * DNS at 127.0.0.1 (or a LAN IP) and make the victim's browser issue same-"site"
+ * requests straight into this server. Every legitimate way of reaching this
+ * server — localhost, an IP literal (LAN or loopback), an mDNS `.local` name —
+ * has a hostname an internet attacker cannot serve their page from, so anything
+ * else in the Host header is rejected before any route or auth check runs.
+ */
+export function hasTrustedHostHeader(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (!host) return true; // no browser omits Host — a raw local/LAN client is authenticated by the usual means
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${host}`).hostname;
+  } catch {
+    return false;
+  }
+  const bare = hostname.replace(/^\[|\]$/g, ""); // URL keeps IPv6 literals bracketed
+  return hostname === "localhost" || hostname.endsWith(".local") || isIP(bare) > 0;
 }
 
 export function sha256Hex(value: string): string {
@@ -135,6 +158,9 @@ export async function createWebServer(): Promise<Server> {
 
   const server = createServer(async (req, res) => {
     try {
+      if (!hasTrustedHostHeader(req)) {
+        return json(res, 403, { error: "unrecognized Host header" });
+      }
       const url = new URL(req.url ?? "/", "http://localhost");
 
       // Root dashboard / Gate page

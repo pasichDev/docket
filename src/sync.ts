@@ -1,7 +1,7 @@
 import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { decryptWithKey, encryptWithKey } from "./crypto.js";
 import { log } from "./log.js";
-import { FIELD_KEYS, type FieldKey } from "./mutations.js";
+import { FIELD_KEYS, isSafeUrl, type FieldKey } from "./mutations.js";
 import { loadPeers, markPeerSynced } from "./peers.js";
 import type { Peer, Todo, TodoStore, Tombstone } from "./types.js";
 
@@ -209,6 +209,89 @@ function isPlausibleTodo(t: unknown): t is Todo {
   );
 }
 
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+// Same safe-charset shape as every action string this codebase produces. The web UI renders
+// history actions without HTML-escaping them, so anything outside this never enters the store.
+const HISTORY_ACTION_RE = /^[a-z][a-z-]{0,31}$/;
+
+function nullableString(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
+function sanitizeHistory(entries: unknown[]): Todo["history"] {
+  const out: Todo["history"] = [];
+  for (const e of entries.slice(0, MAX_SYNC_ITEMS)) {
+    if (typeof e !== "object" || e === null) continue;
+    const h = e as Record<string, unknown>;
+    if (typeof h.at !== "string" || !ISO_TIMESTAMP_RE.test(h.at) || typeof h.detail !== "string") continue;
+    if (typeof h.action !== "string" || !HISTORY_ACTION_RE.test(h.action)) continue;
+    out.push({
+      at: h.at,
+      agent: nullableString(h.agent),
+      deviceName: nullableString(h.deviceName),
+      action: h.action as Todo["history"][number]["action"],
+      detail: h.detail,
+    });
+  }
+  return out;
+}
+
+function sanitizeFieldTimestamps(v: unknown): Todo["fieldTimestamps"] {
+  if (typeof v !== "object" || v === null) return {};
+  const out: Todo["fieldTimestamps"] = {};
+  for (const key of FIELD_KEYS) {
+    const val = (v as Record<string, unknown>)[key];
+    if (typeof val === "string") out[key] = val;
+  }
+  return out;
+}
+
+/**
+ * isPlausibleTodo only guarantees the core identity fields. Everything else a peer sends
+ * is clamped here field-by-field, because a buggy (or compromised) peer could otherwise
+ * smuggle values the rest of the codebase never produces: wrong types that crash history
+ * rendering, bogus enum values, an unsafe `javascript:` sourceUrl, or markup in fields the
+ * web UI renders without escaping (dueDate, priority, history at/action). Also strips any
+ * unknown extra keys so they can't silently persist and re-sync forever.
+ */
+function sanitizeRemoteTodo(t: Todo): Todo {
+  const o = t as unknown as Record<string, unknown>;
+  return {
+    id: 0, // replaced with a fresh local id on insert; never merged onto an existing item
+    uuid: t.uuid,
+    title: t.title,
+    description: nullableString(o.description),
+    done: t.done,
+    list: t.list,
+    category: nullableString(o.category),
+    priority: o.priority === "low" || o.priority === "medium" || o.priority === "high" ? o.priority : null,
+    dueDate: typeof o.dueDate === "string" && DATE_ONLY_RE.test(o.dueDate) ? o.dueDate : null,
+    sourceUrl: typeof o.sourceUrl === "string" && isSafeUrl(o.sourceUrl) ? o.sourceUrl : null,
+    agent: nullableString(o.agent),
+    session: nullableString(o.session),
+    workingAgent: nullableString(o.workingAgent),
+    workingSince: nullableString(o.workingSince),
+    workingSession: nullableString(o.workingSession),
+    workingLeaseExpiresAt: nullableString(o.workingLeaseExpiresAt),
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    fieldTimestamps: sanitizeFieldTimestamps(o.fieldTimestamps),
+    completedAt: nullableString(o.completedAt),
+    deviceId: nullableString(o.deviceId),
+    deviceName: nullableString(o.deviceName),
+    history: sanitizeHistory(t.history),
+  };
+}
+
+/** Tombstones get the same treatment: only the exact expected shape enters the store. */
+function sanitizeTombstone(t: unknown): Tombstone | null {
+  if (typeof t !== "object" || t === null) return null;
+  const o = t as Record<string, unknown>;
+  if (typeof o.uuid !== "string" || typeof o.deletedAt !== "string") return null;
+  return { uuid: o.uuid, deletedAt: o.deletedAt, deviceId: nullableString(o.deviceId) };
+}
+
 function fieldTimeOf(t: Todo, field: FieldKey): string {
   // Falls back to createdAt, NOT updatedAt: updatedAt reflects the record's most
   // recent change to ANY field, so using it here would make an untouched field
@@ -256,8 +339,15 @@ export function mergeSyncPayload(
   store.deletedUuids = store.deletedUuids ?? [];
   const localTombstones = new Map(store.deletedUuids.map((t) => [t.uuid, t]));
 
-  const incomingTodos = Array.isArray(payload.todos) ? payload.todos.slice(0, MAX_SYNC_ITEMS).filter(isPlausibleTodo) : [];
-  const incomingTombstones = Array.isArray(payload.deletedUuids) ? payload.deletedUuids.slice(0, MAX_SYNC_ITEMS) : [];
+  const incomingTodos = Array.isArray(payload.todos)
+    ? payload.todos.slice(0, MAX_SYNC_ITEMS).filter(isPlausibleTodo).map(sanitizeRemoteTodo)
+    : [];
+  const incomingTombstones = Array.isArray(payload.deletedUuids)
+    ? payload.deletedUuids
+        .slice(0, MAX_SYNC_ITEMS)
+        .map(sanitizeTombstone)
+        .filter((t): t is Tombstone => t !== null)
+    : [];
 
   for (const remote of incomingTodos) {
     const tombstone = localTombstones.get(remote.uuid);

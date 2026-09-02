@@ -53,9 +53,20 @@ export function json(res: ServerResponse, status: number, body: unknown) {
   res.end(payload);
 }
 
+/** Far above any legitimate payload (imports included) — exists so one request to a reachable endpoint can't buffer an unbounded body into memory. */
+const MAX_JSON_BODY_BYTES = 10 * 1024 * 1024;
+
 export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let total = 0;
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length;
+    // Throwing (rather than destroying the socket) lets the caller still send its
+    // error response; Node tears the connection down itself once the response ends
+    // with the request body unconsumed.
+    if (total > MAX_JSON_BODY_BYTES) throw new Error(`request body exceeds ${MAX_JSON_BODY_BYTES} bytes`);
+    chunks.push(chunk as Buffer);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? JSON.parse(raw) : {};
 }
@@ -354,6 +365,13 @@ export async function handleApiRoute(
   // 13. Peers - Delete
   const unpairMatch = url.pathname.match(/^\/api\/peers\/([\w-]+)$/);
   if (req.method === "DELETE" && unpairMatch) {
+    // Unpairing is pairing management — approved LAN viewers can view/edit the LIST,
+    // but must never be able to detach this device's sync partners (every other
+    // pairing-management route already requires the host browser's own session).
+    if (!ctx.hasUiSession(req)) {
+      json(res, 403, { error: "this action must come from this device's own browser" });
+      return true;
+    }
     const ok = await removePeerAndMaybeRevertRole(unpairMatch[1], ctx);
     json(res, ok ? 200 : 404, { removed: ok });
     return true;

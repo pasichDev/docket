@@ -150,6 +150,55 @@ test("mergeSyncPayload: rejects malformed items instead of crashing or inserting
   assert.equal(local.todos.length, 0);
 });
 
+test("mergeSyncPayload: a javascript: sourceUrl from a peer is dropped, not stored (regression: a hostile peer could otherwise plant a click-XSS link)", () => {
+  const local = emptyStore();
+  const remoteStore = emptyStore();
+  const remote = createTodo(remoteStore, { title: "From peer", agent: null, session: null }, "peer-device", "Peer");
+  (remote as unknown as { sourceUrl: string }).sourceUrl = "javascript:alert(1)";
+  mergeSyncPayload(local, payloadFrom([remote]), "peer-device");
+  assert.equal(local.todos[0].sourceUrl, null);
+});
+
+test("mergeSyncPayload: a bogus history.action from a peer is dropped, not stored (regression: the web UI renders history.action unescaped)", () => {
+  const local = emptyStore();
+  const remoteStore = emptyStore();
+  const remote = createTodo(remoteStore, { title: "From peer", agent: null, session: null }, "peer-device", "Peer");
+  remote.history.push({
+    at: new Date().toISOString(),
+    agent: "peer",
+    deviceName: "Peer",
+    action: '<img src=x onerror=alert(1)>' as unknown as Todo["history"][number]["action"],
+    detail: "hostile",
+  });
+  mergeSyncPayload(local, payloadFrom([remote]), "peer-device");
+  assert.equal(local.todos[0].history.length, 1); // only the legitimate "created" entry survives
+  assert.equal(local.todos[0].history[0].action, "created");
+});
+
+test("mergeSyncPayload: a non-object history entry from a peer is dropped instead of crashing rendering", () => {
+  const local = emptyStore();
+  const remoteStore = emptyStore();
+  const remote = createTodo(remoteStore, { title: "From peer", agent: null, session: null }, "peer-device", "Peer");
+  (remote.history as unknown[]).push("not an object", null, 42);
+  mergeSyncPayload(local, payloadFrom([remote]), "peer-device");
+  assert.equal(local.todos[0].history.length, 1);
+});
+
+test("mergeSyncPayload: fieldTimestamps from a peer are clamped to known fields, unknown keys stripped", () => {
+  const local = emptyStore();
+  const remoteStore = emptyStore();
+  const remote = createTodo(remoteStore, { title: "From peer", agent: null, session: null }, "peer-device", "Peer");
+  (remote as unknown as { fieldTimestamps: Record<string, string> }).fieldTimestamps = {
+    title: remote.createdAt,
+    __proto__: "polluted",
+    notARealField: "2026-01-01T00:00:00.000Z",
+  };
+  mergeSyncPayload(local, payloadFrom([remote]), "peer-device");
+  const stored = local.todos[0].fieldTimestamps as Record<string, unknown>;
+  assert.ok(!("notARealField" in stored));
+  assert.equal(stored.title, remote.createdAt);
+});
+
 test("signSyncRequest/verifySyncRequest: valid signature within the time window verifies", () => {
   const secret = "test-secret";
   const timestamp = new Date().toISOString();
