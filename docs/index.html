@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Docket — one todo list, every AI tool</title>
-<meta name="description" content="A shared TODO/backlog MCP server for Claude Code, Claude Desktop, Warp and Codex — claim tracking, full history, a web dashboard, and encrypted local storage. One command to install." />
+<title>Docket — one workspace for every AI coding agent</title>
+<meta name="description" content="A shared workspace for Claude Code, Claude Desktop, Cursor, Windsurf, Warp and Codex — claim tracking, full history, a web dashboard, encrypted storage. Run it locally, or self-host it on your own always-on machine. No SaaS account required." />
 <link rel="icon" href="data:," />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap">
 <style>
@@ -148,17 +148,18 @@
   <div class="links">
     <a href="#demo">Demo</a>
     <a href="#install">Install</a>
+    <a href="#self-host">Self-host</a>
     <a href="https://github.com/pasichDev/docket">GitHub</a>
     <a href="https://www.npmjs.com/package/@pasichdev/docket">npm</a>
   </div>
 </nav>
 
 <div class="hero wrap">
-  <h1>One todo list, every AI tool you use.</h1>
+  <h1>One workspace, every AI coding agent you use.</h1>
   <p class="tagline">
-    Claude Code, Claude Desktop, Warp, Codex — add an item in one, see it in
-    all of them, plus a web dashboard and your phone. Nothing gets lost
-    switching tools or starting a new session.
+    Claude Code, Claude Desktop, Cursor, Windsurf, Warp, Codex — add an item
+    in one, see it in all of them, plus a web dashboard and your phone. Run
+    it locally, or host it yourself. No SaaS account required, either way.
   </p>
   <div class="badges">
     <img src="https://img.shields.io/npm/v/%40pasichdev%2Fdocket.svg" alt="npm version" />
@@ -189,7 +190,7 @@
     <div class="demo-shot"><img src="assets/demo-light.jpg" alt="Docket web dashboard, light theme" loading="lazy" /></div>
   </div>
   <div class="demo-pane" data-pane="edit" data-active="false">
-    <div class="demo-shot"><img src="assets/demo-edit.png" alt="Docket inline edit form, showing title, description, category, priority and due date fields" loading="lazy" /></div>
+    <div class="demo-shot"><img src="assets/demo-edit.jpg" alt="Docket inline edit form, showing title, description, category, priority and due date fields" loading="lazy" /></div>
   </div>
 </section>
 
@@ -225,16 +226,25 @@
       <h3>Private by default</h3>
       <p>The data file is AES-256-GCM encrypted on disk — nobody browsing your filesystem sees your tasks in plain text.</p>
     </div>
+    <div class="feature-card">
+      <div class="icon" style="background:var(--sage-bg)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f7a50" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
+      </div>
+      <h3>Local or self-hosted</h3>
+      <p>Keep everything on this machine, or run one always-on Docket Server (Raspberry Pi, NAS, VPS) and pair every device to it. <a href="#self-host">See how ↓</a></p>
+    </div>
   </div>
 </section>
 
 <section class="wrap">
-  <h2 class="section-title">How it fits together</h2>
-  <p class="section-sub">Every client talks to the same server, which is the only thing that ever touches the data file — one source of truth, not four out-of-sync copies.</p>
+  <h2 class="section-title">Two ways to run it</h2>
+  <p class="section-sub">Local Mode is the default and needs nothing below. Self-hosted Mode is opt-in, for an always-on machine you control.</p>
+
+  <p style="text-align:center; font-family:'Fredoka',sans-serif; font-weight:600; margin-bottom:14px;">Local Mode — every client talks to one process on this machine</p>
   <div class="flow">
     <div class="flow-stack">
       <div class="flow-box"><div class="label">Claude Code</div></div>
-      <div class="flow-box"><div class="label">Claude Desktop</div></div>
+      <div class="flow-box"><div class="label">Cursor / Windsurf</div></div>
       <div class="flow-box"><div class="label">Warp / Codex</div></div>
     </div>
     <div class="flow-arrow">→</div>
@@ -247,6 +257,20 @@
       <div class="flow-box"><div class="label">Your phone</div><div class="sub">same Wi-Fi</div></div>
     </div>
   </div>
+
+  <p style="text-align:center; font-family:'Fredoka',sans-serif; font-weight:600; margin:44px 0 14px;">Self-hosted Mode — every device forwards to one authoritative server</p>
+  <div class="flow">
+    <div class="flow-stack">
+      <div class="flow-box"><div class="label">Laptop</div></div>
+      <div class="flow-box"><div class="label">Desktop</div></div>
+      <div class="flow-box"><div class="label">Phone (Web UI)</div></div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box center"><div class="label">Docket Server</div><div class="sub">docket serve</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box store"><div class="label">Authoritative store</div><div class="sub">your Pi / NAS / VPS</div></div>
+  </div>
+  <p class="section-sub" style="margin-top:20px;">Every device is a thin, per-device-authenticated forwarder — there's no local writable copy, and the workspace stays up even when every laptop is off. <a href="#self-host">See how to set it up ↓</a></p>
 </section>
 
 <section id="install" class="wrap">
@@ -295,14 +319,83 @@
   </div>
 </section>
 
+<section id="self-host" class="wrap">
+  <h2 class="section-title">Want an always-on shared workspace?</h2>
+  <p class="section-sub">Run one Docket Server on a Raspberry Pi, mini PC, NAS, home server, or VPS — every device you pair with it shares the same authoritative workspace, even when your laptop is off. This is the actual CLI output, not a mockup.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <h3>Start the server</h3>
+        <p>On the always-on machine:</p>
+        <pre><code>$ npm install -g @pasichdev/docket
+$ docket serve --host 0.0.0.0
+docket server ready
+API:  http://0.0.0.0:8788/api/v1
+Data: ~/.docket (default)
+Auth: per-device signed requests — no client can call the API until it's paired.
+      Pair a new device from THIS machine with: docket devices pair</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body">
+        <h3>Pair a device</h3>
+        <p>From the client machine — this waits for explicit approval on the server, never silent:</p>
+        <pre><code>$ docket pair https://docket.home.example
+✓ Server reachable
+✓ docket server v2.3.0
+✓ Protocol compatible
+
+Confirmation code: 7XP-KR4
+Check that the SAME code appears next to this request on the server (docket devices pending) before approving it there.
+
+Waiting for approval...
+✓ Device paired
+✓ Connection authenticated
+✓ Remote workspace ready</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <div class="body">
+        <h3>Check on it, any time</h3>
+        <pre><code>$ docket status
+Mode: remote
+Server: https://docket.home.example
+Status: connected
+Latency: 18 ms
+Server version: 2.3.0
+Device: andrii-desktop
+Device authorization: active</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">4</div>
+      <div class="body">
+        <h3>Use Claude/Codex/Cursor exactly like Local Mode</h3>
+        <p>Same MCP config, same tools — only where the data lives changed:</p>
+        <pre><code>claude mcp add docket -- npx -y @pasichdev/docket</code></pre>
+      </div>
+    </div>
+  </div>
+  <div class="cta-row" style="margin-top:32px;">
+    <a class="btn primary" href="https://github.com/pasichDev/docket#deployment-modes">Read the full self-hosted guide</a>
+    <a class="btn secondary" href="https://github.com/pasichDev/docket/blob/main/docs/headless.md">Docker / systemd deployment</a>
+  </div>
+</section>
+
 <footer>
   <div class="links">
     <a href="https://github.com/pasichDev/docket">GitHub</a>
     <a href="https://www.npmjs.com/package/@pasichdev/docket">npm</a>
     <a href="https://registry.modelcontextprotocol.io">MCP Registry</a>
+    <a href="https://github.com/pasichDev/docket/blob/main/docs/headless.md">Self-hosting docs</a>
+    <a href="https://github.com/pasichDev/docket/blob/main/CONTRIBUTING.md">Contributing</a>
+    <a href="https://github.com/pasichDev/docket/blob/main/SECURITY.md">Security</a>
     <a href="https://github.com/pasichDev/docket/blob/main/LICENSE">MIT License</a>
   </div>
-  <div class="fine">Docket — a personal project, open source, no account required.</div>
+  <div class="fine">Docket — a personal project, open source, no account required, local or self-hosted.</div>
 </footer>
 
 <script>
