@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest something Docket doesn't do yet
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before requesting, worth checking the README's
+        [What Self-hosted Mode does *not* do](../../README.md#what-self-hosted-mode-doesnt-do)
+        and [CONTRIBUTING.md's design boundaries](../../CONTRIBUTING.md#design-boundaries-worth-knowing-before-you-start) —
+        some gaps (offline writes against a self-hosted server, automatic P2P+remote merging, hosted/multi-tenant accounts) are
+        deliberate, not oversights, and a request for one of those will likely get a "not the
+        direction I want for this" rather than a yes.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that Docket doesn't support today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you want Docket to do instead? Concrete CLI/tool/API shape if you have one in mind.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workaround you're using today, or other approaches you considered.
+    validations:
+      required: false

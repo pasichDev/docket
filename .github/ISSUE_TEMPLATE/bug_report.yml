@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in Docket isn't working as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. If this is a **security vulnerability**
+        (data exposure, auth bypass, anything in `src/crypto.ts`/`src/sync.ts`/`src/server/auth.ts`/
+        `src/remote/device-auth.ts`), please use [Security Advisories](https://github.com/pasichDev/docket/security/advisories/new)
+        instead of a public issue — see [SECURITY.md](../../SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Docket version
+      description: Output of `npm ls -g @pasichdev/docket` (global install) or the version in your `package.json`/`npx` cache.
+      placeholder: "2.3.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Deployment mode
+      options:
+        - Local (default)
+        - Self-hosted (docket serve / docket pair)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: "node --version"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what actually happened. Include exact error text/output if any.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps. If it involves your actual todo data, describe the shape of the data rather than pasting it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: |
+        Local mode: `server.log` in your data directory (`~/.docket/server.log` by default).
+        Self-hosted mode: `docket serve`'s own stdout/stderr, or `journalctl -u docket` under systemd.
+      render: shell
+    validations:
+      required: false
