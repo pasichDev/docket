@@ -1,6 +1,6 @@
 {
   "name": "@pasichdev/todo-mcp",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "A shared TODO/backlog MCP server with a web UI, agent claim/release tracking, and encrypted local storage.",
   "license": "MIT",
   "author": "pasichDev",
@@ -30,7 +30,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "todo-mcp": "dist/index.js"
+    "todo-mcp": "dist/index.js",
+    "todo-mcp-setup": "dist/setup.js"
   },
   "files": [
     "dist",

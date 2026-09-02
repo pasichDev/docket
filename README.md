@@ -69,7 +69,18 @@ web UI, and the optional Claude Code skill in one go.
 installed, and Node.js 18+ (check with `node --version` in a terminal — if
 that command isn't found, get Node from [nodejs.org](https://nodejs.org)).
 
-**1. Register the server.** Open a terminal and run:
+**1. Choose one shared data directory.** On a normal machine the default is
+`~/.todo-mcp`; for sandboxed agents choose an explicit durable directory:
+
+```sh
+npx -y --prefix /tmp --package=@pasichdev/todo-mcp todo-mcp-setup --data-dir "$HOME/.local/state/todo-mcp"
+```
+
+Copy the printed `TODO_MCP_DATA_DIR` setting into every MCP host that should
+share this list. The setup command only creates and verifies the directory; it
+does not modify host configuration files.
+
+**2. Register the server.** Open a terminal and run:
 
 ```sh
 claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp
@@ -78,18 +89,18 @@ claude mcp add todo-mcp -- npx -y @pasichdev/todo-mcp
 This just tells Claude Code how to start todo-mcp — nothing is downloaded
 yet. `npx` fetches and runs it the first time it's actually used.
 
-**2. Restart Claude Code** (close and reopen it, or start a new session) so
+**3. Restart Claude Code** (close and reopen it, or start a new session) so
 it picks up the new server.
 
-**3. Try it.** In a chat, ask Claude something like *"add a todo: buy
+**4. Try it.** In a chat, ask Claude something like *"add a todo: buy
 milk"*. If it uses the tool and confirms, the server is working.
 
-**4. Open the web UI.** Go to **http://localhost:8787** in your browser —
+**5. Open the web UI.** Go to **http://localhost:8787** in your browser —
 it started itself the moment step 3 ran, no separate install step. From
 here you can add/edit/complete items with a mouse, switch light/dark theme,
 and search/sort/filter the list.
 
-**5. (Optional) Install the claim-tracking skill.** This teaches Claude
+**6. (Optional) Install the claim-tracking skill.** This teaches Claude
 Code to mark an item as "in progress" while it's actively working on it,
 and to check first before starting something another session already
 claimed. In Claude Code:
