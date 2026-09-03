@@ -35,6 +35,11 @@ you control — no SaaS account either way.**
 - **Optional multi-device P2P sync**, entirely separate from Self-hosted Mode
   — see [Devices & P2P sync](#devices--p2p-sync).
 
+<p align="center">
+  <img src="docs/assets/demo-dark.jpg" alt="Docket web dashboard, dark theme, showing a claimed in-progress item" width="49%" />
+  <img src="docs/assets/demo-light.jpg" alt="Docket web dashboard, light theme, same workspace" width="49%" />
+</p>
+
 ## Architecture
 
 Docket runs in one of two deployment modes. Both give every client the exact
