@@ -11,17 +11,21 @@ import {
 } from "../access.js";
 import { deriveSharedSecret, getDevicePublicKey, getDeviceRole, setDeviceRole } from "../device.js";
 import { exportToJson, exportToMarkdown, importFromJson, importFromMarkdown } from "../export.js";
+import { renderSessionStart } from "../format.js";
 import { log } from "../log.js";
 import { isClaimActive, isSafeUrl, shortId } from "../mutations.js";
 import { listEvents, recordCreated, recordResolved } from "../notifications.js";
 import { addPeer, loadPeers, peerFingerprint, peerTrustState, removePeer, restorePeer, revokePeer, updatePeerUrl } from "../peers.js";
 import { computeAgentPresence } from "../presence.js";
+import { listSessions } from "../sessions.js";
 import type { MutationContext } from "../repository.js";
-import { CURRENT_FORMAT_VERSION, readStore, withStore } from "../storage.js";
+import { CURRENT_FORMAT_VERSION, getStoreEpoch, readStore, withStore } from "../storage.js";
 import { todoService } from "../todo-service.js";
 import {
   addIncomingRequest,
   addOutgoingRequest,
+  buildLegacySyncPayload,
+  buildSyncPayload,
   checkPairingRateLimit,
   confirmProof,
   createInvite,
@@ -39,7 +43,6 @@ import {
   SYNC_PROTOCOL_VERSION,
   verifyConfirmProof,
   verifySyncRequest,
-  type SyncPayload,
 } from "../sync.js";
 import type { Peer, TodoList, TodoPriority } from "../types.js";
 import { addViewer, loadViewers, removeViewer } from "../viewers.js";
@@ -84,9 +87,27 @@ export async function readRawBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/**
+ * A request the CALLER got wrong. Distinguished from every other throw so the server answers
+ * 4xx rather than 500: a malformed body is not a server fault, and telling a client "my
+ * mistake, try again" when its own payload is broken sends it into a retry loop over
+ * something no retry can fix.
+ */
+export class BadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BadRequestError";
+  }
+}
+
 export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const raw = await readRawBody(req);
-  return raw ? JSON.parse(raw) : {};
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new BadRequestError("request body is not valid JSON");
+  }
 }
 
 // Exported for reuse by the remote server's own request validation (src/server/routes.ts) —
@@ -129,6 +150,7 @@ interface TodoRequestBody {
   priority?: unknown;
   dueDate?: unknown;
   sourceUrl?: unknown;
+  workspace?: unknown;
 }
 
 function isPrivateNetworkUrl(rawUrl: string): boolean {
@@ -179,7 +201,9 @@ export interface ApiContext {
 
 /** Every web-originated mutation is attributed to agent "web", one connection, no session token — matching what every route already passed to createTodo/applyEdits/etc. directly before TodoService existed. */
 function webContext(ctx: ApiContext): MutationContext {
-  return { agent: "web", session: null, deviceId: ctx.deviceId, deviceName: ctx.deviceName };
+  // No workspace: the dashboard is one shared view across every project, not a checkout, so
+  // an item typed here is genuinely unfiled unless the caller names a project explicitly.
+  return { agent: "web", session: null, deviceId: ctx.deviceId, deviceName: ctx.deviceName, workspace: null };
 }
 
 export async function removePeerAndMaybeRevertRole(id: string, ctx: ApiContext): Promise<boolean> {
@@ -287,6 +311,21 @@ export async function handleApiRoute(
     return true;
   }
 
+  // 6b. Todos - Full history for one item
+  // GET /api/todos/:id/history — the card preview ships the last few entries inline with
+  // the item; this is what the detail panel opens for the rest. Separate route (rather than
+  // fattening /api/todos) precisely so the list stays cheap: history is the unbounded part.
+  const historyMatch = url.pathname.match(/^\/api\/todos\/([^/]+)\/history$/);
+  if (req.method === "GET" && historyMatch) {
+    const entries = await todoService.history(decodeURIComponent(historyMatch[1]));
+    if (!entries) {
+      json(res, 404, { error: "no such todo" });
+      return true;
+    }
+    json(res, 200, { history: entries });
+    return true;
+  }
+
   // 7. Todos - Create
   if (req.method === "POST" && url.pathname === "/api/todos") {
     const body = (await readJsonBody(req)) as TodoRequestBody;
@@ -297,6 +336,11 @@ export async function handleApiRoute(
     }
     const todo = await todoService.create(
       {
+        // The dashboard is one view over every project, so it says which one an item
+        // belongs to rather than inheriting a project from the process it runs in. Without
+        // this, typing a todo while a project is selected files it Unfiled and it vanishes
+        // from the very list it was typed into.
+        workspace: typeof body.workspace === "string" ? textOrNull(body.workspace) : undefined,
         title,
         description: textOrNull(body.description),
         list: isTodoList(body.list) ? body.list : "todo",
@@ -381,6 +425,25 @@ export async function handleApiRoute(
   if (req.method === "GET" && url.pathname === "/api/presence") {
     const store = await readStore();
     json(res, 200, { presence: computeAgentPresence(store) });
+    return true;
+  }
+
+  // 11c. Live agent sessions — which terminals are open right now and where.
+  // Distinct from /api/presence, which is derived from history and can only say what an
+  // agent last DID. With a dozen terminals open, "where is it" is the actual question.
+  if (req.method === "GET" && url.pathname === "/api/sessions") {
+    json(res, 200, { sessions: await listSessions() });
+    return true;
+  }
+
+  // 11d. SessionStart hook payload — the ONE thing the Claude Code hook fetches.
+  // Rendered here rather than in the hook process so the wording and the token budget live
+  // in one place (src/format.ts, enforced by budget.test.ts), and so the hook stays a thin
+  // HTTP client that never loads the MCP stack or decrypts anything itself.
+  if (req.method === "GET" && url.pathname === "/api/hook/session-start") {
+    const scope = url.searchParams.get("workspace");
+    const todos = await todoService.list({ filter: "open", workspace: scope || "*" });
+    json(res, 200, { text: renderSessionStart(todos, scope || null) });
     return true;
   }
 
@@ -901,6 +964,11 @@ export async function handleApiRoute(
   // 30. Peer Sync - Sync Endpoint
   if (req.method === "GET" && url.pathname === "/api/sync") {
     const since = url.searchParams.get("since") ?? "";
+    // Protocol v2's cursor. Present → the caller signed THIS value in the `since` slot and
+    // wants seq-paged delivery; absent → a v1 caller on the timestamp path, served exactly
+    // as before. One endpoint, two cursors, no version negotiation round trip.
+    const sinceSeqRaw = url.searchParams.get("sinceSeq");
+    const signedCursor = sinceSeqRaw ?? since;
     const callerDeviceId = url.searchParams.get("deviceId") ?? "";
     const timestamp = url.searchParams.get("timestamp") ?? "";
     const signature = url.searchParams.get("signature") ?? "";
@@ -916,7 +984,7 @@ export async function handleApiRoute(
       json(res, 403, { error: "this peer has been revoked", reason: "revoked" });
       return true;
     }
-    if (!verifySyncRequest(peer.secret, callerDeviceId, since, timestamp, signature)) {
+    if (!verifySyncRequest(peer.secret, callerDeviceId, signedCursor, timestamp, signature)) {
       json(res, 403, { error: "signature invalid or expired" });
       return true;
     }
@@ -929,12 +997,12 @@ export async function handleApiRoute(
       return true;
     }
     const store = await readStore();
-    const payload: SyncPayload = {
-      todos: store.todos.filter((t) => t.updatedAt > since),
-      deletedUuids: (store.deletedUuids ?? []).filter((t) => t.deletedAt > since),
-      serverTime: new Date().toISOString(),
-      protocolVersion: SYNC_PROTOCOL_VERSION,
-    };
+    const sinceSeq = sinceSeqRaw === null ? null : Number(sinceSeqRaw);
+    if (sinceSeq !== null && !Number.isSafeInteger(sinceSeq)) {
+      json(res, 400, { error: "sinceSeq must be an integer" });
+      return true;
+    }
+    const payload = sinceSeq === null ? buildLegacySyncPayload(store, since) : buildSyncPayload(store, sinceSeq, await getStoreEpoch());
     json(res, 200, encryptSyncPayload(peer.secret, payload));
     return true;
   }

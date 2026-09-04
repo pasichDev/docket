@@ -78,6 +78,10 @@ function remoteContext(req: IncomingMessage, deviceId: string, deviceName: strin
     session: header("x-docket-session"),
     deviceId,
     deviceName,
+    // Which project the calling session is in, so items file themselves there rather than
+    // landing unfiled. Self-reported like agent/session — the server has no view of the
+    // client's filesystem — and descriptive rather than a security boundary.
+    workspace: header("x-docket-workspace"),
   };
 }
 
@@ -109,6 +113,7 @@ interface TodoRequestBody {
   priority?: unknown;
   dueDate?: unknown;
   sourceUrl?: unknown;
+  workspace?: unknown;
 }
 
 function parseJsonBody(res: ServerResponse, raw: string): unknown | null {
@@ -308,6 +313,7 @@ export async function handleServeApiRoute(
       agent: url.searchParams.get("agent") ?? undefined,
       session: url.searchParams.get("session") ?? undefined,
       inProgress: url.searchParams.get("inProgress") === "true" ? true : undefined,
+      workspace: url.searchParams.get("workspace") || undefined,
     };
     const todos = await todoService.list(query);
     json(res, 200, { todos: todos.map(toWireTodo) });
@@ -333,6 +339,10 @@ export async function handleServeApiRoute(
         priority: isPriority(b.priority) ? b.priority : null,
         dueDate: isDate(b.dueDate) ? b.dueDate : null,
         sourceUrl: typeof b.sourceUrl === "string" && isSafeUrl(b.sourceUrl) ? b.sourceUrl : null,
+        // Only when the caller named one explicitly. Left undefined, create() falls back to
+        // the calling session's own project from X-Docket-Workspace, which is what makes
+        // filing automatic rather than something an agent has to remember.
+        workspace: typeof b.workspace === "string" ? textOrNull(b.workspace) : undefined,
       },
       context,
     );

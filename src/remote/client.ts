@@ -1,5 +1,6 @@
 import type { HistoryEntry } from "../history.js";
 import {
+  filterTodos,
   TodoClaimConflictError,
   TodoConflictError,
   TodoNotFoundError,
@@ -114,6 +115,11 @@ export class RemoteTodoRepository implements TodoRepository {
     const headers: Record<string, string> = {};
     if (context.agent) headers["X-Docket-Agent"] = context.agent;
     if (context.session) headers["X-Docket-Session"] = context.session;
+    // Descriptive, like agent/session: it tells the server which project this call came
+    // from so items file themselves there instead of landing unfiled. A server too old to
+    // read it simply ignores the header, which is why this is additive rather than a
+    // protocol bump.
+    if (context.workspace) headers["X-Docket-Workspace"] = context.workspace;
     return headers;
   }
 
@@ -221,10 +227,17 @@ export class RemoteTodoRepository implements TodoRepository {
     if (query.agent) params.set("agent", query.agent);
     if (query.session) params.set("session", query.session);
     if (query.inProgress) params.set("inProgress", "true");
+    if (query.workspace) params.set("workspace", query.workspace);
     const qs = params.toString();
     const { status, body } = await this.request("GET", `/api/v1/todos${qs ? `?${qs}` : ""}`);
     if (status !== 200) throw this.unexpected(status, body);
-    return (body as { todos: WireTodo[] }).todos.map((w) => this.fromWire(w));
+    const todos = (body as { todos: WireTodo[] }).todos.map((w) => this.fromWire(w));
+    // Filtered again here, on purpose. A server too old to understand `workspace` answers
+    // with every project's items, and the caller has already been told its list is scoped —
+    // saying "scoped to acme/backend" over an unscoped list is exactly the kind of quiet
+    // dishonesty this release exists to remove. `workspace` rides on the wire record, so
+    // this is decidable client-side regardless of what the server understood.
+    return filterTodos(todos, { workspace: query.workspace });
   }
 
   async get(id: TodoId): Promise<Todo | null> {

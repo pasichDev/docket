@@ -5,9 +5,10 @@ import type { Todo, TodoStore } from "./types.js";
 
 function storeWithHistory(entries: Array<Pick<Todo["history"][number], "at" | "agent" | "deviceName" | "action">>): TodoStore {
   return {
-    formatVersion: 5,
+    formatVersion: 8,
     nextId: 2,
     deletedUuids: [],
+    seqCounter: 1,
     todos: [
       {
         id: 1,
@@ -27,6 +28,8 @@ function storeWithHistory(entries: Array<Pick<Todo["history"][number], "at" | "a
         workingSession: null,
         workingLeaseExpiresAt: null,
         workingDeviceId: null,
+        localSeq: 1,
+        workspace: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         revision: 1,

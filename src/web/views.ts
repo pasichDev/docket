@@ -82,6 +82,16 @@ export const PAGE = `<!doctype html>
   .tag[data-tag="backlog"][data-active="true"] { background: var(--lavender-bg); color: var(--lavender); }
   .tag[data-tag="devices"][data-active="true"] { background: var(--due-bg); color: var(--due-text); }
 
+  .workspaces { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .ws {
+    font: inherit; font-size: 12px; border: none; cursor: pointer; border-radius: 999px;
+    padding: 6px 12px; background: var(--input-bg); color: var(--faint);
+    box-shadow: 0 0 0 1px var(--input-border) inset;
+  }
+  .ws[data-active="true"] { background: var(--ink); color: var(--ink-text); box-shadow: none; }
+  .ws .n { opacity: .6; margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .ws-empty-note { font-size: 11.5px; color: var(--due-text); background: var(--due-bg); border-radius: 999px; padding: 6px 12px; }
+
   .toolbar { display: flex; gap: 8px; align-items: center; }
   select, input[type=text], input[type=date], input[type=url], textarea {
     font: inherit; border: none; box-shadow: 0 0 0 1px var(--input-border) inset; border-radius: 999px; background: var(--input-bg);
@@ -572,6 +582,8 @@ export const PAGE = `<!doctype html>
       <p class="devices-explainer">Full sync partners and browsers approved to view/edit this list.</p>
       <div class="devices-list" id="devices-list"></div>
       <div class="devices-list" id="access-viewers-list"></div>
+      <p class="devices-explainer" id="sessions-heading" hidden>Active sessions</p>
+      <div class="presence-list" id="sessions-list"></div>
       <p class="devices-explainer" id="presence-heading" hidden>Recent activity</p>
       <div class="presence-list" id="presence-list"></div>
     </div>
@@ -618,6 +630,11 @@ export const PAGE = `<!doctype html>
   </dialog>
 
   <div class="page">
+    <!-- Its own row above the list tags, deliberately. "Which project am I looking at?" is a
+         different question from "todo or backlog?", and folding it into the tag row would
+         read as just another category filter. -->
+    <div class="workspaces"></div>
+
     <div class="tags">
       <button class="tag" data-tag="all" data-active="true" type="button"><span class="dot"></span>All <span class="n" data-count="all"></span></button>
       <button class="tag" data-tag="todo" data-active="false" type="button"><span class="dot"></span>Todo <span class="n" data-count="todo"></span></button>
@@ -805,15 +822,23 @@ function sourceHost(url) {
 
 function sourceLinkHtml(url) {
   if (!url) return "";
+  // Escaping is not enough here: "javascript:alert(1)" contains nothing escapeHtml touches
+  // and would still execute on click. mutations.ts already refuses to STORE such a URL, and
+  // sanitizeRemoteTodo refuses to accept one from a peer — this is the last line, and the
+  // one that has to hold if either of those ever regresses or a store is edited by hand.
+  try {
+    if (!["http:", "https:"].includes(new URL(url).protocol)) return "";
+  } catch {
+    return "";
+  }
   return \`<a class="source-link" href="\${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="\${escapeHtml(url)}">
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
     \${escapeHtml(sourceHost(url))}
   </a>\`;
 }
 
-function historyHtml(t) {
-  if (!t.history || t.history.length === 0) return "";
-  const rows = [...t.history]
+function historyRowsHtml(entries) {
+  return [...entries]
     .reverse()
     .map(
       (h) => \`
@@ -825,12 +850,41 @@ function historyHtml(t) {
         </div>\`
     )
     .join("");
+}
+
+// The item carries only the last few entries (the rest live in history.json.enc, off the
+// write hot path — see history-store.ts). Render those immediately so opening the panel is
+// never blank, then replace them with the full log once it arrives. Fetched on open rather
+// than with the list: history is the unbounded part of an item, and the list is the thing
+// that has to stay cheap.
+function historyHtml(t) {
+  if (!t.history || t.history.length === 0) return "";
   return \`
-    <details class="history-section">
-      <summary>History (\${t.history.length})</summary>
-      \${rows}
+    <details class="history-section" data-history-uuid="\${escapeHtml(t.uuid)}">
+      <summary>History</summary>
+      <div class="history-rows">\${historyRowsHtml(t.history.slice(-5))}</div>
     </details>\`;
 }
+
+async function loadFullHistory(details) {
+  if (details.dataset.historyLoaded) return;
+  details.dataset.historyLoaded = "1";
+  try {
+    const res = await fetch(\`/api/todos/\${encodeURIComponent(details.dataset.historyUuid)}/history\`);
+    if (!res.ok) return; // keep the inline preview; a missing audit log is not worth an error banner
+    const { history } = await res.json();
+    const rows = details.querySelector(".history-rows");
+    if (rows && Array.isArray(history)) rows.innerHTML = historyRowsHtml(history);
+  } catch {
+    // Offline or mid-reload — the preview is still on screen and still accurate.
+    delete details.dataset.historyLoaded;
+  }
+}
+
+document.addEventListener("toggle", (e) => {
+  const details = e.target;
+  if (details instanceof HTMLDetailsElement && details.open && details.dataset.historyUuid) loadFullHistory(details);
+}, true);
 
 function editFormHtml(t) {
   const priorityOptions = ["", "low", "medium", "high"]
@@ -900,6 +954,71 @@ async function fetchTodos() {
 
 let allTodos = [];
 let activeTag = "all";
+// "*" means every project. Remembered across reloads: with several projects feeding one
+// list, re-picking your own on every visit is exactly the friction this tool exists to remove.
+let activeWorkspace = (() => {
+  try { return localStorage.getItem("docket-workspace") || "*"; } catch { return "*"; }
+})();
+
+const UNFILED = "\u0000unfiled"; // a sentinel no real slug can collide with (slugs are [a-z0-9._/-])
+
+function workspaceOf(t) {
+  return t.workspace || UNFILED;
+}
+
+function renderWorkspaceSwitcher(todos) {
+  // Counts are of OPEN items — a project finished last month shouldn't shout for attention —
+  // but every project that has any item at all still gets a tab, which is what adding zero
+  // for a done item buys: the key is created either way.
+  const counts = new Map();
+  for (const t of todos) {
+    const key = workspaceOf(t);
+    counts.set(key, (counts.get(key) ?? 0) + (t.done ? 0 : 1));
+  }
+
+  const names = [...counts.keys()].sort((a, b) => (a === UNFILED ? 1 : b === UNFILED ? -1 : a.localeCompare(b)));
+  // A selection that no longer matches anything is dropped FIRST — before the early return
+  // below. Doing it after would leave a remembered project selected with no switcher on
+  // screen to change it, and the list filtered down to nothing, permanently.
+  if (activeWorkspace !== "*" && !names.includes(activeWorkspace)) {
+    activeWorkspace = "*";
+    try { localStorage.removeItem("docket-workspace"); } catch {}
+  }
+  // One project (or none) is not a choice — don't spend a row of screen on it.
+  const container = document.querySelector(".workspaces");
+  if (names.length <= 1) {
+    container.innerHTML = "";
+    return;
+  }
+
+  const openTotal = todos.filter((t) => !t.done).length;
+  const button = (value, label, count) =>
+    \`<button class="ws" type="button" data-workspace="\${escapeHtml(value)}" data-active="\${value === activeWorkspace}">\${escapeHtml(label)}<span class="n">\${count}</span></button>\`;
+  // A scoped view that is empty while the store is not must say so, next to the control that
+  // caused it. Otherwise the honest reading from where the user sits is "my data is gone" —
+  // and the reaction to that is uninstalling, not reading docs. Inline, not a toast: it has
+  // to still be on screen while they look at the empty list.
+  const elsewhere = todos.filter((t) => !t.done && workspaceOf(t) !== activeWorkspace);
+  const shownOpen = activeWorkspace === "*" ? openTotal : (counts.get(activeWorkspace) ?? 0);
+  const note =
+    shownOpen === 0 && elsewhere.length > 0
+      ? \`<span class="ws-empty-note">0 open here — \${elsewhere.length} open in \${new Set(elsewhere.map(workspaceOf)).size} other workspace(s)</span>\`
+      : "";
+
+  const html =
+    [button("*", "All", openTotal)]
+      .concat(names.map((n) => button(n, n === UNFILED ? "Unfiled" : n, counts.get(n) ?? 0)))
+      .join("") + note;
+  if (container.innerHTML !== html) container.innerHTML = html;
+}
+
+document.addEventListener("click", (e) => {
+  const button = e.target.closest(".ws");
+  if (!button) return;
+  activeWorkspace = button.dataset.workspace;
+  try { localStorage.setItem("docket-workspace", activeWorkspace); } catch {}
+  render(allTodos);
+});
 
 function applyTagCounts(todos) {
   const counts = { all: todos.length, todo: 0, backlog: 0 };
@@ -980,13 +1099,17 @@ function setEmptyPlaceholder(container, show, text) {
 
 function render(todos) {
   allTodos = todos;
-  applyTagCounts(todos);
+  renderWorkspaceSwitcher(todos);
+  // Project scope is applied FIRST, so every count below it — tags, open, done — describes
+  // the project you're actually looking at rather than the whole machine.
+  const scoped = activeWorkspace === "*" ? todos : todos.filter((t) => workspaceOf(t) === activeWorkspace);
+  applyTagCounts(scoped);
 
   const search = document.querySelector(".search").value.trim().toLowerCase();
   const sortMode = document.querySelector(".sort").value;
 
   let items =
-    activeTag === "all" ? todos : activeTag === "devices" ? todos.filter(isFromOtherDevice) : todos.filter((t) => t.list === activeTag);
+    activeTag === "all" ? scoped : activeTag === "devices" ? scoped.filter(isFromOtherDevice) : scoped.filter((t) => t.list === activeTag);
   if (search) {
     items = items.filter(
       (t) =>
@@ -1267,6 +1390,26 @@ async function refreshDevicesPanel() {
       .join("");
   } catch (err) {
     console.error("presence refresh failed", err);
+  }
+
+  // Live sessions sit ABOVE recent activity on purpose: "which terminal is open in this
+  // project" is actionable right now, where "what did codex last touch" is history.
+  try {
+    const { sessions } = await (await fetch("/api/sessions")).json();
+    const sessionsEl = document.getElementById("sessions-list");
+    document.getElementById("sessions-heading").hidden = sessions.length === 0;
+    sessionsEl.innerHTML = sessions
+      .map(
+        (s) => \`
+        <div class="presence-row">
+          <span class="dot \${Date.now() - Date.parse(s.lastSeenAt) < 60000 ? "active" : "idle"}"></span>
+          <span class="who">\${escapeHtml(s.agent || "unknown")}</span>
+          <span>\${escapeHtml(s.workspace || "unfiled")} · \${escapeHtml(timeAgo(s.lastSeenAt))}</span>
+        </div>\`
+      )
+      .join("");
+  } catch (err) {
+    console.error("sessions refresh failed", err);
   }
 
   if (isHostBrowserFlag) {
@@ -1618,7 +1761,19 @@ addForm.addEventListener("submit", async (e) => {
   await fetch("/api/todos", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, description, list: addFormList, category, priority, dueDate, sourceUrl }),
+    // File into whichever project the switcher is on. Without this, typing a todo while a
+    // project is selected files it Unfiled and it disappears from the list it was typed
+    // into. "All" and "Unfiled" both mean "no project", which is what null says.
+    body: JSON.stringify({
+      title,
+      description,
+      list: addFormList,
+      category,
+      priority,
+      dueDate,
+      sourceUrl,
+      workspace: activeWorkspace === "*" || activeWorkspace === UNFILED ? null : activeWorkspace,
+    }),
   });
   closeAddForm();
   refresh();

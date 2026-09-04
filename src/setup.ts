@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createLineReader, type LineReader } from "./cli-prompt.js";
 import { writeDeploymentConfig } from "./config.js";
+import { isOnPath } from "./hooks/install.js";
 import { getDeviceName } from "./device.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { beginServerPairing, finishServerPairing, PairingError, probeServer } from "./remote/pairing.js";
@@ -55,21 +56,21 @@ async function installStatsIntegration(dataDirectory: string): Promise<void> {
   console.log(`Installed todo_stats in ${integration} and sourced it from ${shellRc}.`);
 }
 
-async function installClaimSkill(): Promise<void> {
+async function installSkill(): Promise<void> {
   try {
     const marketplace = await execFileAsync("claude", ["plugin", "marketplace", "add", "pasichDev/docket"]);
     if (marketplace.stdout) process.stdout.write(marketplace.stdout);
     if (marketplace.stderr) process.stderr.write(marketplace.stderr);
-    const install = await execFileAsync("claude", ["plugin", "install", "docket-claim@docket"]);
+    const install = await execFileAsync("claude", ["plugin", "install", "docket@docket"]);
     if (install.stdout) process.stdout.write(install.stdout);
     if (install.stderr) process.stderr.write(install.stderr);
-    console.log("Installed the docket-claim Claude Code skill.");
+    console.log("Installed the docket Claude Code skill.");
   } catch (error) {
     const detail = error as ExecFileException;
     console.warn(`Could not install the skill automatically (${detail.message ?? "Claude Code not found"}).`);
     console.warn("Run these in Claude Code when it is available:");
     console.warn("  /plugin marketplace add pasichDev/docket");
-    console.warn("  /plugin install docket-claim@docket");
+    console.warn("  /plugin install docket@docket");
   }
 }
 
@@ -77,12 +78,12 @@ async function installClaimSkill(): Promise<void> {
 // other AGENTS.md-ecosystem tools read from it) — NOT ~/.codex/skills, which doesn't exist.
 async function installAgentsSkill(): Promise<void> {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const source = join(packageRoot, "skills", "docket-claim");
-  const destination = join(homedir(), ".agents", "skills", "docket-claim");
+  const source = join(packageRoot, "skills", "docket");
+  const destination = join(homedir(), ".agents", "skills", "docket");
   try {
     await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
     await cp(source, destination, { recursive: true, force: true });
-    console.log(`Installed the docket-claim skill at ${destination}.`);
+    console.log(`Installed the docket skill at ${destination}.`);
   } catch (error) {
     // Most likely cause: running inside an agent sandbox that restricts writes to
     // $HOME outside the current workspace (e.g. Codex's default workspace-write mode).
@@ -91,14 +92,14 @@ async function installAgentsSkill(): Promise<void> {
     console.warn(
       `Could not install the skill at ${destination}: ${(error as Error).message}\n` +
         `  If this is running inside a sandboxed agent session, re-run with broader ` +
-        `filesystem access, or copy skills/docket-claim from the package yourself.`,
+        `filesystem access, or copy skills/docket from the package yourself.`,
     );
   }
 }
 
-async function commandExists(command: string): Promise<boolean> {
-  try { await execFileAsync("which", [command]); return true; } catch { return false; }
-}
+// Reuses the hook installer's PATH scan rather than shelling out to `which`, which costs a
+// subprocess and does not exist on Windows.
+const commandExists = isOnPath;
 
 /**
  * Writes `env` (DOCKET_DATA_DIR for local mode, or DOCKET_MODE+DOCKET_SERVER_URL for
@@ -182,8 +183,8 @@ async function runLocalSetup(reader: LineReader, args: string[]): Promise<void> 
 
   console.log(`\ndocket data directory: ${dataDirectory}`);
   if (await shouldAutomate(reader, "Configure detected MCP agents automatically?", args)) await configureHosts({ DOCKET_DATA_DIR: dataDirectory });
-  if (await shouldAutomate(reader, "Install the docket-claim skill for Claude Code?", args)) await installClaimSkill();
-  if (await shouldAutomate(reader, "Install the docket-claim skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
+  if (await shouldAutomate(reader, "Install the docket skill for Claude Code?", args)) await installSkill();
+  if (await shouldAutomate(reader, "Install the docket skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
   if (await shouldAutomate(reader, "Install the todo_stats terminal helper and shell startup entry?", args)) await installStatsIntegration(dataDirectory);
   console.log("\nUse this same directory in every MCP host that should share the list:\n");
   console.log("Codex (config.toml):");
@@ -260,8 +261,8 @@ async function runRemoteSetup(reader: LineReader, args: string[]): Promise<void>
   if (await shouldAutomate(reader, "Configure detected MCP agents automatically?", args)) {
     await configureHosts({ DOCKET_MODE: "remote", DOCKET_SERVER_URL: serverUrl });
   }
-  if (await shouldAutomate(reader, "Install the docket-claim skill for Claude Code?", args)) await installClaimSkill();
-  if (await shouldAutomate(reader, "Install the docket-claim skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
+  if (await shouldAutomate(reader, "Install the docket skill for Claude Code?", args)) await installSkill();
+  if (await shouldAutomate(reader, "Install the docket skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
 
   console.log("\nUse this server in every MCP host that should share this workspace:\n");
   console.log("Codex (config.toml):");

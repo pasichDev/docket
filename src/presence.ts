@@ -17,6 +17,15 @@ export interface AgentPresence {
  * keep in sync or leak state from. "Presence" here means "most recent thing this
  * agent@device did", which is enough for "active" / "idle 3m" without inventing a new
  * subsystem for something this lightweight.
+ *
+ * Since v3.0 only the last few history entries stay inline on an item (the rest live in
+ * history.json.enc — see history-store.ts), and this reads the inline ones. That costs
+ * nothing here: "most recent" is exactly what the inline tail holds, and paying to decrypt
+ * a second file for a value that can only come from its newest rows would be backwards.
+ *
+ * What this CAN'T tell you is where an agent is right now — only that it did something.
+ * With a dozen terminals open that's the actual question, which is what src/sessions.ts
+ * answers instead.
  */
 export function computeAgentPresence(store: TodoStore): AgentPresence[] {
   const latest = new Map<string, AgentPresence>();

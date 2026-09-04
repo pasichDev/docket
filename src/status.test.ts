@@ -49,10 +49,14 @@ async function captureLogLines(fn: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
-test("runStatusCommand: local mode (no config file, no DOCKET_MODE — every existing install) reports Mode/Store/Web/Peers", async () => {
+test("runStatusCommand: local mode (no config file, no DOCKET_MODE — every existing install) reports Mode/Store/Web/Workspace/Sessions/Peers", async () => {
   const lines = await captureLogLines(() => runStatusCommand());
   assert.equal(lines[0], "Mode: local");
   assert.equal(lines[1], `Store: ${dataDirectory}`);
   assert.match(lines[2], /^Web: http:\/\/localhost:18787 \(not running\)$/);
-  assert.equal(lines[3], "Peers: 0");
+  // Workspace scoping fails silently — items land somewhere you never look — so which
+  // project this directory resolves to, and why, has to be answerable without a log.
+  assert.match(lines[3], /^Workspace: .+ via (env|config|git-remote|git-root|cwd|none)/);
+  assert.match(lines[4], /^Sessions: \d+ open$/);
+  assert.equal(lines[5], "Peers: 0");
 });

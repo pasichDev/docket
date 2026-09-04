@@ -51,3 +51,20 @@ test("hasSameOriginForMutation: falls back to Referer when Origin is absent", ()
   assert.equal(hasSameOriginForMutation(req("DELETE", { host: "192.168.1.5:8787", referer: "http://evil.example.com/page" })), false);
   assert.equal(hasSameOriginForMutation(req("DELETE", { host: "192.168.1.5:8787", referer: "http://192.168.1.5:8787/" })), true);
 });
+
+/**
+ * The dashboard's whole client is one big inline <script> inside a TypeScript template
+ * literal, so `tsc` never looks at it: a stray backtick or an unescaped `${` compiles
+ * cleanly and then breaks the page in the browser, silently, for everyone. This is the
+ * cheapest possible guard — it parses the script the server actually serves.
+ */
+test("the dashboard's inline script is syntactically valid JavaScript", async () => {
+  const { Script } = await import("node:vm");
+  const { GATE_PAGE, PAGE } = await import("./views.js");
+  for (const [name, page] of [["PAGE", PAGE], ["GATE_PAGE", GATE_PAGE]] as const) {
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    for (const [i, source] of scripts.entries()) {
+      assert.doesNotThrow(() => new Script(source, { filename: `${name}-script-${i}.js` }), `${name} inline script ${i} does not parse`);
+    }
+  }
+});

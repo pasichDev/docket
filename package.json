@@ -37,7 +37,8 @@
   "files": [
     "dist",
     "!dist/**/*.test.js",
-    "skills"
+    "skills",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "access": "public"
@@ -52,7 +53,7 @@
     "web": "node dist/web.js",
     "stats": "node dist/stats.js",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js",
+    "test": "npm run build && DOCKET_DATA_DIR=\"${DOCKET_TEST_DATA_DIR:-$(mktemp -d)}\" node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js dist/hooks/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

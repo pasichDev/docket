@@ -119,21 +119,28 @@ export function peerFingerprint(publicKeyX: string): string {
 }
 
 /**
- * `cursor` should be the PEER's own clock (the `serverTime` it reported in the
- * sync response), not ours — using our local clock here would silently miss
- * updates whenever the two machines' clocks disagree (see sync.ts).
+ * `lastSeq` is the delivery cursor: a point in the PEER's own localSeq space, advanced only
+ * as far as what was actually merged (see pullFromPeer). `cursor` is the peer's reported
+ * clock, kept only so the UI can say "synced 4m ago" — it stopped being a cursor in v8,
+ * because a wall-clock cursor is what let a third device's edits vanish.
+ *
+ * `error` is honoured even when `ok` is true: a sync can genuinely succeed and still be
+ * degraded (a peer stuck on sync protocol v1). Recording that as a failure would be a lie;
+ * dropping it silently is the exact habit v3.0 exists to break.
  */
 export async function markPeerSynced(
   id: string,
   ok: boolean,
-  details: { cursor?: string; error?: string; protocolVersion?: number; clockSkewMs?: number } = {},
+  details: { cursor?: string; lastSeq?: number; epoch?: string; error?: string; protocolVersion?: number; clockSkewMs?: number } = {},
 ): Promise<void> {
   await withPeers((peers) => {
     const peer = peers.find((p) => p.id === id);
     if (!peer) return;
     if (ok && details.cursor) peer.lastSyncAt = details.cursor;
+    if (ok && details.lastSeq !== undefined) peer.lastSeq = details.lastSeq;
+    if (ok && details.epoch !== undefined) peer.epoch = details.epoch;
     peer.lastSyncOk = ok;
-    peer.lastError = ok ? null : (details.error ?? "unknown error");
+    peer.lastError = details.error ?? (ok ? null : "unknown error");
     if (details.protocolVersion !== undefined) peer.protocolVersion = details.protocolVersion;
     if (details.clockSkewMs !== undefined) peer.clockSkewMs = details.clockSkewMs;
   });

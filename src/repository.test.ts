@@ -166,7 +166,7 @@ test("LocalTodoRepository.edit: applies the patch and bumps revision", async () 
   assert.equal(edited.revision, created.revision + 1);
 });
 
-test("LocalTodoRepository.complete/release/claim: bump revision on every mutation, same as touch() always has", async () => {
+test("LocalTodoRepository.complete/release/claim: bump revision on every mutation, same as touch(store, ) always has", async () => {
   const repo = new LocalTodoRepository();
   const created = await repo.create({ title: "Task" }, context());
 
@@ -182,7 +182,7 @@ test("LocalTodoRepository.complete/release/claim: bump revision on every mutatio
   assert.equal(completed.revision, released.revision + 1);
 });
 
-test("LocalTodoRepository.claim: reports the previous claimant it took over, same as claimTodo()", async () => {
+test("LocalTodoRepository.claim: reports the previous claimant it took over, same as claimTodo(store, )", async () => {
   const repo = new LocalTodoRepository();
   const created = await repo.create({ title: "Contested" }, context());
   await repo.claim(created.id, context({ agent: "codex" }));
@@ -230,6 +230,8 @@ test("LocalTodoRepository: every mutating method throws TodoNotFoundError for an
 function todo(overrides: Partial<Todo>): Todo {
   return {
     id: 1,
+    localSeq: 1,
+    workspace: null,
     uuid: "u1",
     title: "x",
     description: null,

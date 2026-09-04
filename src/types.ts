@@ -43,13 +43,29 @@ export interface Todo {
   deviceName: string | null;
   /** Append-only audit log: every create/edit/claim/release/complete, by whom (agent, including "web" for manual UI edits). */
   history: HistoryEntry[];
+  /** Monotonic per-device counter, bumped on EVERY local write to this record — including
+   *  accepting a peer's change during merge. This is the delivery cursor; `updatedAt` is the
+   *  merge resolver. Never mix the two: `updatedAt` describes when the AUTHOR changed the
+   *  record and travels between devices, so a merged record lands in the past and slips
+   *  underneath a third peer's cursor. `localSeq` is meaningful only in the store that
+   *  assigned it and is re-stamped on arrival, never copied off the wire. */
+  localSeq: number;
+  /** Which project/context this item belongs to (see src/workspace.ts). A stable slug,
+   *  resolved from the git remote where possible so the same repo cloned to different paths
+   *  on two machines lands in ONE workspace — which only matters because sync exists.
+   *  Null for pre-v8 items and for anything created with no project context (a bare
+   *  Claude Desktop session, say); nulls stay visible rather than being guessed at. */
+  workspace: string | null;
 }
 
-/** A deletion, recorded so a paired device doesn't resurrect the item on next sync. Pruned after RETENTION (see sync.ts). */
+/** A deletion, recorded so a paired device doesn't resurrect the item on next sync. Kept indefinitely, never purged by age — see the note at the end of mergeSyncPayload in sync.ts for why age-based GC would resurrect deletions. */
 export interface Tombstone {
   uuid: string;
   deletedAt: string;
   deviceId: string | null;
+  /** Same delivery cursor as Todo.localSeq — tombstones page off the same sequence space,
+   *  so a deletion can't be skipped by a cursor that advanced past it. */
+  localSeq: number;
 }
 
 /**
@@ -64,7 +80,17 @@ export interface Peer {
   url: string;
   secret: string;
   pairedAt: string;
+  /** Display only ("last synced 4m ago") since v3.0 — NOT a cursor. Delivery is tracked by
+   *  `lastSeq` below; a wall-clock cursor is what made a third device's edits vanish. */
   lastSyncAt: string | null;
+  /** How far into this peer's OWN localSeq space we have merged. Advances only to what was
+   *  actually merged, never to "wherever the peer is now". Absent on peers paired before v3.0
+   *  and on peers still speaking sync protocol v1, both treated as 0 (full re-sync). */
+  lastSeq?: number;
+  /** Which incarnation of the peer's store `lastSeq` counts in. When the peer reports a
+   *  different one — it restored a backup, so its counter went backwards — the cursor is
+   *  meaningless and resets to 0. Absent until the first sync with a v3.0 peer. */
+  epoch?: string;
   lastSyncOk: boolean;
   /** Explicitly blocks sync without losing the pairing/secret — see peers.ts revokePeer/restorePeer. Absent on records from before this field existed, treated as false. */
   revoked?: boolean;
@@ -86,4 +112,8 @@ export interface TodoStore {
   todos: Todo[];
   /** Deletions from this device or merged in from a peer, for tombstone-based sync. */
   deletedUuids: Tombstone[];
+  /** High-water mark for `localSeq` on this device. Never decreases, never resets — a peer's
+   *  cursor into this store is a number from this counter, so reusing one would silently
+   *  hide the record that got the duplicate. */
+  seqCounter: number;
 }

@@ -8,7 +8,7 @@ import { removePeer } from "../peers.js";
 import { migrateLegacyFields, withStore } from "../storage.js";
 import { syncAllPeers } from "../sync.js";
 import { loadViewers, touchViewer } from "../viewers.js";
-import { handleApiRoute, json, removePeerAndMaybeRevertRole, SECURITY_HEADERS, type ApiContext } from "./api.js";
+import { BadRequestError, handleApiRoute, json, removePeerAndMaybeRevertRole, SECURITY_HEADERS, type ApiContext } from "./api.js";
 import { GATE_PAGE, PAGE } from "./views.js";
 
 installProcessLogging("web");
@@ -154,6 +154,8 @@ const BROWSER_PROTECTED_PATHS = [
   /^\/api\/todos(\/|$)/,
   /^\/api\/peers(\/|$)/,
   /^\/api\/presence$/,
+  /^\/api\/sessions$/,
+  /^\/api\/hook\//,
   /^\/api\/pair\/invite$/,
   /^\/api\/pair\/incoming$/,
   /^\/api\/pair\/redeem$/,
@@ -227,6 +229,13 @@ export async function createWebServer(): Promise<Server> {
 
       json(res, 404, { error: "not found" });
     } catch (err) {
+      // A caller's own malformed request is a 4xx. Only genuine server faults get a 500 and
+      // a stack trace in the log — otherwise the log fills with other people's typos and a
+      // real fault is harder to find, not easier.
+      if (err instanceof BadRequestError) {
+        json(res, 400, { error: err.message });
+        return;
+      }
       log(`web request error: ${(err as Error).stack ?? (err as Error).message}`);
       json(res, 500, { error: (err as Error).message });
     }

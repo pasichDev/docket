@@ -10,6 +10,7 @@ import {
   type NewTodoInput,
   type TodoPatch,
 } from "./mutations.js";
+import { fullHistoryFor } from "./history-store.js";
 import { findTodoByAnyId, readStore, withStore, withTodo } from "./storage.js";
 import type { Todo, TodoList } from "./types.js";
 
@@ -23,6 +24,20 @@ export interface TodoQuery {
   agent?: string;
   session?: string;
   inProgress?: boolean;
+  /**
+   * Project scope:
+   *  - omitted → no restriction at all (what the web UI's own unfiltered list wants);
+   *  - `"*"`   → everything, said explicitly;
+   *  - a slug  → that workspace PLUS unfiled items. The unfiled items ride along
+   *              deliberately: they are legacy or context-free, and dropping them would make
+   *              an agent's default list quietly HIDE work rather than scope it.
+   *
+   * There is deliberately no "only unfiled" value. The dashboard's Unfiled view filters the
+   * list it already holds, so adding one would be a fourth meaning on a shared field with no
+   * caller — and the first real need ("these two projects", "this one without unfiled")
+   * should split this into two fields rather than invent a fifth magic string.
+   */
+  workspace?: string | "*";
 }
 
 /**
@@ -36,6 +51,13 @@ export interface MutationContext {
   session: string | null;
   deviceId: string;
   deviceName: string;
+  /**
+   * The project this caller is working in, derived (never asked for) — see src/workspace.ts.
+   * Optional because not every caller has a project context: the web UI is one shared
+   * dashboard, not a checkout, so its items are genuinely unfiled unless a workspace is
+   * chosen in the switcher.
+   */
+  workspace?: string | null;
 }
 
 export type CreateTodoInput = Omit<NewTodoInput, "agent" | "session">;
@@ -149,6 +171,7 @@ export function filterTodos(todos: Todo[], query: TodoQuery): Todo[] {
     if (query.agent && todo.agent !== query.agent) return false;
     if (query.session && todo.session !== query.session) return false;
     if (query.inProgress && !isClaimActive(todo)) return false;
+    if (query.workspace && query.workspace !== "*" && todo.workspace !== query.workspace && todo.workspace !== null) return false;
     return true;
   });
 }
@@ -188,23 +211,36 @@ export class LocalTodoRepository implements TodoRepository {
 
   create(input: CreateTodoInput, context: MutationContext): Promise<Todo> {
     return withStore((store) =>
-      createTodo(store, { ...input, agent: context.agent, session: context.session }, context.deviceId, context.deviceName),
+      createTodo(
+        store,
+        {
+          ...input,
+          agent: context.agent,
+          session: context.session,
+          // An explicit workspace on the input wins; otherwise the caller's own project is
+          // stamped automatically. Nothing an agent has to remember to type, which is the
+          // only way this field gets filled in reliably.
+          workspace: input.workspace !== undefined ? input.workspace : (context.workspace ?? null),
+        },
+        context.deviceId,
+        context.deviceName,
+      ),
     );
   }
 
   async edit(id: TodoId, input: EditTodoInput, context: MutationContext, expectedRevision?: number): Promise<Todo> {
-    const todo = await withTodo(id, (item) => {
+    const todo = await withTodo(id, (item, store) => {
       checkRevision(item, expectedRevision);
-      applyEdits(item, input, context.agent, context.deviceId, context.deviceName);
+      applyEdits(store, item, input, context.agent, context.deviceId, context.deviceName);
     });
     if (!todo) throw new TodoNotFoundError(id);
     return todo;
   }
 
   async complete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo> {
-    const todo = await withTodo(id, (item) => {
+    const todo = await withTodo(id, (item, store) => {
       checkRevision(item, expectedRevision);
-      completeTodo(item, context.agent, context.deviceId, context.deviceName);
+      completeTodo(store, item, context.agent, context.deviceId, context.deviceName);
     });
     if (!todo) throw new TodoNotFoundError(id);
     return todo;
@@ -236,7 +272,7 @@ export class LocalTodoRepository implements TodoRepository {
       if (options?.requireFree && activeHolderDeviceId && activeHolderDeviceId !== context.deviceId && !options.force) {
         throw new TodoClaimConflictError(structuredClone(item));
       }
-      const previousAgent = claimTodo(item, context.agent, context.session, context.deviceId, context.deviceName);
+      const previousAgent = claimTodo(store, item, context.agent, context.session, context.deviceId, context.deviceName);
       return { item, previousAgent };
     });
     if (!claimed) throw new TodoNotFoundError(id);
@@ -244,9 +280,9 @@ export class LocalTodoRepository implements TodoRepository {
   }
 
   async release(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo> {
-    const todo = await withTodo(id, (item) => {
+    const todo = await withTodo(id, (item, store) => {
       checkRevision(item, expectedRevision);
-      releaseTodo(item, context.agent, context.deviceId, context.deviceName);
+      releaseTodo(store, item, context.agent, context.deviceId, context.deviceName);
     });
     if (!todo) throw new TodoNotFoundError(id);
     return todo;
@@ -256,7 +292,9 @@ export class LocalTodoRepository implements TodoRepository {
     const store = await readStore();
     const item = findTodoByAnyId(store, id);
     if (!item) throw new TodoNotFoundError(id);
-    return item.history;
+    // The item itself carries only the inline preview; the rest is in history.json.enc.
+    // This is the one read path that pays for opening it, which is the point of the split.
+    return fullHistoryFor(item.uuid, item.history);
   }
 
   async health(): Promise<RepositoryHealth> {

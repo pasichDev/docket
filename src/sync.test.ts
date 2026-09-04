@@ -3,14 +3,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createTodo, touch } from "./mutations.js";
+import { createTodo, tombstoneDelete, touch } from "./mutations.js";
 import type { Todo, TodoStore } from "./types.js";
 
 const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-sync-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
 const {
+  checkPairingRateLimit,
   confirmProof,
+  createInvite,
+  generateShortCode,
+  redeemInvite,
   decryptSyncPayload,
   encryptSyncPayload,
   isSyncProtocolCompatible,
@@ -30,7 +34,7 @@ test.after(() => {
 });
 
 function emptyStore(): TodoStore {
-  return { formatVersion: 5, nextId: 1, todos: [], deletedUuids: [] };
+  return { formatVersion: 8, nextId: 1, todos: [], deletedUuids: [], seqCounter: 0 };
 }
 
 function payloadFrom(todos: Todo[]): SyncPayload {
@@ -64,13 +68,15 @@ test("mergeSyncPayload: two independent edits to DIFFERENT fields both survive (
   await new Promise((r) => setTimeout(r, 2));
   const localItem = local.todos[0];
   localItem.priority = "high";
-  touch(localItem, "device-a", "A", ["priority"]);
+  touch(local, localItem, "device-a", "A", ["priority"]);
 
   // Remote (device B) side: same base item, edits description instead — after A's edit.
   await new Promise((r) => setTimeout(r, 2));
+  const remote = emptyStore();
   const remoteItem = structuredClone(base);
+  remote.todos = [remoteItem];
   remoteItem.description = "added on B";
-  touch(remoteItem, "device-b", "B", ["description"]);
+  touch(remote, remoteItem, "device-b", "B", ["description"]);
 
   const result = mergeSyncPayload(local, payloadFrom([remoteItem]), "device-b");
   assert.equal(result.updated, 1);
@@ -86,12 +92,14 @@ test("mergeSyncPayload: a genuine same-field conflict (both sides independently 
   local.todos = [structuredClone(base)];
   await new Promise((r) => setTimeout(r, 2));
   local.todos[0].title = "Local edit";
-  touch(local.todos[0], "device-a", "A", ["title"]);
+  touch(local, local.todos[0], "device-a", "A", ["title"]);
 
   await new Promise((r) => setTimeout(r, 2));
+  const remote = emptyStore();
   const remoteItem = structuredClone(base);
+  remote.todos = [remoteItem];
   remoteItem.title = "Remote edit";
-  touch(remoteItem, "device-b", "RemoteBox", ["title"]);
+  touch(remote, remoteItem, "device-b", "RemoteBox", ["title"]);
 
   mergeSyncPayload(local, payloadFrom([remoteItem]), "device-b");
   assert.equal(local.todos[0].title, "Remote edit", "the newer (remote) edit should win the conflict");
@@ -108,9 +116,11 @@ test("mergeSyncPayload: adopting a field the local side never touched is NOT rec
   const local = emptyStore();
   local.todos = [structuredClone(base)]; // local never edits description
 
+  const remote = emptyStore();
   const remoteItem = structuredClone(base);
+  remote.todos = [remoteItem];
   remoteItem.description = "added on B";
-  touch(remoteItem, "device-b", "B", ["description"]);
+  touch(remote, remoteItem, "device-b", "B", ["description"]);
 
   mergeSyncPayload(local, payloadFrom([remoteItem]), "device-b");
   assert.equal(local.todos[0].description, "added on B");
@@ -124,7 +134,7 @@ test("mergeSyncPayload: a field last-touched more recently locally is NOT overwr
   const local = emptyStore();
   local.todos = [structuredClone(base)];
   await new Promise((r) => setTimeout(r, 5));
-  touch(local.todos[0], "device-a", "A", ["title"]);
+  touch(local, local.todos[0], "device-a", "A", ["title"]);
   local.todos[0].title = "Edited locally, later";
 
   // Remote's copy is the OLD version (its title field was never touched after creation).
@@ -170,7 +180,7 @@ test("mergeSyncPayload: a remote tombstone deletes a local item that hasn't chan
 
   const tombstonePayload: SyncPayload = {
     todos: [],
-    deletedUuids: [{ uuid: item.uuid, deletedAt: new Date(Date.now() + 1000).toISOString(), deviceId: "device-b" }],
+    deletedUuids: [{ uuid: item.uuid, deletedAt: new Date(Date.now() + 1000).toISOString(), deviceId: "device-b", localSeq: 1 }],
     serverTime: new Date().toISOString(),
     protocolVersion: 1,
   };
@@ -181,7 +191,7 @@ test("mergeSyncPayload: a remote tombstone deletes a local item that hasn't chan
 
 test("mergeSyncPayload: a tombstone months old is NOT purged (regression: a long-offline peer must still see it and not resurrect the item)", () => {
   const local = emptyStore();
-  const veryOldTombstone = { uuid: "some-uuid", deletedAt: new Date(Date.now() - 200 * 24 * 60 * 60_000).toISOString(), deviceId: "device-a" };
+  const veryOldTombstone = { uuid: "some-uuid", deletedAt: new Date(Date.now() - 200 * 24 * 60 * 60_000).toISOString(), deviceId: "device-a", localSeq: 1 };
   local.deletedUuids = [veryOldTombstone];
   mergeSyncPayload(local, payloadFrom([]), "device-b"); // an unrelated merge shouldn't sweep old tombstones as a side effect
   assert.deepEqual(local.deletedUuids, [veryOldTombstone]);
@@ -189,7 +199,7 @@ test("mergeSyncPayload: a tombstone months old is NOT purged (regression: a long
 
 test("mergeSyncPayload: an edit AFTER a peer's delete resurrects the item (edit-after-delete wins)", () => {
   const local = emptyStore();
-  local.deletedUuids = [{ uuid: "some-uuid", deletedAt: "2020-01-01T00:00:00.000Z", deviceId: "device-a" }];
+  local.deletedUuids = [{ uuid: "some-uuid", deletedAt: "2020-01-01T00:00:00.000Z", deviceId: "device-a", localSeq: 1 }];
 
   const remoteItem: Todo = {
     id: 1,
@@ -212,6 +222,8 @@ test("mergeSyncPayload: an edit AFTER a peer's delete resurrects the item (edit-
     createdAt: "2020-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z", // long after the tombstone
     revision: 1,
+    localSeq: 1,
+    workspace: null,
     fieldTimestamps: {},
     completedAt: null,
     deviceId: "device-b",
@@ -362,4 +374,117 @@ test("isSyncProtocolCompatible: the current minimum version and anything newer a
 
 test("isSyncProtocolCompatible: a version below the minimum is rejected", () => {
   assert.equal(isSyncProtocolCompatible(MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION - 1), false);
+});
+
+// --- Boundaries the mutation sweep found unguarded ---------------------------------------
+
+test("verifySyncRequest: the replay window is exclusive at its edge, and a request just outside is refused", () => {
+  // Killed mutant: `Math.abs(now - ts) > SIGNATURE_WINDOW_MS` → `>=`. This is the replay
+  // guard: a captured request must stop being accepted once it is older than the window,
+  // and the boundary is the only interesting part of a comparison like this.
+  const secret = "a".repeat(64);
+  const sign = (timestamp: string) => signSyncRequest(secret, "device-a", "0", timestamp);
+
+  const now = Date.now();
+  const justInside = new Date(now - (2 * 60_000 - 2_000)).toISOString();
+  assert.equal(verifySyncRequest(secret, "device-a", "0", justInside, sign(justInside)), true, "a fresh request was refused");
+
+  const wellOutside = new Date(now - 10 * 60_000).toISOString();
+  assert.equal(verifySyncRequest(secret, "device-a", "0", wellOutside, sign(wellOutside)), false, "a stale request was replayable");
+
+  const fromTheFuture = new Date(now + 10 * 60_000).toISOString();
+  assert.equal(verifySyncRequest(secret, "device-a", "0", fromTheFuture, sign(fromTheFuture)), false, "the window must be two-sided");
+
+  assert.equal(verifySyncRequest(secret, "device-a", "0", "not-a-timestamp", sign("not-a-timestamp")), false);
+});
+
+test("checkPairingRateLimit: allows exactly the documented number of attempts, then refuses", () => {
+  // Killed mutants: `entry.count <= PAIR_RATE_LIMIT` → `<`, and the window comparisons.
+  // This is what makes the 6-character pairing code impractical to brute-force; an
+  // off-by-one either locks out a legitimate retry or widens the attack by one guess a
+  // window, and nothing else in the suite pins the number.
+  const ip = `10.0.0.${Math.floor(Math.random() * 200) + 1}`;
+  const allowed: boolean[] = [];
+  for (let i = 0; i < 10; i++) allowed.push(checkPairingRateLimit(ip));
+
+  assert.deepEqual(allowed.slice(0, 8), Array(8).fill(true), "a legitimate run of attempts was cut short");
+  assert.deepEqual(allowed.slice(8), [false, false], "attempts past the limit were still allowed");
+});
+
+test("checkPairingRateLimit: a different source address has its own budget", () => {
+  const a = `10.1.0.${Math.floor(Math.random() * 200) + 1}`;
+  const b = `10.2.0.${Math.floor(Math.random() * 200) + 1}`;
+  for (let i = 0; i < 9; i++) checkPairingRateLimit(a);
+  assert.equal(checkPairingRateLimit(a), false, "precondition: the first address is now blocked");
+  assert.equal(checkPairingRateLimit(b), true, "one attacker must not lock out everyone else");
+});
+
+test("redeemInvite: a token is one-time, and an unknown token is refused", () => {
+  // Killed mutants around the invite's expiry comparison. A token that survives redemption
+  // is a token that can be replayed by anyone who saw it over the shoulder.
+  const { token } = createInvite();
+  assert.equal(redeemInvite(token), true);
+  assert.equal(redeemInvite(token), false, "the invite was redeemable twice");
+  assert.equal(redeemInvite("ZZZZZZ"), false);
+  assert.equal(redeemInvite(token.toLowerCase()), false, "a consumed token must stay consumed however it is cased");
+});
+
+test("mergeSyncPayload: a tombstone identical to the one we hold is not re-adopted", () => {
+  // Killed mutant: `remoteTomb.deletedAt > existingTombstone.deletedAt` → `>=`. Adopting an
+  // identical tombstone stamps a fresh sequence number for no change at all, which makes
+  // two peers re-notify each other about the same deletion forever.
+  const store = emptyStore();
+  const item = createTodo(store, { title: "doomed", agent: null, session: null }, "device-a", "A");
+  tombstoneDelete(store, item, "device-a");
+  const tombstone = { ...store.deletedUuids[0] };
+  const counterBefore = store.seqCounter;
+
+  mergeSyncPayload(store, { todos: [], deletedUuids: [tombstone], serverTime: new Date().toISOString(), protocolVersion: 2 }, "peer");
+  assert.equal(store.seqCounter, counterBefore, "re-receiving our own tombstone burned a sequence number");
+  assert.equal(store.deletedUuids.length, 1, "and duplicated it");
+});
+
+test("generateShortCode: the pairing code has the length and charset the brute-force argument depends on", () => {
+  // Killed mutant: `CODE_LENGTH = 6` → anything else. Six characters from a 32-symbol
+  // unambiguous set is ~1.07e9 combinations; together with the 5-minute single-use TTL and
+  // the rate limit above, that is the whole reason a pairing code is safe to read aloud.
+  // Change either half and the argument stops holding, silently.
+  const codes = Array.from({ length: 200 }, () => generateShortCode());
+  for (const code of codes) {
+    assert.equal(code.length, 6, `pairing code "${code}" is not 6 characters`);
+    assert.match(code, /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/, `"${code}" uses characters outside the unambiguous set`);
+  }
+  // 0/O and 1/I/L are excluded because a human reads this across a room; if they reappear,
+  // the code is harder to transcribe rather than more secure.
+  assert.ok(!codes.join("").match(/[01OIL]/), "an easily-misread character entered the charset");
+  assert.ok(new Set(codes).size > 190, "codes are not being drawn from the space randomly");
+});
+
+test("mergeSyncPayload: a tombstone stamped at exactly the item's updatedAt still deletes it", () => {
+  // Killed mutant: `local.updatedAt <= effective.deletedAt` → `<`.
+  //
+  // Two places decide the same tie and MUST agree: this one applies an incoming deletion,
+  // and the todos loop above refuses to re-insert an item its tombstone covers
+  // (`tombstone.deletedAt >= remote.updatedAt`). Both give an exact tie to the tombstone. If
+  // only one flips, the same record is deleted by one path and resurrected by the other on
+  // every tick — the item flickers in and out of the list forever instead of settling.
+  const store = emptyStore();
+  const item = createTodo(store, { title: "tie", agent: null, session: null }, "device-a", "A");
+  const exactTie = item.updatedAt;
+
+  const result = mergeSyncPayload(
+    store,
+    { todos: [], deletedUuids: [{ uuid: item.uuid, deletedAt: exactTie, deviceId: "device-b", localSeq: 1 }], serverTime: new Date().toISOString(), protocolVersion: 2 },
+    "device-b",
+  );
+  assert.equal(result.deleted, 1, "a deletion at the same instant as the last edit must win the tie");
+  assert.equal(store.todos.length, 0);
+
+  // ...and the other half of the rule: the peer re-sending that same item must not undo it.
+  mergeSyncPayload(
+    store,
+    { todos: [structuredClone(item)], deletedUuids: [], serverTime: new Date().toISOString(), protocolVersion: 2 },
+    "device-b",
+  );
+  assert.equal(store.todos.length, 0, "the item came back — the two tie rules disagree and it will flicker forever");
 });

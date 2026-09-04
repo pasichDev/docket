@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync }
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getDataDirectory } from "./data-dir.js";
+import { resetStoreEpoch } from "./storage.js";
 
 // Everything a fresh machine needs to become this device again: its identity (so paired
 // peers keep recognizing it — a NEW identity would look like a brand-new, unpaired device
@@ -9,7 +10,7 @@ import { getDataDirectory } from "./data-dir.js";
 // themselves. Deliberately NOT re-decrypting todos/peers first — the backup stays exactly
 // as sensitive as the live data directory either way, and re-encrypting a copy would be
 // pure extra risk (a second place a bug could leak plaintext) for no benefit.
-const BACKUP_FILES = ["device.json", "key", "todos.json.enc", "peers.json.enc", "viewers.json.enc"];
+const BACKUP_FILES = ["device.json", "key", "todos.json.enc", "history.json.enc", "peers.json.enc", "viewers.json.enc"];
 const MAGIC = "docket-backup-v1";
 // RFC 7914's own "interactive login" recommendation (N=2^14, r=8, p=1) — strong enough to
 // meaningfully slow down offline password guessing against a stolen backup file, while
@@ -118,5 +119,10 @@ export async function restoreBackup(buf: Buffer, password: string): Promise<{ re
     await rename(tmpPath, targetPath);
     restoredFiles.push(name);
   }
+  // The restored store is a different incarnation from the one paired devices were reading:
+  // its sequence counter has gone backwards, so every cursor they hold points past records
+  // they have never seen. Re-minting the epoch is what makes them notice and re-sync. One
+  // plaintext write, so this path still never decrypts anything (see the note above).
+  await resetStoreEpoch();
   return { restoredFiles };
 }

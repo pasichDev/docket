@@ -3,7 +3,9 @@ import { getDataDirectory } from "./data-dir.js";
 import { getDeviceId, getDeviceName } from "./device.js";
 import { loadPeers } from "./peers.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
+import { listSessions } from "./sessions.js";
 import { signedGet } from "./remote/signed-fetch.js";
+import { resolveWorkspace } from "./workspace.js";
 
 /**
  * `docket status` (RFC "Local and Self-Hosted Backend Modes" §24/§33, Implementation
@@ -29,9 +31,17 @@ async function runLocalStatus(): Promise<void> {
   const peers = await loadPeers();
   const activePeers = peers.filter((p) => !p.revoked).length;
 
+  const { workspace, source, root } = await resolveWorkspace(process.cwd());
+  const sessions = await listSessions();
+
   console.log(`Mode: local`);
   console.log(`Store: ${dataDir}`);
   console.log(`Web: http://localhost:${webPort}${webUp ? "" : " (not running)"}`);
+  // Which project THIS directory resolves to, and why. The failure mode of workspace
+  // scoping is silent — items land somewhere you never look — so the answer has to be
+  // available without reading a log.
+  console.log(`Workspace: ${workspace ?? "(unfiled)"} via ${source}${root ? ` at ${root}` : ""}`);
+  console.log(`Sessions: ${sessions.length} open`);
   console.log(`Peers: ${activePeers}`);
 }
 
