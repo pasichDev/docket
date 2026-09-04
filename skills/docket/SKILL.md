@@ -1,14 +1,30 @@
 ---
-name: docket-claim
-description: Use whenever adding, editing, or working an item tracked in docket (the shared todo_add/todo_edit/todo_list/todo_claim MCP tools) — set the fields the tools actually support (title + optional description, category, priority, dueDate), and claim/release around substantive work so other agents/sessions sharing the same list see what's in progress.
+name: docket
+description: Full field and tool reference for docket — the shared list every AI tool and project writes to. Load when you need more than todo_add/todo_list already tell you: the exact fields, workspace scoping, the claim workflow, or how items graduate to Notion/GitLab/Obsidian via sourceUrl.
 ---
 
-# docket: full tool surface + claim workflow
+# docket: full tool surface
 
-docket is a shared backlog/todo list across multiple AI clients (Claude
-Code, Warp, Codex, or any other MCP host) and multiple concurrent sessions,
-with a web UI (default `http://localhost:8787`). Use the fields the tools
-support — don't just dump everything into one string.
+docket is one list that every AI client you use (Claude Code, Codex, Cursor,
+Warp, or any other MCP host) and every project writes to, with a web UI at
+`http://localhost:8787`. Use the fields the tools support — don't dump
+everything into one string.
+
+## Workspaces (you never type these)
+
+Every item is filed under a project automatically, resolved from the git
+remote of the directory the session is running in. You do not pass
+`workspace` and should not try to.
+
+- `todo_list` defaults to **this project plus unfiled items**. When it has
+  scoped the results it says so on one line.
+- `todo_list(workspace: "*")` — every project.
+- `todo_list(workspace: "acme/backend")` — one named project.
+- Ids are global. An id from another project still resolves; the item shows
+  `@its-workspace` so you know where it actually lives.
+
+See `docs/workspaces.md` for the resolution order and the `.docket.json`
+override.
 
 ## Fields (todo_add / todo_edit)
 
@@ -33,9 +49,12 @@ support — don't just dump everything into one string.
 - `todo_edit(id, ...)` changes only the fields you pass; pass `""` to clear
   description/category/priority/dueDate/sourceUrl.
 
-Use `todo_list(filter, list, category, agent, session, inProgress, limit,
-offset)` to query — it supports filtering by all of the above, not just
-open/done, plus pagination for large lists.
+Use `todo_list(filter, list, category, agent, session, inProgress, workspace,
+limit, offset)` to query — it supports filtering by all of the above, not
+just open/done, plus pagination for large lists. Output is **compact by
+default**: one line per item, `T-XK2P9  fix token refresh race  [high]  ←
+codex`. Pass `verbose: true` only when you actually need descriptions and
+provenance — the compact form is what keeps this affordable to call often.
 
 Other tools you have: `todo_history(id)` — full change log for one item, who
 did what and when. `todo_delete(id)` — permanently remove an item (destructive,
@@ -69,3 +88,11 @@ duplicate effort across the shared clients/sessions.
 - Quick one-off adds/completes that aren't "picking up a backlog item to work
   through" — no need to claim something you're completing in the same breath.
 - Read-only browsing of the list.
+
+## Graduating an item
+
+docket is the fast layer *under* Notion, GitLab, Obsidian and GitHub — not a
+replacement for them. An item that turns out to matter gets written up
+properly in whichever of those owns that kind of work, and `sourceUrl` is
+the link back. Items are meant to leave; a list that only grows is a list
+nobody reads.

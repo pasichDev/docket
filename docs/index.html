@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Docket — one workspace for every AI coding agent</title>
-<meta name="description" content="A shared workspace for Claude Code, Claude Desktop, Cursor, Windsurf, Warp and Codex — claim tracking, full history, a web dashboard, encrypted storage. Run it locally, or self-host it on your own always-on machine. No SaaS account required." />
+<title>Docket — one list every AI tool can write to</title>
+<meta name="description" content="One list every AI tool you use can write to — Claude Code, Codex, Cursor, Warp — across every project, before the work is worth a ticket. Items file under the current project automatically. Local-first, self-hostable, no SaaS account." />
 <link rel="icon" href="data:," />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap">
 <style>
@@ -155,11 +155,12 @@
 </nav>
 
 <div class="hero wrap">
-  <h1>One shared workspace for your AI coding agents.</h1>
+  <h1>One list every AI tool you use can write to.</h1>
   <p class="tagline">
-    Local-first and self-hostable. Claude Code, Claude Desktop, Cursor,
-    Windsurf, Warp, Codex — add an item in one, see it in all of them, plus a
-    web dashboard and your phone. No SaaS account required, either way.
+    Claude Code, Codex, Cursor, Warp — across every project, before the work is
+    worth a ticket. Items file under the current project automatically, so one
+    list stays readable even when three projects and a dozen terminals feed it.
+    Local-first, self-hostable, no SaaS account.
   </p>
   <div class="badges">
     <img src="https://img.shields.io/npm/v/%40pasichdev%2Fdocket.svg" alt="npm version" />
@@ -176,8 +177,20 @@
 </div>
 
 <section id="demo" class="wrap">
-  <h2 class="section-title">See it in action</h2>
-  <p class="section-sub">The web dashboard starts itself the moment your MCP client first uses the server — nothing to run by hand.</p>
+  <h2 class="section-title">One list, many projects</h2>
+  <p class="section-sub">Every item is filed under the project it was captured in — resolved from the git remote, so the same repo on your laptop and your desktop is one project, not two. The dashboard switches between them; agents see only the one they're standing in. It starts itself the moment your MCP client first uses the server.</p>
+  <div class="flow" style="margin-bottom:26px;">
+    <div class="flow-stack">
+      <div class="flow-box"><div class="label">~/work/backend</div><div class="sub">claude-code, codex</div></div>
+      <div class="flow-box"><div class="label">~/side/tracker</div><div class="sub">claude-code</div></div>
+      <div class="flow-box"><div class="label">~/side/notes</div><div class="sub">codex, warp</div></div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box center"><div class="label">Docket</div><div class="sub">one list, three scopes</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box store"><div class="label">acme/backend</div><div class="sub">what this agent sees</div></div>
+  </div>
+  <p class="section-sub" style="margin-top:-6px;">The dashboard itself, in both themes:</p>
   <div class="demo-tabs">
     <button data-pane="dark" data-active="true">Dark</button>
     <button data-pane="light" data-active="false">Light</button>
@@ -196,28 +209,28 @@
 
 <section class="wrap">
   <h2 class="section-title">What it adds beyond "just a list"</h2>
-  <p class="section-sub">Built for people who run more than one AI tool, or more than one session, at once.</p>
+  <p class="section-sub">Built for one person running more than one AI tool, in more than one project, at once.</p>
   <div class="features">
     <div class="feature-card">
       <div class="icon" style="background:var(--sage-bg)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f7a50" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
       </div>
-      <h3>See who's doing what</h3>
-      <p>Claim an item before starting — other sessions see it's taken (live pulsing highlight) instead of duplicating the work.</p>
+      <h3>Scoped to your project</h3>
+      <p>Items file themselves under the project they were captured in. An agent in one repo never pulls two other projects' items into its context.</p>
     </div>
     <div class="feature-card">
       <div class="icon" style="background:var(--lavender-bg)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c4f9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v5h5"/></svg>
       </div>
-      <h3>Full history</h3>
-      <p>Not just a checkbox — every create/edit/claim/complete is logged with who and when, per item.</p>
+      <h3>See what's open, on arrival</h3>
+      <p>An optional Claude Code <code>SessionStart</code> hook injects what's open in this project — at most 7 items, under 120 tokens, nothing when there's nothing. It fails open: if docket is down, your session is unaffected.</p>
     </div>
     <div class="feature-card">
       <div class="icon" style="background:#fdeee0">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b8722f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h11"/></svg>
       </div>
-      <h3>Todo vs. backlog</h3>
-      <p>Keep near-term, actionable work separate from things you want to park without losing them.</p>
+      <h3>Bridges, not replaces</h3>
+      <p>Set <code>sourceUrl</code> and an item carries a link straight back to the GitLab issue, Notion page or Obsidian note it belongs to. Work lands here first, then graduates.</p>
     </div>
     <div class="feature-card">
       <div class="icon" style="background:#fbdcd6">
@@ -270,7 +283,8 @@
     <div class="flow-arrow">→</div>
     <div class="flow-box store"><div class="label">Authoritative store</div><div class="sub">your Pi / NAS / VPS</div></div>
   </div>
-  <p class="section-sub" style="margin-top:20px;">Every device is a thin, per-device-authenticated forwarder — there's no local writable copy, and the workspace stays up even when every laptop is off. <a href="#self-host">See how to set it up ↓</a></p>
+  <p class="section-sub" style="margin-top:20px;">Every device is a thin, per-device-authenticated forwarder — there's no local writable copy, and the list stays up even when every laptop is off. <a href="#self-host">See how to set it up ↓</a></p>
+  <p class="section-sub" style="margin-top:10px;"><strong>Claims are advisory in Local Mode</strong> (they can be taken over, and across P2P sync they can be up to one 15-second pull interval stale) and <strong>atomic in Self-hosted Mode</strong> (a racing claim gets a <code>409</code>, decided by one authority). P2P sync is deprecated in v3.0 for exactly that reason — it still works, and nothing is removed, but Self-hosted is the supported multi-machine path.</p>
 </section>
 
 <section id="install" class="wrap">
@@ -310,10 +324,14 @@
       <div class="num">5</div>
       <div class="body">
         <span class="optional">Optional</span>
-        <h3>Install the claim-tracking skill</h3>
-        <p>Teaches Claude Code to mark items in progress and check before duplicating work:</p>
-        <pre><code>/plugin marketplace add pasichDev/docket
-/plugin install docket-claim@docket</code></pre>
+        <h3>See what's open when a session starts</h3>
+        <p>Installs a Claude Code <code>SessionStart</code> hook (merged into your existing <code>.claude/settings.json</code>, never overwriting it), plus the field reference skill. The hook runs a command, so it wants docket on your <code>PATH</code> — it works without, pinned to this install, and says so:</p>
+        <pre><code>npm install -g @pasichdev/docket
+docket hook install
+docket hook doctor
+
+/plugin marketplace add pasichDev/docket
+/plugin install docket@docket</code></pre>
       </div>
     </div>
   </div>

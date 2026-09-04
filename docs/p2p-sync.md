@@ -1,5 +1,13 @@
 # P2P sync internals (Local Mode)
 
+> **Deprecated as of v3.0.** P2P sync still works in this release and nothing
+> has been removed. It is slated for removal, for one honest reason: peers pull
+> from each other on a **15-second interval**, so a claim made on one device is
+> up to a pull cycle stale everywhere else. That makes claims *advisory* across
+> P2P, and this mode therefore cannot deliver the atomic guarantee that
+> Self-hosted Mode can. **[Self-hosted Mode](self-hosting.md) is the supported
+> multi-machine path.** Migrate with `docket backend use <url>`.
+
 Pair a second computer (say, a desktop) and both keep the same list — useful
 if you work from more than one machine, entirely within **Local Mode**. This
 is off by default and stays off until you deliberately turn it on: nothing
