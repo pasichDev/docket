@@ -6,9 +6,10 @@ import { atomicCreateOrRead, atomicWriteFile } from "./fs-atomic.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { withFileLock, LeaseLostError, type Lease } from "./filelock.js";
 import { assertSameGeneration } from "./generation.js";
-import { flushOverflowHistory, pruneOrphanedHistory } from "./history-store.js";
+import { flushOverflowHistory, pruneOrphanedHistory, replaceHistoryLog } from "./history-store.js";
 import { log } from "./log.js";
 import { shortId, stampSeq } from "./mutations.js";
+import { applySnapshot, type SnapshotApplyResult, type WorkspaceSnapshot } from "./snapshot.js";
 import type { Todo, TodoStore } from "./types.js";
 import { uuidv7 } from "./uuid7.js";
 
@@ -329,6 +330,59 @@ export async function resetStoreEpoch(): Promise<void> {
   cachedEpoch = randomUUID();
   await atomicWriteFile(STORE_EPOCH_PATH, cachedEpoch);
   log(`storage: store epoch reset to ${cachedEpoch} — paired devices will re-sync from scratch`);
+}
+
+/**
+ * Replaces this device's whole store with a snapshot, and resets everything that was only
+ * true of the store being replaced.
+ *
+ * This exists because "bulk replace the todos" is never just that, and the version it
+ * replaces did only that — `backend localize` renamed todos.json.enc aside and re-created
+ * items through the normal mutation path, leaving three things pointing at a store that no
+ * longer existed:
+ *
+ *  - the history sidecar, keyed by uuid, now describing edits the new store does not
+ *    contain, attached to items that may not exist;
+ *  - the store epoch, unchanged, so every paired device believed its cursor into this store
+ *    was still valid — while the sequence space underneath had been rebuilt from 1. A peer
+ *    holding a cursor above the new high-water mark hears nothing from this device again,
+ *    for ever, while reporting successful syncs;
+ *  - this device's own cursors INTO its peers, which still claimed "I have everything up to
+ *    N" for records that had just been discarded, so the peers never re-sent them.
+ *
+ * Each of those is silent, and each survives a restart. Doing all of it in one function is
+ * the only way the next bulk-replacement caller gets them right by default.
+ */
+export async function replaceStoreSnapshot(snapshot: WorkspaceSnapshot): Promise<SnapshotApplyResult> {
+  const stamp = `pre-localize-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  return withFileLock(LOCK_PATH, async (lease) => {
+    const expected = await stampOf();
+    // Keep the outgoing store beside the new one rather than deleting it: a migration that
+    // turns out to have been a mistake has to be recoverable, and this is the only copy.
+    await copyFile(STORE_PATH, `${STORE_PATH}.${stamp}.bak`).catch(() => {});
+
+    const replacement: TodoStore = {
+      formatVersion: CURRENT_FORMAT_VERSION,
+      nextId: 1,
+      todos: [],
+      deletedUuids: [],
+      seqCounter: 0,
+    };
+    const result = applySnapshot(replacement, snapshot);
+    await saveStore(replacement, expected, lease);
+    await replaceHistoryLog(result.history, stamp);
+    return result;
+  }).then(async (result) => {
+    // Both of these are about OTHER devices' view of this one, so they happen after the
+    // store is durable and outside its lock — neither touches todos.json.enc.
+    await resetStoreEpoch();
+    // Imported here rather than at the top: peers.ts is a leaf that nothing else in the
+    // write path needs, and a static import would pull the whole sync stack into every
+    // process that only wanted to read a todo.
+    const { resetPeerCursors } = await import("./peers.js");
+    await resetPeerCursors();
+    return result;
+  });
 }
 
 /**

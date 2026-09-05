@@ -20,8 +20,9 @@ import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } fro
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { filterTodos, type MutationContext } from "./repository.js";
 import { CURRENT_FORMAT_VERSION, LAST_V7_RELEASE, migrateLegacyFields, readStore, restorePreUpgradeStore, withStore } from "./storage.js";
+import { buildSnapshot } from "./snapshot.js";
 import { TodoService, todoService as localTodoService } from "./todo-service.js";
-import type { Todo, TodoList } from "./types.js";
+import type { Todo, TodoList, TodoStore } from "./types.js";
 import { checkForUpdate, getCurrentVersion, runUpdate } from "./update.js";
 import { endSession, listSessions, registerSession, touchSession } from "./sessions.js";
 import { currentWorkspace, setWorkspaceRoot, slugifyWorkspace, summarizeWorkspaces } from "./workspace.js";
@@ -598,6 +599,27 @@ Examples:
 `);
 }
 
+/**
+ * The store the CLI's read-only commands should be looking at — which in remote mode is the
+ * SERVER's, not this device's leftover local file.
+ *
+ * `docket list`, `stats`, `workspaces` and `export` all read local storage directly. In
+ * local mode that is the authoritative store and everything is fine. In remote mode it is a
+ * file nothing has written since the switch, so the CLI in one terminal reported an empty
+ * or months-old list while the MCP tools in the editor showed the real one — a split brain
+ * the user could see, with no error anywhere to explain it.
+ *
+ * The renderers all take a TodoStore, so remote mode gets one built from the authoritative
+ * list rather than each command growing its own remote branch. The fields a store has and a
+ * list does not (nextId, seqCounter) are local coordinates that none of these commands read.
+ */
+async function readStoreForReading(): Promise<TodoStore> {
+  const deployment = await getDeployment();
+  if (deployment.mode !== "remote") return readStore();
+  const todos = await (await getMcpTodoService()).list({ filter: "all", list: "all" });
+  return { formatVersion: CURRENT_FORMAT_VERSION, nextId: todos.length + 1, todos, deletedUuids: [], seqCounter: 0 };
+}
+
 async function handleCli(args: string[]): Promise<boolean> {
   const cmd = args[0]?.toLowerCase();
 
@@ -607,7 +629,7 @@ async function handleCli(args: string[]): Promise<boolean> {
   }
 
   if (cmd === "stats") {
-    console.log(renderStatsWidget(await readStore()));
+    console.log(renderStatsWidget(await readStoreForReading()));
     return true;
   }
 
@@ -623,7 +645,7 @@ async function handleCli(args: string[]): Promise<boolean> {
       : flagIndex !== -1
         ? (slugifyWorkspace(args[flagIndex + 1] ?? "") ?? "*")
         : ((await currentWorkspace()).workspace ?? "*");
-    const store = await readStore();
+    const store = await readStoreForReading();
     const todos = filterTodos(store.todos, { filter, workspace: scope });
     const notice =
       todos.length === 0 && scope !== "*"
@@ -647,7 +669,7 @@ async function handleCli(args: string[]): Promise<boolean> {
   }
 
   if (cmd === "workspaces" || cmd === "ws") {
-    const summary = summarizeWorkspaces((await readStore()).todos);
+    const summary = summarizeWorkspaces((await readStoreForReading()).todos);
     if (summary.length === 0) {
       console.log("No items yet — nothing to group into projects.");
       return true;
@@ -708,7 +730,7 @@ async function handleCli(args: string[]): Promise<boolean> {
     const format = (formatIdx !== -1 ? args[formatIdx + 1]?.toLowerCase() : "json") ?? "json";
     const outFile = outIdx !== -1 ? args[outIdx + 1] : null;
 
-    const store = await readStore();
+    const store = await readStoreForReading();
     const content = format === "markdown" || format === "md" ? exportToMarkdown(store) : exportToJson(store);
 
     if (outFile) {
@@ -728,12 +750,24 @@ async function handleCli(args: string[]): Promise<boolean> {
     }
     const raw = await readFile(file, "utf8");
     const isJson = file.endsWith(".json") || raw.trim().startsWith("{") || raw.trim().startsWith("[");
-    const result = await withStore((store) => {
-      if (isJson) {
-        return importFromJson(store, raw, deviceId, deviceName);
-      }
-      return importFromMarkdown(store, raw, deviceId, deviceName);
-    });
+    const parse = (store: TodoStore): { added: number } =>
+      isJson ? importFromJson(store, raw, deviceId, deviceName) : importFromMarkdown(store, raw, deviceId, deviceName);
+
+    const deployment = await getDeployment();
+    if (deployment.mode === "remote") {
+      // Parse into a scratch store, then send the result to the authoritative one. Writing
+      // to the local file here was a silent data-loss path: the import reported success and
+      // the items existed nowhere the user could reach them.
+      const scratch: TodoStore = { formatVersion: CURRENT_FORMAT_VERSION, nextId: 1, todos: [], deletedUuids: [], seqCounter: 0 };
+      const parsed = parse(scratch);
+      const service = await getMcpTodoService();
+      const result = await service.importSnapshot(buildSnapshot(scratch, {}, deviceId));
+      console.log(`Imported ${result.imported} of ${parsed.added} item(s) into ${deployment.serverUrl}.`);
+      if (result.alreadyPresent > 0) console.log(`${result.alreadyPresent} were already there.`);
+      return true;
+    }
+
+    const result = await withStore(parse);
     console.log(`Successfully imported ${result.added} items into todo store.`);
     return true;
   }

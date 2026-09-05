@@ -10,6 +10,7 @@ import {
   type TodoQuery,
 } from "../repository.js";
 import { CURRENT_FORMAT_VERSION } from "../storage.js";
+import { assertUsableSnapshot, SnapshotFormatError } from "../snapshot.js";
 import { todoService } from "../todo-service.js";
 import type { Todo } from "../types.js";
 import { checkPairingRateLimit } from "../sync/peering.js";
@@ -312,6 +313,48 @@ export async function handleServeApiRoute(
     req.on("close", () => {
       sseClients.delete(res);
     });
+    return true;
+  }
+
+  /*
+   * 5b. Workspace snapshots — RFC §28/§29's migration path, as one operation rather than a
+   * loop of creates.
+   *
+   * These carry the whole logical workspace: canonical uuids, project structure, chronology,
+   * completion, revision, provenance, full history and tombstones. The thing they replace
+   * re-created every item through POST /todos, which produced new uuids and today's
+   * timestamps and no history — a migration that silently discarded most of what made the
+   * workspace that workspace.
+   *
+   * Authenticated as any other device call: a paired device may move its own workspace here
+   * or take it away, which is exactly what pairing is for. Not admin-gated, deliberately —
+   * requiring the admin token would mean a user could not migrate onto their own server
+   * without shell access to it.
+   */
+  if (req.method === "GET" && url.pathname === "/api/v1/snapshot") {
+    const migrationId = url.searchParams.get("migrationId") ?? undefined;
+    const snapshot = await todoService.exportSnapshot(migrationId);
+    json(res, 200, { snapshot });
+    return true;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/v1/snapshot") {
+    const body = parseJsonBody(res, rawBody);
+    if (body === null) return true;
+    try {
+      const snapshot = (body as { snapshot?: unknown }).snapshot;
+      assertUsableSnapshot(snapshot);
+      const result = await todoService.importSnapshot(snapshot);
+      // 200 rather than 201 for a repeat: the caller asked for a state, and the state is
+      // already there. A retry after a dead connection is a success, not a conflict.
+      json(res, result.alreadyApplied ? 200 : 201, result);
+    } catch (err) {
+      if (err instanceof SnapshotFormatError) {
+        json(res, 400, { error: err.message });
+        return true;
+      }
+      throw err;
+    }
     return true;
   }
 

@@ -13,6 +13,7 @@ import {
 import { fullHistoryFor } from "./history-store.js";
 import { findTodoByAnyId, readStore, withStore, withTodo } from "./storage.js";
 import type { Todo, TodoList } from "./types.js";
+import { buildSnapshot, applySnapshot, assertUsableSnapshot, type WorkspaceSnapshot } from "./snapshot.js";
 
 /** The local numeric id (only meaningful on THIS device) or the cross-device short id — see findTodoByAnyId in storage.ts. */
 export type TodoId = number | string;
@@ -151,6 +152,25 @@ export interface TodoRepository {
   history(id: TodoId): Promise<HistoryEntry[]>;
 
   health(): Promise<RepositoryHealth>;
+
+  /**
+   * The whole workspace in its logical form — uuids, workspaces, chronology, history and
+   * tombstones intact. `list()` cannot stand in for this: it returns what a user reads, not
+   * what makes the workspace the same workspace on the other side.
+   */
+  exportSnapshot(migrationId?: string): Promise<WorkspaceSnapshot>;
+
+  /** Applies a snapshot, idempotently by migration id and by uuid, so a failed transfer is safe to simply repeat. */
+  importSnapshot(snapshot: WorkspaceSnapshot): Promise<SnapshotImportResult>;
+}
+
+export interface SnapshotImportResult {
+  migrationId: string;
+  imported: number;
+  alreadyPresent: number;
+  tombstones: number;
+  /** True when this exact migration had already been applied — the retry-after-failure case. */
+  alreadyApplied: boolean;
 }
 
 /**
@@ -300,5 +320,39 @@ export class LocalTodoRepository implements TodoRepository {
   async health(): Promise<RepositoryHealth> {
     const store = await readStore();
     return { ok: true, formatVersion: store.formatVersion, todoCount: store.todos.length };
+  }
+
+  async exportSnapshot(migrationId?: string): Promise<WorkspaceSnapshot> {
+    const [store, { entries }, deviceId] = await Promise.all([
+      readStore(),
+      import("./history-store.js").then((m) => m.readHistoryLog()),
+      import("./device.js").then((m) => m.getDeviceId()),
+    ]);
+    return buildSnapshot(store, entries, deviceId, migrationId);
+  }
+
+  async importSnapshot(snapshot: WorkspaceSnapshot): Promise<SnapshotImportResult> {
+    assertUsableSnapshot(snapshot);
+    const { findAppliedMigration, recordAppliedMigration } = await import("./server/migrations.js");
+    const already = await findAppliedMigration(snapshot.migrationId);
+    if (already) {
+      // The retry-after-a-dead-connection case, and the reason it is safe to just run the
+      // migration again: this reports what landed the first time instead of a second copy.
+      return { ...already, alreadyApplied: true };
+    }
+
+    const result = await withStore((store) => applySnapshot(store, snapshot));
+    await import("./history-store.js").then((m) => m.mergeHistoryLog(result.history));
+    const entry = {
+      migrationId: snapshot.migrationId,
+      appliedAt: new Date().toISOString(),
+      imported: result.imported,
+      alreadyPresent: result.alreadyPresent,
+      tombstones: result.tombstones,
+    };
+    // Recorded AFTER the store commit, never before: an id recorded for a migration that
+    // then failed would make the retry a no-op and lose the whole workspace silently.
+    await recordAppliedMigration(entry);
+    return { ...entry, alreadyApplied: false };
   }
 }

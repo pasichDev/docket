@@ -52,7 +52,9 @@ async function captureLogLines(fn: () => Promise<void>): Promise<string[]> {
 test("runStatusCommand: local mode (no config file, no DOCKET_MODE — every existing install) reports Mode/Store/Web/Workspace/Sessions/Peers", async () => {
   const lines = await captureLogLines(() => runStatusCommand());
   assert.equal(lines[0], "Mode: local");
-  assert.equal(lines[1], `Store: ${dataDirectory}`);
+  // The source, not just the path: two shells resolving different stores with nothing
+  // saying so is exactly the confusion this line exists to end.
+  assert.equal(lines[1], `Store: ${dataDirectory} (from DOCKET_DATA_DIR)`);
   assert.match(lines[2], /^Web: http:\/\/localhost:18787 \(not running\)$/);
   // Workspace scoping fails silently — items land somewhere you never look — so which
   // project this directory resolves to, and why, has to be answerable without a log.

@@ -50,6 +50,39 @@ async function writeHistoryLog(logData: HistoryLog): Promise<void> {
 }
 
 /**
+ * Folds a snapshot's audit log into this one, keeping both sides.
+ *
+ * Dedupe is by content (see dedupeHistory), which is what makes re-importing the same
+ * snapshot after a failed transfer a no-op rather than a doubled log.
+ */
+export async function mergeHistoryLog(incoming: HistoryLog): Promise<void> {
+  const uuids = Object.keys(incoming);
+  if (uuids.length === 0) return;
+  const { entries, readable } = await readHistoryLog();
+  if (!readable) {
+    log(`history: ${HISTORY_PATH} is unreadable — the imported audit log was not merged, and the items themselves are unaffected`);
+    return;
+  }
+  for (const uuid of uuids) entries[uuid] = dedupeHistory([...(entries[uuid] ?? []), ...incoming[uuid]]);
+  await writeHistoryLog(entries);
+}
+
+/**
+ * Replaces the whole audit log, moving the current one aside first.
+ *
+ * Only for a bulk store replacement (`docket backend localize`, a snapshot import). The
+ * sidecar is keyed by todo uuid and is a continuation of each item's inline history, so
+ * leaving the old one beside a replaced store produces an audit log describing edits that
+ * store does not contain, attached to items that may not exist — the same coupling `docket
+ * restore` has to respect.
+ */
+export async function replaceHistoryLog(logData: HistoryLog, backupSuffix: string): Promise<void> {
+  const { rename } = await import("node:fs/promises");
+  await rename(HISTORY_PATH, `${HISTORY_PATH}.${backupSuffix}.bak`).catch(() => {});
+  await writeHistoryLog(logData);
+}
+
+/**
  * Moves the accumulated inline history into the side file and trims each item back to the
  * preview length. Returns true when it trimmed something, i.e. when the caller now holds a
  * store that differs from the one on disk and has to commit it.

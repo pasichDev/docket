@@ -7,9 +7,17 @@ type MakeDirectory = (path: string, options: { recursive: true; mode: number }) 
 type InspectDirectory = (path: string) => Promise<unknown>;
 type ProbeDirectory = (path: string) => Promise<void>;
 
+export type DataDirectorySource = "env" | "config" | "legacy" | "xdg";
+
 export interface ResolveDataDirectoryOptions {
   /** Environment values to use instead of process.env; useful for embedders and tests. */
   environment?: NodeJS.ProcessEnv;
+  /**
+   * The directory recorded in ~/.config/docket/config.json, if any. Passed in rather than
+   * read here so this function stays pure and testable, and so config.ts is not pulled into
+   * every module that only wants a file path.
+   */
+  configuredDirectory?: string | null;
   /** Home directory to use instead of the current user's home directory. */
   homeDirectory?: string;
   /** Directory creation operation to use instead of Node's default. */
@@ -78,15 +86,29 @@ async function makeUsable(directory: string, mkdir: MakeDirectory, probe: ProbeD
  * XDG_STATE_HOME; cache directories are never used for authoritative state.
  */
 export async function resolveDataDirectory(options: ResolveDataDirectoryOptions = {}): Promise<string> {
+  return (await resolveDataDirectoryWithSource(options)).directory;
+}
+
+/** The same resolution, plus WHERE the answer came from — `docket status` reports it, and a mismatch between a terminal and an MCP host is the thing it exists to make visible. */
+export async function resolveDataDirectoryWithSource(
+  options: ResolveDataDirectoryOptions = {},
+): Promise<{ directory: string; source: DataDirectorySource }> {
   const environment = options.environment ?? process.env;
   const mkdir = options.mkdir ?? createDirectory;
   const inspect = options.inspect ?? stat;
   const probe = options.probe ?? verifyWriteAccess;
   const explicitDirectory = environment.DOCKET_DATA_DIR;
 
+  // The environment still wins — it is how a container, a test run or a single command
+  // overrides everything — but it is no longer the ONLY way to say this, which is what made
+  // a shell that had not sourced the right rc silently operate on a different store.
   if (explicitDirectory) {
     await makeUsable(explicitDirectory, mkdir, probe);
-    return explicitDirectory;
+    return { directory: explicitDirectory, source: "env" };
+  }
+  if (options.configuredDirectory) {
+    await makeUsable(options.configuredDirectory, mkdir, probe);
+    return { directory: options.configuredDirectory, source: "config" };
   }
 
   const homeDirectory = options.homeDirectory ?? homedir();
@@ -107,8 +129,9 @@ export async function resolveDataDirectory(options: ResolveDataDirectoryOptions 
         options.warn?.(
           `docket: cannot use ${legacyDirectory}; using operator-configured XDG_STATE_HOME at ${directory} for local state\n`,
         );
+        return { directory, source: "xdg" };
       }
-      return directory;
+      return { directory, source: "legacy" };
     } catch (error) {
       if (!isAccessStyleError(error)) throw error;
       // Recheck after an access failure: the directory may have appeared between
@@ -128,13 +151,24 @@ export async function resolveDataDirectory(options: ResolveDataDirectoryOptions 
 // Resolve once per process. Apart from keeping every persistent file together, this
 // prevents a later environment mutation from splitting one server's state between
 // two directories.
-let processDataDirectory: Promise<string> | undefined;
+let processDataDirectory: Promise<{ directory: string; source: DataDirectorySource }> | undefined;
 
-/** Resolve the data directory using this process's environment. */
+/** Resolve the data directory using this process's environment and central config. */
 export function getDataDirectory(): Promise<string> {
-  processDataDirectory ??= resolveDataDirectory({
-    warn: (message) => process.stderr.write(message),
-  });
+  return getDataDirectoryWithSource().then(({ directory }) => directory);
+}
+
+/** As above, plus where the answer came from — for `docket status`. */
+export function getDataDirectoryWithSource(): Promise<{ directory: string; source: DataDirectorySource }> {
+  processDataDirectory ??= (async () => {
+    // Imported here rather than at the top: config.ts is the higher layer, and a static
+    // import in both directions would be a cycle the moment config wants a data path.
+    const { readConfiguredDataDirectory } = await import("./config.js");
+    return resolveDataDirectoryWithSource({
+      configuredDirectory: await readConfiguredDataDirectory(),
+      warn: (message) => process.stderr.write(message),
+    });
+  })();
   return processDataDirectory;
 }
 

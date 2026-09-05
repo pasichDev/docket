@@ -149,3 +149,28 @@ export async function markPeerSynced(
     if (details.clockSkewMs !== undefined) peer.clockSkewMs = details.clockSkewMs;
   });
 }
+
+/**
+ * Forgets what this device believes it has already received from every peer.
+ *
+ * Called after a bulk replacement of the local store (`docket backend localize`, a snapshot
+ * import). A cursor says "I already have everything up to N of yours" — which was true of a
+ * store that no longer exists. Left in place, the peer never re-sends the records the
+ * replacement discarded, and both sides report a healthy sync for ever while one of them is
+ * missing work the other has.
+ *
+ * The recorded epoch goes too: it belongs to the same claim.
+ */
+export async function resetPeerCursors(): Promise<number> {
+  return withPeers((peers) => {
+    let reset = 0;
+    for (const peer of peers) {
+      if (peer.lastSeq === undefined && !peer.lastSyncAt && peer.epoch === undefined) continue;
+      delete peer.lastSeq;
+      delete peer.epoch;
+      peer.lastSyncAt = null;
+      reset += 1;
+    }
+    return reset;
+  });
+}

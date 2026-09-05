@@ -10,6 +10,7 @@ import {
   type EditTodoInput,
   type MutationContext,
   type RepositoryHealth,
+  type SnapshotImportResult,
   type TodoId,
   type TodoQuery,
   type TodoRepository,
@@ -17,6 +18,7 @@ import {
 import type { Todo } from "../types.js";
 import { generateNonce, hashBody, signDeviceRequest } from "./device-auth.js";
 import { CLIENT_PROTOCOL_VERSION, DEVICE_AUTH_HEADERS, MIN_COMPATIBLE_SERVER_PROTOCOL } from "./protocol.js";
+import { assertUsableSnapshot, type WorkspaceSnapshot } from "../snapshot.js";
 
 /**
  * HTTP client implementation of TodoRepository (RFC "Local and Self-Hosted Backend Modes"
@@ -354,5 +356,33 @@ export class RemoteTodoRepository implements TodoRepository {
     const info = infoRes.body as { storeFormatVersion: number };
     const listed = await this.list({ filter: "all", list: "all" });
     return { ok: (healthRes.body as { ok: boolean }).ok, formatVersion: info.storeFormatVersion, todoCount: listed.length };
+  }
+
+  async exportSnapshot(migrationId?: string): Promise<WorkspaceSnapshot> {
+    await this.ensureCompatible();
+    const qs = migrationId ? `?migrationId=${encodeURIComponent(migrationId)}` : "";
+    const { status, body } = await this.request("GET", `/api/v1/snapshot${qs}`);
+    if (status === 404) {
+      throw new RemoteProtocolError(
+        `${this.serverOrigin} does not support workspace snapshots — it is running a docket older than 3.0. ` +
+          `Upgrade the server before migrating, rather than falling back to a copy that would drop uuids, history and project structure.`,
+      );
+    }
+    if (status !== 200) throw this.unexpected(status, body);
+    const snapshot = (body as { snapshot: unknown }).snapshot;
+    assertUsableSnapshot(snapshot);
+    return snapshot;
+  }
+
+  async importSnapshot(snapshot: WorkspaceSnapshot): Promise<SnapshotImportResult> {
+    await this.ensureCompatible();
+    const { status, body } = await this.request("POST", "/api/v1/snapshot", { snapshot });
+    if (status === 404) {
+      throw new RemoteProtocolError(
+        `${this.serverOrigin} does not support workspace snapshots — it is running a docket older than 3.0. Upgrade the server before migrating.`,
+      );
+    }
+    if (status !== 200 && status !== 201) throw this.unexpected(status, body);
+    return body as SnapshotImportResult;
   }
 }

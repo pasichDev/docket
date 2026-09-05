@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createLineReader, type LineReader } from "./cli-prompt.js";
-import { writeDeploymentConfig } from "./config.js";
+import { writeDataDirectoryConfig, writeDeploymentConfig } from "./config.js";
 import { isOnPath } from "./hooks/install.js";
 import { getDeviceName } from "./device.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
@@ -107,8 +107,35 @@ const commandExists = isOnPath;
  * `dataDirectory` string so both deployment modes share one implementation instead of
  * setup.ts growing a second, near-identical host-configuration function for remote.
  */
+/**
+ * The exact package spec generated host configs should run.
+ *
+ * Bare `@pasichdev/docket` resolves to the `latest` dist-tag at the moment the agent starts.
+ * For a release candidate — published under `next`, precisely so `latest` keeps pointing at
+ * the last stable build — that means a user who ran the RC's own setup gets host configs
+ * that launch the STABLE version instead: v2 code opening a v3 data directory and config,
+ * with nothing anywhere saying so. Pinning the running version is the only invocation that
+ * is true of the thing the user actually installed.
+ */
+export async function packageSpec(): Promise<string> {
+  try {
+    const { getCurrentVersion } = await import("./update.js");
+    const version = await getCurrentVersion(fileURLToPath(import.meta.url));
+    return `@pasichdev/docket@${version}`;
+  } catch {
+    // No package.json above this file (an unusual install layout): an unpinned spec is still
+    // better than failing setup outright, and it is what every pre-3.0 install already used.
+    return "@pasichdev/docket";
+  }
+}
+
+/** The exact invocation written into every host config — one function, so what the tests check is what the hosts get. */
+export function hostInvocation(spec: string, env: Record<string, string>): { command: string; args: string[]; env: Record<string, string> } {
+  return { command: "npx", args: ["-y", "--prefix", "/tmp", `--package=${spec}`, "docket"], env };
+}
+
 async function configureHosts(env: Record<string, string>): Promise<void> {
-  const serverArgs = ["-y", "--prefix", "/tmp", "--package=@pasichdev/docket", "docket"];
+  const serverArgs = hostInvocation(await packageSpec(), env).args;
   const envPairs = Object.entries(env).map(([key, value]) => `${key}=${value}`);
   const configure = async (command: string, args: string[], label: string): Promise<void> => {
     try {
@@ -183,6 +210,11 @@ async function runLocalSetup(reader: LineReader, args: string[]): Promise<void> 
   const dataDirectory = await resolveDataDirectory({ environment, warn: (message) => process.stderr.write(message) });
 
   console.log(`\ndocket data directory: ${dataDirectory}`);
+  // Written to ~/.config/docket/config.json, not only into each host's env. A directory that
+  // exists only in the hosts' configs and a shell rc is invisible to a plain terminal, so
+  // `docket backup` in one backed up an empty ~/.docket and reported success.
+  await writeDataDirectoryConfig(dataDirectory);
+  await writeDeploymentConfig({ mode: "local" });
   if (await shouldAutomate(reader, "Configure detected MCP agents automatically?", args)) await configureHosts({ DOCKET_DATA_DIR: dataDirectory });
   if (await shouldAutomate(reader, "Install the docket skill for Claude Code?", args)) await installSkill();
   if (await shouldAutomate(reader, "Install the docket skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
@@ -194,6 +226,82 @@ async function runLocalSetup(reader: LineReader, args: string[]): Promise<void> 
   console.log("Claude Desktop / Cursor / Windsurf / Zed:");
   console.log(JSON.stringify({ env: { DOCKET_DATA_DIR: dataDirectory } }, null, 2));
   console.log("\nStart the server with: npx -y @pasichdev/docket");
+}
+
+/**
+ * Looks at what is already on this device before its source of truth is switched away, and
+ * refuses to proceed until the user has actually chosen what happens to it.
+ *
+ * Returns false when the user cancelled — the caller must then change nothing at all.
+ */
+async function offerLocalWorkspaceTransition(reader: LineReader, serverUrl: string, args: string[]): Promise<boolean> {
+  const { readStore } = await import("./storage.js");
+  const { LocalTodoRepository } = await import("./repository.js");
+  const { transferWorkspace, stopLocalDaemon } = await import("./backend.js");
+
+  const local = await readStore();
+  if (local.todos.length === 0) {
+    await stopLocalDaemon();
+    return true;
+  }
+
+  const completed = local.todos.filter((t) => t.done).length;
+  console.log(`\nThis device already has a local workspace: ${local.todos.length} todo(s), ${completed} completed.`);
+  console.log("Switching to a server does not delete it, but it does stop being what docket shows you.\n");
+
+  if (automationDefault(args)) {
+    // Non-interactive: never guess. Uploading someone's workspace to a server they have
+    // just paired with is not a decision a --yes flag can stand in for, and neither is
+    // hiding it. Stop, and name both commands that resolve it.
+    console.error("Refusing to switch modes non-interactively while this device has local data.");
+    console.error("Run `docket backend use <serverUrl>` to choose explicitly (upload, or keep local data and use the server anyway).");
+    process.exitCode = 1;
+    return false;
+  }
+
+  const answer = (await reader.next("  1) Upload it to the server\n  2) Use the server, leave the local workspace where it is\n  3) Cancel\nChoice [3]: ")).trim();
+  if (answer === "1") {
+    const remote = await remoteRepositoryFor(serverUrl);
+    if (!remote) return false;
+    const existing = await remote.list({ filter: "all", list: "all" }).catch(() => null);
+    if (existing === null) {
+      console.error("Could not read the server's workspace — not switching modes.");
+      process.exitCode = 1;
+      return false;
+    }
+    if (existing.length > 0) {
+      console.error("The server already has data. Merging two populated workspaces needs an explicit decision — run `docket backend use` instead.");
+      process.exitCode = 1;
+      return false;
+    }
+    try {
+      const result = await transferWorkspace(new LocalTodoRepository(), remote);
+      console.log(`Uploaded ${result.imported} todo(s), with project structure, history and item identities intact.`);
+    } catch (err) {
+      console.error(`Upload failed: ${(err as Error).message}`);
+      console.error("Nothing was switched over. Run `docket setup --remote` again — the transfer resumes rather than duplicating what arrived.");
+      process.exitCode = 1;
+      return false;
+    }
+  } else if (answer !== "2") {
+    console.log("Cancelled. Nothing was changed.");
+    return false;
+  }
+
+  await stopLocalDaemon();
+  return true;
+}
+
+async function remoteRepositoryFor(serverUrl: string) {
+  const { RemoteTodoRepository } = await import("./remote/client.js");
+  const { getDeviceId } = await import("./device.js");
+  const creds = await loadRemoteCredentials();
+  if (!creds || creds.serverUrl !== serverUrl) {
+    console.error("Internal error: pairing reported success but no credentials for this server were saved.");
+    process.exitCode = 1;
+    return null;
+  }
+  return new RemoteTodoRepository({ serverUrl, deviceId: await getDeviceId(), deviceName: await getDeviceName(), secret: creds.secret });
 }
 
 /** RFC §11's remote branch — probe → (pair if not already) → write ~/.config/docket/config.json → configure hosts. Reuses remote/pairing.ts's exact building blocks `docket pair` already uses (Phase 2-3), rather than a second pairing implementation. */
@@ -256,21 +364,39 @@ async function runRemoteSetup(reader: LineReader, args: string[]): Promise<void>
     console.log("✓ Remote workspace ready");
   }
 
+  /*
+   * Pairing establishes trust. Switching which store this machine reads is a separate
+   * decision, and it used to be made silently: setup wrote remote mode without ever looking
+   * at the local store, so a user with a year of local todos ran `docket setup --remote`,
+   * saw success, and found an empty workspace. The data was still on disk — it had simply
+   * stopped being part of the product, with nothing saying so.
+   */
+  if (!(await offerLocalWorkspaceTransition(reader, serverUrl, args))) return;
+
   await writeDeploymentConfig({ mode: "remote", serverUrl });
 
   console.log("");
+  /*
+   * Deliberately NO deployment env in the generated host configs.
+   *
+   * The resolver's priority is env > config, so DOCKET_MODE baked into each host pinned that
+   * host to remote for ever: `docket backend localize` would update the central config, say
+   * "deployment mode set to local", and every agent would carry on talking to the server
+   * because its own env still said otherwise. The user's only way out was to hand-edit four
+   * host config files they never knew had been written.
+   *
+   * The central config is the source of truth. The env override still exists for a container
+   * or a single command; setup just stops silently claiming it on the user's behalf.
+   */
   if (await shouldAutomate(reader, "Configure detected MCP agents automatically?", args)) {
-    await configureHosts({ DOCKET_MODE: "remote", DOCKET_SERVER_URL: serverUrl });
+    await configureHosts({});
   }
   if (await shouldAutomate(reader, "Install the docket skill for Claude Code?", args)) await installSkill();
   if (await shouldAutomate(reader, "Install the docket skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
 
-  console.log("\nUse this server in every MCP host that should share this workspace:\n");
-  console.log("Codex (config.toml):");
-  console.log("[mcp_servers.docket.env]");
-  console.log(`DOCKET_MODE = "remote"\nDOCKET_SERVER_URL = ${JSON.stringify(serverUrl)}\n`);
-  console.log("Claude Desktop / Cursor / Windsurf / Zed:");
-  console.log(JSON.stringify({ env: { DOCKET_MODE: "remote", DOCKET_SERVER_URL: serverUrl } }, null, 2));
+  console.log(`\nRecorded in ~/.config/docket/config.json — every MCP host, CLI and dashboard on this machine reads it.`);
+  console.log("Nothing further to paste into host configs; switch back at any time with `docket backend localize`.");
+  console.log(`\nTo override for one command or one container only: DOCKET_MODE=remote DOCKET_SERVER_URL=${JSON.stringify(serverUrl)}`);
 }
 
 export async function runInteractiveSetup(args: string[] = process.argv.slice(3)): Promise<void> {

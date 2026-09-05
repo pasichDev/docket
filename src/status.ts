@@ -1,5 +1,5 @@
 import { DeploymentConfigError, resolveDeploymentConfig } from "./config.js";
-import { getDataDirectory } from "./data-dir.js";
+import { getDataDirectoryWithSource } from "./data-dir.js";
 import { getDeviceId, getDeviceName } from "./device.js";
 import { loadPeers } from "./peers.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
@@ -15,6 +15,13 @@ import { resolveWorkspace } from "./workspace.js";
  * monitoring script.
  */
 
+function describeDataDirSource(source: "env" | "config" | "legacy" | "xdg"): string {
+  if (source === "env") return "DOCKET_DATA_DIR";
+  if (source === "config") return "~/.config/docket/config.json";
+  if (source === "xdg") return "XDG_STATE_HOME";
+  return "the default location";
+}
+
 async function probeWebUi(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/version`, { signal: AbortSignal.timeout(800) });
@@ -25,7 +32,7 @@ async function probeWebUi(port: number): Promise<boolean> {
 }
 
 async function runLocalStatus(): Promise<void> {
-  const dataDir = await getDataDirectory();
+  const { directory: dataDir, source: dataDirSource } = await getDataDirectoryWithSource();
   const webPort = Number(process.env.DOCKET_WEB_PORT ?? 8787);
   const webUp = await probeWebUi(webPort);
   const peers = await loadPeers();
@@ -35,7 +42,10 @@ async function runLocalStatus(): Promise<void> {
   const sessions = await listSessions();
 
   console.log(`Mode: local`);
-  console.log(`Store: ${dataDir}`);
+  // Which directory, and WHY that one. A terminal that never sourced the shell rc and an
+  // MCP host that did used to resolve to different stores with nothing saying so; this line
+  // is what makes that visible in one command from either side.
+  console.log(`Store: ${dataDir} (from ${describeDataDirSource(dataDirSource)})`);
   console.log(`Web: http://localhost:${webPort}${webUp ? "" : " (not running)"}`);
   // Which project THIS directory resolves to, and why. The failure mode of workspace
   // scoping is silent — items land somewhere you never look — so the answer has to be
