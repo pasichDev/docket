@@ -10,9 +10,27 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8788:8788"
+      # The published host port is overridable, because 8788 is exactly the port a machine
+      # already running `docket serve` outside Docker has taken — and "address already in
+      # use" on the first command of the quickstart is a bad first impression of a tool whose
+      # whole promise is that it stays out of your way.
+      #   DOCKET_HOST_PORT=18788 docker compose up -d
+      - "${DOCKET_HOST_PORT:-8788}:8788"
     volumes:
-      - ./data:/data
+      # A NAMED volume, not a bind mount to ./data.
+      #
+      # The image runs as an unprivileged user and chowns /data to it at build time. A bind
+      # mount covers that directory with a host one — which `mkdir -p data` creates owned by
+      # the host user at 0755 — so the container user cannot write to it, and docket exits at
+      # startup complaining it has no writable data directory. A named volume inherits the
+      # image's ownership, which is what makes the documented quickstart work on a fresh
+      # Linux host without a chown step nobody would guess at.
+      #
+      # To keep the data somewhere you can see it, bind-mount instead AND make it writable by
+      # the container's user first:
+      #   mkdir -p data && sudo chown -R 100:101 data   # the image's docket:docket
+      #   volumes: [./data:/data]
+      - docket-data:/data
     environment:
       DOCKET_DATA_DIR: /data
       DOCKET_SERVER_HOST: 0.0.0.0
@@ -23,3 +41,6 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+volumes:
+  docket-data:

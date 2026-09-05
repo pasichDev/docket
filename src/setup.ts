@@ -134,47 +134,154 @@ export function hostInvocation(spec: string, env: Record<string, string>): { com
   return { command: "npx", args: ["-y", "--prefix", "/tmp", `--package=${spec}`, "docket"], env };
 }
 
+/**
+ * Decides what to do with a JSON host config that already exists, without ever treating
+ * "I could not read this" as "there is nothing here".
+ *
+ * The previous version wrapped the parse in a bare catch labelled "new file", so a config
+ * with a trailing comma — or one this process simply lacked permission to read — was
+ * replaced by a fresh object containing only docket. Every other MCP server the user had
+ * configured disappeared, from a command whose stated job was to add one entry.
+ */
+type ExistingConfig = { kind: "absent" } | { kind: "parsed"; config: Record<string, unknown> } | { kind: "unreadable"; reason: string };
+
+async function readHostConfig(target: string): Promise<ExistingConfig> {
+  let raw: string;
+  try {
+    raw = await readFile(target, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "absent" };
+    return { kind: "unreadable", reason: (err as Error).message };
+  }
+  if (!raw.trim()) return { kind: "absent" };
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { kind: "unreadable", reason: "the file is valid JSON but not an object" };
+    }
+    return { kind: "parsed", config: parsed as Record<string, unknown> };
+  } catch (err) {
+    return { kind: "unreadable", reason: (err as Error).message };
+  }
+}
+
 async function configureHosts(env: Record<string, string>): Promise<void> {
   const serverArgs = hostInvocation(await packageSpec(), env).args;
   const envPairs = Object.entries(env).map(([key, value]) => `${key}=${value}`);
-  const configure = async (command: string, args: string[], label: string): Promise<void> => {
+
+  /**
+   * Reconfigures a CLI-managed host, restoring what was there if the add fails.
+   *
+   * `mcp add` will not overwrite an existing entry, so the remove has to come first — which
+   * means a failed add leaves the user with NO docket entry where they previously had a
+   * working one. Capturing the entry first and putting it back is the difference between a
+   * failed setup and a broken install.
+   */
+  const reconfigure = async (
+    command: string,
+    label: string,
+    capture: string[],
+    remove: string[],
+    add: string[],
+  ): Promise<void> => {
+    const previous = await execFileAsync(command, capture).then((r) => r.stdout, () => null);
+    await execFileAsync(command, remove).catch(() => undefined);
     try {
-      const result = await execFileAsync(command, args);
+      const result = await execFileAsync(command, add);
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       console.log(`Configured ${label}.`);
     } catch (error) {
       console.warn(`Skipped ${label}: ${(error as ExecFileException).message ?? "command failed"}`);
+      if (previous?.includes("docket")) {
+        console.warn(
+          `  ${label} previously had a docket entry and this removed it. Restore it with:\n` +
+            `    ${command} ${add.join(" ")}`,
+        );
+      }
     }
   };
+
   if (await commandExists("codex")) {
-    await execFileAsync("codex", ["mcp", "remove", "docket"]).catch(() => undefined);
     const codexEnvArgs = envPairs.flatMap((pair) => ["--env", pair]);
-    await configure("codex", ["mcp", "add", "docket", ...codexEnvArgs, "--", "npx", ...serverArgs], "Codex");
+    await reconfigure(
+      "codex",
+      "Codex",
+      ["mcp", "list"],
+      ["mcp", "remove", "docket"],
+      ["mcp", "add", "docket", ...codexEnvArgs, "--", "npx", ...serverArgs],
+    );
   }
   if (await commandExists("claude")) {
-    await execFileAsync("claude", ["mcp", "remove", "--scope", "user", "docket"]).catch(() => undefined);
     // `claude mcp add` takes the name as a bare positional right after "add" — -e/--env
     // is variadic (`-e KEY=v1 KEY2=v2 ...`) and swallows whatever non-flag tokens follow
     // it, so putting the name after -e makes it try to consume "docket" as a second
     // (invalid) env var instead of the server name.
-    await configure("claude", ["mcp", "add", "docket", "--scope", "user", "-e", ...envPairs, "--", "npx", ...serverArgs], "Claude Code MCP");
+    const envFlag = envPairs.length > 0 ? ["-e", ...envPairs] : [];
+    await reconfigure(
+      "claude",
+      "Claude Code MCP",
+      ["mcp", "list"],
+      ["mcp", "remove", "--scope", "user", "docket"],
+      ["mcp", "add", "docket", "--scope", "user", ...envFlag, "--", "npx", ...serverArgs],
+    );
   }
 
   for (const target of [`${homedir()}/.cursor/mcp.json`, `${homedir()}/.codeium/windsurf/mcp_config.json`]) {
-    try {
-      const { dirname } = await import("node:path");
-      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-      let config: Record<string, unknown> = {};
-      try { config = JSON.parse(await readFile(target, "utf8")) as Record<string, unknown>; } catch { /* new file */ }
-      const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
-      servers["docket"] = { command: "npx", args: serverArgs, env };
-      config.mcpServers = servers;
-      // Read-modify-write of a config that already holds the user's other MCP servers.
-      await atomicWriteFile(target, `${JSON.stringify(config, null, 2)}\n`);
-      console.log(`Configured ${target}.`);
-    } catch { /* host is not installed or config is not writable */ }
+    await configureJsonHost(target, serverArgs, env);
   }
+}
+
+export type JsonHostOutcome = "configured" | "created" | "skipped-unreadable" | "skipped-absent" | "failed";
+
+/**
+ * Adds docket to one JSON-file MCP host, or refuses and says why.
+ *
+ * Its own function because the rule it enforces is the whole point: a config that exists but
+ * cannot be parsed is NOT an absent config. The previous version wrapped the parse in a bare
+ * catch labelled "new file", so a trailing comma — or a permissions error — meant every
+ * other MCP server the user had configured was replaced by a fresh object containing only
+ * docket, from a command whose stated job was to add one entry.
+ */
+export async function configureJsonHost(
+  target: string,
+  serverArgs: string[],
+  env: Record<string, string>,
+  report: { log: (m: string) => void; warn: (m: string) => void } = console,
+): Promise<JsonHostOutcome> {
+  const existing = await readHostConfig(target);
+  if (existing.kind === "unreadable") {
+    report.warn(`Skipped ${target}: it could not be parsed (${existing.reason}).`);
+    report.warn("  Leaving it exactly as it is — rewriting it would delete every other MCP server configured there.");
+    return "skipped-unreadable";
+  }
+  // A host counts as installed if its config directory exists. Writing a config for one that
+  // is not would litter the home directory with files nothing reads.
+  if (existing.kind === "absent" && !(await hostConfigDirectoryExists(target))) return "skipped-absent";
+
+  try {
+    const { dirname } = await import("node:path");
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    // Keep the exact bytes before touching a file we did not write.
+    if (existing.kind === "parsed") await atomicWriteFile(`${target}.docket-backup`, await readFile(target), 0o600);
+
+    const config = existing.kind === "parsed" ? existing.config : {};
+    const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
+    servers["docket"] = { command: "npx", args: serverArgs, env };
+    config.mcpServers = servers;
+    await atomicWriteFile(target, `${JSON.stringify(config, null, 2)}\n`, 0o600);
+    report.log(`Configured ${target}${existing.kind === "parsed" ? ` (previous version saved as ${target}.docket-backup)` : ""}.`);
+    return existing.kind === "parsed" ? "configured" : "created";
+  } catch (err) {
+    report.warn(`Skipped ${target}: ${(err as Error).message}`);
+    return "failed";
+  }
+}
+
+async function hostConfigDirectoryExists(target: string): Promise<boolean> {
+  const { dirname } = await import("node:path");
+  const { stat } = await import("node:fs/promises");
+  return stat(dirname(target)).then(() => true, () => false);
 }
 
 // A human at a real terminal gets asked (and can decline); an agent driving this

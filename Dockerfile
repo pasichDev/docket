@@ -18,7 +18,11 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY tsconfig.json ./
+# Every tsconfig, not just the root one. `npm run build` runs three compilers — the server,
+# the browser client, and the client's tests — so copying only tsconfig.json meant the image
+# built the documented build command with two of its three configs missing. The build failed;
+# nothing in CI ever ran it, so nothing noticed.
+COPY tsconfig*.json ./
 COPY src ./src
 RUN npm run build
 
@@ -31,6 +35,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 COPY skills ./skills
+
+# docs/headless.md tells operators to run `docker compose exec docket docket devices pair`.
+# Without this the image has no `docket` on PATH at all and the documented command fails
+# with "executable file not found" — the first thing a new self-hoster is asked to type.
+RUN ln -s /app/dist/launcher.js /usr/local/bin/docket && chmod +x /app/dist/launcher.js
 
 # Runs as an unprivileged user, not root — same posture a systemd `User=docket` deployment
 # gets (see docs/docket.service), just expressed the container way.

@@ -5,6 +5,7 @@ import { json } from "../web/http.js";
 import { getAdminToken } from "./admin-token.js";
 import { sseClients } from "./events.js";
 import { handleServeApiRoute, type ServeApiContext } from "./routes.js";
+import { AmbiguousTodoIdError } from "../storage.js";
 
 /** Pure HTTP server construction — no listen(), no signal handlers — so tests can create one, bind it to an ephemeral port, and tear it down without going through the CLI. */
 export function createServeHttpServer(ctx: ServeApiContext): Server {
@@ -15,6 +16,12 @@ export function createServeHttpServer(ctx: ServeApiContext): Server {
       if (handled) return;
       json(res, 404, { error: "not found" });
     } catch (err) {
+      if (err instanceof AmbiguousTodoIdError) {
+        // 409, not 500: the request was well-formed and the server is healthy — the id the
+        // caller used simply does not identify one item, and the fix is theirs (use the uuid).
+        json(res, 409, { error: err.message, candidates: err.candidates.map((t) => ({ uuid: t.uuid, title: t.title })) });
+        return;
+      }
       log(`serve request error: ${(err as Error).stack ?? (err as Error).message}`);
       json(res, 500, { error: (err as Error).message });
     }

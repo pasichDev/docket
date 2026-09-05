@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync }
 import { mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getDataDirectory } from "./data-dir.js";
-import { withFileLock } from "./filelock.js";
+import { withFileLock, LeaseLostError, type Lease } from "./filelock.js";
 import { atomicWriteFile, syncDirectory } from "./fs-atomic.js";
 import { newGeneration, readGeneration } from "./generation.js";
 import { log } from "./log.js";
@@ -48,10 +48,31 @@ function snapshotLockPaths(dir: string): string[] {
     .sort();
 }
 
-async function withLocks<T>(lockPaths: readonly string[], fn: () => Promise<T>): Promise<T> {
-  const [head, ...rest] = lockPaths;
-  if (head === undefined) return fn();
-  return withFileLock(head, () => withLocks(rest, fn));
+/**
+ * Holds every lock in the list at once and hands the callback all of their leases.
+ *
+ * The leases are the point. Taking the locks is not the same as still holding them: a
+ * process starved past the staleness window — a loaded machine, a suspended laptop — has its
+ * locks legitimately reaped while it is still inside, and a backup that carried on reading
+ * would assemble a bundle from two different moments and report success. Every other commit
+ * path in this codebase re-checks before it acts; a snapshot has to re-check before it
+ * claims to be one.
+ */
+async function withLocks<T>(lockPaths: readonly string[], fn: (leases: Lease[]) => Promise<T>): Promise<T> {
+  const held: Lease[] = [];
+  const take = async (index: number): Promise<T> => {
+    if (index === lockPaths.length) return fn(held);
+    return withFileLock(lockPaths[index], async (lease) => {
+      held.push(lease);
+      return take(index + 1);
+    });
+  };
+  return take(0);
+}
+
+/** Throws LeaseLostError if any of them is no longer ours. */
+async function assertAllOwned(leases: readonly Lease[]): Promise<void> {
+  for (const lease of leases) await lease.assertOwned();
 }
 
 /** Files whose contents only make sense alongside the store they were captured with. */
@@ -64,6 +85,8 @@ const MAGIC = "docket-backup-v1";
 const BUNDLE_FORMAT = 2;
 const JOURNAL_NAME = "restore-journal.json";
 const STAGING_PREFIX = ".restore-staging-";
+/** How many times a snapshot read is retried after losing a lock to a reap. */
+const SNAPSHOT_ATTEMPTS = 4;
 // RFC 7914's own "interactive login" recommendation (N=2^14, r=8, p=1) — strong enough to
 // meaningfully slow down offline password guessing against a stolen backup file, while
 // staying under Node's default scrypt maxmem (32MiB) and fast enough for an interactive
@@ -104,24 +127,48 @@ interface BackupBundle {
  */
 export async function createBackup(password: string): Promise<Buffer> {
   const dir = await getDataDirectory();
-  const files: Record<string, string> = {};
-  const manifest: Record<string, BackupManifestEntry> = {};
+  let files: Record<string, string> = {};
+  let manifest: Record<string, BackupManifestEntry> = {};
+  let generation: string | null = null;
 
-  const { generation } = await withLocks(snapshotLockPaths(dir), async () => {
-    for (const name of BACKUP_FILES) {
-      try {
-        const contents = await readFile(join(dir, name));
-        files[name] = contents.toString("base64");
-        manifest[name] = { sha256: sha256(contents), bytes: contents.length };
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-        // Not every install has every file (e.g. no viewers.json.enc until a viewer is ever
-        // added) — absence just means restore has nothing to write back for that one.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const read: Record<string, string> = {};
+      const readManifest: Record<string, BackupManifestEntry> = {};
+      generation = await withLocks(snapshotLockPaths(dir), async (leases) => {
+        for (const name of BACKUP_FILES) {
+          try {
+            const contents = await readFile(join(dir, name));
+            read[name] = contents.toString("base64");
+            readManifest[name] = { sha256: sha256(contents), bytes: contents.length };
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+            // Not every install has every file (e.g. no viewers.json.enc until a viewer is
+            // ever added) — absence just means restore has nothing to write back for that one.
+          }
+        }
+        // Read inside the locks too, so the recorded generation belongs to the same moment.
+        const currentGeneration = await readGeneration();
+        // The whole read happened while these were ours, or none of it counts.
+        await assertAllOwned(leases);
+        return currentGeneration;
+      });
+      files = read;
+      manifest = readManifest;
+      break;
+    } catch (err) {
+      if (!(err instanceof LeaseLostError) || attempt >= SNAPSHOT_ATTEMPTS) {
+        if (err instanceof LeaseLostError) {
+          throw new Error(
+            `docket: could not read a coherent snapshot of ${dir} in ${SNAPSHOT_ATTEMPTS} attempts — ` +
+              `this machine is heavily loaded, or a docket process is stuck holding a lock. No backup was written.`,
+          );
+        }
+        throw err;
       }
+      log(`backup: lost a lock mid-snapshot on attempt ${attempt} — re-reading rather than writing a bundle from two moments`);
     }
-    // Read inside the locks too, so the recorded generation belongs to the same moment.
-    return { generation: await readGeneration() };
-  });
+  }
 
   if (Object.keys(files).length === 0) throw new Error("nothing to back up — no docket data directory found");
 
@@ -310,7 +357,8 @@ export async function restoreBackup(buf: Buffer, password: string): Promise<{ re
   };
 
   // ---- Commit, under every lock, with the journal written first -------------------------
-  await withLocks(snapshotLockPaths(dir), async () => {
+  await withLocks(snapshotLockPaths(dir), async (leases) => {
+    await assertAllOwned(leases);
     await atomicWriteFile(journalPathIn(dir), JSON.stringify(journal, null, 2));
     await applyJournal(dir, journal);
   });

@@ -459,6 +459,31 @@ function isNumericId(id: number | string): id is number {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Two live items whose uuids happen to hash to the same short id.
+ *
+ * The short id is a 6-character hash over a 31-character alphabet, so a collision is not a
+ * theoretical concern at the scale a shared, long-lived, synced list reaches — and the
+ * previous behaviour was to return the FIRST match. Not "an error"; not "the wrong item
+ * reported": `todo_complete T-7K2F9A` would silently complete somebody else's task, and the
+ * only trace would be an audit entry on an item nobody touched.
+ *
+ * Refusing, and naming both candidates by uuid, is the only safe answer — there is no way to
+ * guess which one was meant.
+ */
+export class AmbiguousTodoIdError extends Error {
+  constructor(
+    readonly id: string,
+    readonly candidates: Todo[],
+  ) {
+    super(
+      `docket: "${id}" matches ${candidates.length} items on this device — short ids are a hash, and these two collided. ` +
+        `Use the full uuid instead: ${candidates.map((t) => `${t.uuid} (${t.title})`).join(", ")}`,
+    );
+    this.name = "AmbiguousTodoIdError";
+  }
+}
+
 export function findTodoByAnyId(store: TodoStore, id: number | string): Todo | undefined {
   if (isNumericId(id)) {
     const byNumeric = store.todos.find((t) => t.id === Number(id));
@@ -478,7 +503,11 @@ export function findTodoByAnyId(store: TodoStore, id: number | string): Todo | u
   }
   const normalized = String(id).trim().toUpperCase();
   const withPrefix = normalized.startsWith("T-") ? normalized : `T-${normalized}`;
-  return store.todos.find((t) => shortId(t.uuid) === withPrefix);
+  // Every match, not the first: see AmbiguousTodoIdError. The cost is one full scan instead
+  // of an early exit, on a list small enough that the difference is unmeasurable.
+  const matches = store.todos.filter((t) => shortId(t.uuid) === withPrefix);
+  if (matches.length > 1) throw new AmbiguousTodoIdError(withPrefix, matches);
+  return matches[0];
 }
 
 /**

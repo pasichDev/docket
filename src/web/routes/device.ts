@@ -9,6 +9,17 @@ import { CURRENT_FORMAT_VERSION, readStore } from "../../storage.js";
 import { todoService } from "../../todo-service.js";
 import { SECURITY_HEADERS, json } from "../http.js";
 import { getGeneration } from "../../generation.js";
+import { getCurrentVersion } from "../../update.js";
+import { fileURLToPath } from "node:url";
+
+/** Distinguishes docket's dashboard from anything else that happens to answer on this port. */
+export const WEB_UI_PRODUCT = "docket-web";
+
+let cachedVersion: Promise<string> | null = null;
+function packageVersion(): Promise<string> {
+  cachedVersion ??= getCurrentVersion(fileURLToPath(import.meta.url)).catch(() => "0.0.0-unknown");
+  return cachedVersion;
+}
 
 /**
  * Everything that answers "what is this install?" — version, pairing QR, device identity,
@@ -32,6 +43,13 @@ export async function handleDeviceRoutes(
       startedAt: ctx.startedAt,
       pid: process.pid,
       lanUrl: ctx.lanUrl,
+      // Identity, not just liveness. `ensureWebUiRunning` used to accept any 200 on this
+      // port as "the dashboard is already running", so after an upgrade the OLD detached
+      // process kept serving — a build with a different store format and different route
+      // behaviour, adopted silently by every new MCP session. These three fields are what
+      // let a new process recognise a stale one instead of trusting a status code.
+      product: WEB_UI_PRODUCT,
+      packageVersion: await packageVersion(),
       // Which data directory this process is actually serving. `docket restore` probes this
       // port to warn about processes still holding the directory it is about to replace —
       // and a dashboard on the same port serving somebody ELSE's data directory (a second

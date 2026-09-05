@@ -9,6 +9,7 @@ import { migrateLegacyFields, withStore } from "../storage.js";
 import { syncAllPeers } from "../sync/client.js";
 import { loadViewers, touchViewer } from "../viewers.js";
 import { handleApiRoute } from "./api.js";
+import { AmbiguousTodoIdError } from "../storage.js";
 import { BadRequestError, json, SECURITY_HEADERS, type ApiContext } from "./http.js";
 import { removePeerAndMaybeRevertRole } from "./peer-admin.js";
 import { isClientAssetPath, serveClientAsset } from "./client-assets.js";
@@ -259,6 +260,12 @@ export async function createWebServer(): Promise<Server> {
       // real fault is harder to find, not easier.
       if (err instanceof BadRequestError) {
         json(res, 400, { error: err.message });
+        return;
+      }
+      if (err instanceof AmbiguousTodoIdError) {
+        // 409, not 500: the request was well-formed and the server is healthy — the id the
+        // caller used simply does not identify one item, and the fix is theirs (use the uuid).
+        json(res, 409, { error: err.message, candidates: err.candidates.map((t) => ({ uuid: t.uuid, title: t.title })) });
         return;
       }
       log(`web request error: ${(err as Error).stack ?? (err as Error).message}`);

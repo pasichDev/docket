@@ -98,6 +98,38 @@ function getMcpTodoService(): Promise<TodoService> {
   return mcpTodoServicePromise;
 }
 
+interface RunningWebUi {
+  product?: string;
+  packageVersion?: string;
+  pid?: number;
+}
+
+/** Null when nothing docket-shaped answered — a closed port, a timeout, or a body that is not JSON. */
+async function probeWebUi(port: number): Promise<RunningWebUi | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/version`, { signal: AbortSignal.timeout(800) });
+    if (!res.ok) return null;
+    return (await res.json()) as RunningWebUi;
+  } catch {
+    return null; // ECONNREFUSED / timeout — nothing listening
+  }
+}
+
+/** SIGTERM, then wait for the port to actually go quiet. Returns false if it did not. */
+async function stopWebUi(pid: number | undefined): Promise<boolean> {
+  if (typeof pid !== "number") return false;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return false;
+  }
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if ((await probeWebUi(WEB_PORT)) === null) return true;
+  }
+  return false;
+}
+
 /**
  * Every MCP host spawns its own `node dist/index.js` per session, so this
  * runs on every connection — but the web UI is a single shared HTTP server,
@@ -116,13 +148,34 @@ async function ensureWebUiRunning(): Promise<void> {
     log(`skipping web UI auto-start: DOCKET_WEB_PORT=${process.env.DOCKET_WEB_PORT} is not a fixed port to find it on again`);
     return;
   }
-  try {
-    const res = await fetch(`http://127.0.0.1:${WEB_PORT}/api/version`, {
-      signal: AbortSignal.timeout(800),
-    });
-    if (res.ok) return; // already running
-  } catch {
-    // ECONNREFUSED / timeout — nothing listening, fall through to spawn below.
+  const running = await probeWebUi(WEB_PORT);
+  if (running) {
+    const mine = await getCurrentVersion(SCRIPT_PATH).catch(() => null);
+    if (running.product !== "docket-web") {
+      // Something else owns this port. Spawning a second dashboard on it would fail anyway,
+      // and killing whatever it is would be indefensible.
+      log(`web UI auto-start: port ${WEB_PORT} is held by something that is not docket (${running.product ?? "no product field"}) — leaving it alone`);
+      return;
+    }
+    if (mine === null || running.packageVersion === mine) return; // the right dashboard is already up
+
+    /*
+     * A dashboard from a different build is still serving this data directory. Accepting it
+     * — which is what "the port answered 200" used to mean — leaves an old process reading
+     * and writing a store whose format the new build has since migrated, and running route
+     * and merge behaviour this version no longer has.
+     *
+     * SIGTERM and replace, rather than fail: the detached dashboard has no supervisor, so
+     * refusing would leave the stale one running for ever with only a log line about it.
+     */
+    log(`web UI auto-start: replacing the dashboard on port ${WEB_PORT} (running ${running.packageVersion ?? "unknown"}, this build is ${mine})`);
+    if (!(await stopWebUi(running.pid))) {
+      console.error(
+        `docket: a docket dashboard from a different version (${running.packageVersion ?? "unknown"}) is running on port ${WEB_PORT} and did not stop. ` +
+          `Stop it manually — it is reading the same data directory as this build.`,
+      );
+      return;
+    }
   }
   try {
     const webEntry = fileURLToPath(new URL("./web.js", import.meta.url));
@@ -622,6 +675,11 @@ async function readStoreForReading(): Promise<TodoStore> {
 
 async function handleCli(args: string[]): Promise<boolean> {
   const cmd = args[0]?.toLowerCase();
+
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    console.log(await getCurrentVersion(SCRIPT_PATH));
+    return true;
+  }
 
   if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     printHelp();

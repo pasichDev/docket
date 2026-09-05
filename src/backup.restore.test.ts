@@ -31,6 +31,30 @@ test.after(async () => {
   await rm(dataDirectory, { recursive: true, force: true });
 });
 
+/**
+ * Retries an operation that lost a race for the data directory's locks.
+ *
+ * Both refusals below are correct behaviour, not defects: `docket serve`, the dashboard and
+ * every MCP session share one advisory lock per file, and a machine running forty test files
+ * in parallel — each spawning processes — can genuinely starve one of them past the five
+ * second acquire timeout or the ten second staleness window. The property these tests exist
+ * to check is that no INCOHERENT result is ever produced; a refusal to produce one is the
+ * mechanism working. What must not be tolerated is silence, so anything else propagates.
+ */
+const CONTENTION = /could not read a coherent snapshot|timed out waiting for lock/;
+
+async function despiteContention<T>(what: string, operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      const message = (err as Error).message;
+      if (attempt >= 5 || !CONTENTION.test(message)) throw new Error(`${what}: ${message}`);
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    }
+  }
+}
+
 const inData = (name: string): string => join(dataDirectory, name);
 const sha256 = (b: Buffer): string => createHash("sha256").update(b).digest("hex");
 const PASSWORD = "correct horse battery staple";
@@ -85,7 +109,9 @@ test("every backup taken during concurrent writes is a single coherent moment", 
   })();
 
   const bundles: Buffer[] = [];
-  for (let i = 0; i < 12; i++) bundles.push(await createBackup(PASSWORD));
+  for (let i = 0; i < 12; i++) {
+    bundles.push(await despiteContention(`backup ${i}`, () => createBackup(PASSWORD)));
+  }
   writing = false;
   await writer;
   assert.ok(generation > 1, `premise broken: the writer only managed ${generation} rounds`);
@@ -111,7 +137,7 @@ test("every backup taken during concurrent writes is a single coherent moment", 
 
 test("a bundle whose contents do not match its manifest is refused before anything is touched", async () => {
   await seedDataDirectory();
-  const bundle = await createBackup(PASSWORD);
+  const bundle = await despiteContention("backup", () => createBackup(PASSWORD));
 
   // Corrupt one file inside the bundle, re-sealing the envelope so the GCM tag still passes
   // — i.e. exactly the damage the envelope cannot see: a bad build, not a bad actor.
@@ -121,6 +147,7 @@ test("a bundle whose contents do not match its manifest is refused before anythi
 
   const before = sha256(await readFile(inData("todos.json.enc")));
   await assert.rejects(() => restoreBackup(damaged, PASSWORD), /does not match the manifest/);
+  // The manifest is checked before a single lock is taken, so this one cannot be starved.
   assert.equal(sha256(await readFile(inData("todos.json.enc"))), before, "a refused restore still modified the live store");
   assert.deepEqual(await stagingDirs(), [], "a refused restore left staged files behind");
 });
@@ -131,7 +158,7 @@ test("a bundle whose contents do not match its manifest is refused before anythi
 
 test("a restore interrupted at any commit boundary recovers to the complete new state", async () => {
   await seedDataDirectory();
-  const bundle = await createBackup(PASSWORD);
+  const bundle = await despiteContention("backup", () => createBackup(PASSWORD));
   const target = await snapshotOf(dataDirectory);
 
   // Move on to a different generation, so "the new state" is distinguishable from "whatever
@@ -144,7 +171,7 @@ test("a restore interrupted at any commit boundary recovers to the complete new 
     await restoreThenCrashAfter(bundle, stoppedAfter);
 
     // Whatever state the crash left, the next start has to finish the job.
-    const recovered = await recoverInterruptedRestore();
+    const recovered = await despiteContention(`recovery after boundary ${stoppedAfter}`, () => recoverInterruptedRestore());
     assert.ok(recovered, `nothing to recover after stopping at boundary ${stoppedAfter}`);
 
     for (const name of names) {
