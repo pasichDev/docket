@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ["v*"] # e.g. git tag v1.0.0 && git push origin v1.0.0
+  # A release is more than one publish, and the later ones can fail on their own — the MCP
+  # registry rejected a description the npm publish had no opinion about. Re-running the
+  # whole thing from main finishes what is left without moving a tag that has already been
+  # consumed, because every publish below is a no-op when its target already has this
+  # version.
+  workflow_dispatch:
 
 jobs:
   # Nothing reaches npm before this passes. The previous version of this workflow built the
@@ -35,7 +41,9 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          # On a manual re-run there is no tag to match — the ancestry check above is what
+          # establishes that this is a commit worth publishing.
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version."
             exit 1
           fi
@@ -85,16 +93,27 @@ jobs:
           status="$(docket status)"
           grep -q "^Mode: local" <<< "$status"
 
-      - name: The published server metadata must match this version
+      - name: The published server metadata must be acceptable to the MCP registry
         run: |
           set -euo pipefail
-          if [ -f server.json ]; then
-            metadata_version="$(node -p "require('./server.json').version ?? ''")"
-            if [ -n "$metadata_version" ] && [ "$metadata_version" != "${{ steps.version.outputs.version }}" ]; then
-              echo "::error::server.json says $metadata_version but package.json says ${{ steps.version.outputs.version }}."
-              exit 1
-            fi
-          fi
+          if [ ! -f server.json ]; then exit 0; fi
+          node -e '
+            const meta = require("./server.json");
+            const expected = process.argv[1];
+            const fail = (m) => { console.log(`::error::${m}`); process.exitCode = 1; };
+            if (meta.version && meta.version !== expected) fail(`server.json says ${meta.version} but package.json says ${expected}.`);
+            for (const pkg of meta.packages ?? []) {
+              if (pkg.version && pkg.version !== expected) fail(`server.json packages[] says ${pkg.version} but package.json says ${expected}.`);
+            }
+            // The registry caps this at 100 characters and rejects the whole submission with
+            // a 422 if it is longer — after npm has already published, which leaves the
+            // release half-done. Checking it here costs nothing and is the difference between
+            // a failed gate and a partial release.
+            const description = meta.description ?? "";
+            if ([...description].length > 100) {
+              fail(`server.json description is ${[...description].length} characters; the MCP registry allows 100.`);
+            }
+          ' "${{ steps.version.outputs.version }}"
 
       - name: The image must build and answer on the exact tagged tree
         run: |
@@ -132,7 +151,16 @@ jobs:
       - run: npm run build
 
       - name: Publish to npm
-        run: npm publish --provenance --tag "${{ needs.verify.outputs.dist_tag }}"
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          # Already there? Then this is a re-run finishing the steps after it, and npm would
+          # refuse a republish anyway. Skipping keeps the rest of the release reachable.
+          if npm view "@pasichdev/docket@$version" version > /dev/null 2>&1; then
+            echo "@pasichdev/docket@$version is already published — skipping."
+            exit 0
+          fi
+          npm publish --provenance --tag "${{ needs.verify.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
