@@ -205,3 +205,159 @@ test("withFileLock: ownership decided by rename, so a lock taken between judging
   await withFileLock(lockPath, async () => {});
   await assert.rejects(() => stat(lockPath), "a normal release must still remove the lock");
 });
+
+/*
+ * The three-process case, which is the whole reason the restore uses `link` rather than
+ * `rename`.
+ *
+ * The test above ("does not delete the new holder's lock") is the two-process version, and
+ * it passes either way: when the releaser puts back what it claimed, it is putting back the
+ * NEW holder's record, and rename and link behave identically because the path is free. The
+ * difference only exists in the gap between the claim and the restore, during which the lock
+ * path is genuinely unlocked — so a third process can legitimately acquire it. `rename` then
+ * silently deletes that third process's brand-new lock and installs a stale record in its
+ * place; `link` fails with EEXIST and leaves it alone.
+ *
+ * Scheduling a real third contender inside that gap is not something a test can do
+ * deterministically, so the restore is exercised directly against both states the path can
+ * be in.
+ */
+test("withFileLock: restoring a claimed lock refuses to clobber one someone else has since taken", async () => {
+  const { readFile, rm: remove, writeFile: write } = await import("node:fs/promises");
+  const { restoreLockRecord } = await import("./filelock.js");
+  const lockPath = join(dataDirectory, "three-way.lock");
+  const claimedPath = `${lockPath}.releasing.claimed`;
+  await write(claimedPath, "record-A");
+
+  // A third process acquired during the gap. Its lock is the only legitimate one now.
+  await write(lockPath, "record-C");
+  assert.equal(await restoreLockRecord(claimedPath, lockPath), "superseded");
+  assert.equal(await readFile(lockPath, "utf8"), "record-C", "the restore overwrote a lock its owner still holds");
+
+  // Nobody took the path: the rightful holder gets its record back.
+  await remove(lockPath, { force: true });
+  assert.equal(await restoreLockRecord(claimedPath, lockPath), "restored");
+  assert.equal(await readFile(lockPath, "utf8"), "record-A");
+  await remove(lockPath, { force: true });
+  await remove(claimedPath, { force: true });
+});
+
+test("the lease reports loss by identity, so a fresh lock at the same path is not mistaken for ours", async () => {
+  const { writeFile: write, utimes: touch } = await import("node:fs/promises");
+  const { LeaseLostError } = await import("./filelock.js");
+  const lockPath = join(dataDirectory, "identity.lock");
+  let error: unknown = null;
+
+  await withFileLock(lockPath, async (lease) => {
+    // Reaped and replaced while this process still believes it is inside.
+    const aged = new Date(Date.now() - LOCK_STALE_MS - 60_000);
+    await touch(lockPath, aged, aged);
+    await write(lockPath, JSON.stringify({ id: "someone-else", pid: 1, host: "elsewhere", startedAt: new Date().toISOString() }));
+    error = await lease.assertOwned().then(() => null, (err: unknown) => err);
+  });
+  assert.ok(error instanceof LeaseLostError, `expected LeaseLostError, got ${String(error)}`);
+});
+
+/* ==========================================================================================
+ * The small encrypted registries, which had no detection at all before the lease existed
+ *
+ * storage.ts always caught a lost race with its own content stamp. peers, viewers, server
+ * devices and remote credentials simply wrote — so a writer suspended past the staleness
+ * window would wake up and overwrite a newer registry with the copy it read minutes ago,
+ * silently unpairing a device that had just been added or restoring one just revoked.
+ * ========================================================================================== */
+
+/** What a suspended holder looks like from outside: a lock nobody has refreshed in far too long. */
+async function ageLock(lockPath: string): Promise<void> {
+  const { utimes: touch } = await import("node:fs/promises");
+  const aged = new Date(Date.now() - LOCK_STALE_MS - 60_000);
+  await touch(lockPath, aged, aged);
+}
+
+function gate(): { reached: Promise<void>; open(): void } {
+  let open!: () => void;
+  const reached = new Promise<void>((resolve) => (open = () => resolve()));
+  return { reached, open };
+}
+
+test("withRegistry: a writer whose lock was reaped retries instead of overwriting the newer registry", async () => {
+  const { readFile, writeFile: write } = await import("node:fs/promises");
+  const { withRegistry } = await import("./registry.js");
+  const path = join(dataDirectory, "registry.json");
+  const lockPath = `${path}.lock`;
+  await write(path, JSON.stringify([]));
+
+  const options = {
+    path,
+    lockPath,
+    name: "test registry",
+    load: async () => JSON.parse(await readFile(path, "utf8")) as string[],
+    serialize: (value: string[]) => Buffer.from(JSON.stringify(value)),
+  };
+
+  const stalled = gate();
+  const mayFinish = gate();
+  let attempts = 0;
+  let sawOnAttemptTwo: string[] = [];
+
+  const suspended = withRegistry(options, async (entries) => {
+    attempts += 1;
+    if (attempts === 1) {
+      stalled.open();
+      await mayFinish.reached;
+    } else {
+      sawOnAttemptTwo = [...entries];
+    }
+    entries.push(`a${attempts}`);
+  });
+  await stalled.reached;
+
+  await ageLock(lockPath);
+  await withRegistry(options, (entries) => entries.push("b"));
+
+  mayFinish.open();
+  await suspended;
+
+  assert.equal(attempts, 2, "the stalled writer committed without ever re-reading the registry");
+  assert.deepEqual(sawOnAttemptTwo, ["b"], "the retry must run against the registry that actually won");
+  assert.deepEqual(
+    JSON.parse(await readFile(path, "utf8")),
+    ["b", "a2"],
+    "the reaped writer overwrote a newer registry — this is how a just-approved device silently unpairs",
+  );
+});
+
+test("withRegistry: a write is abandoned rather than committed when the state keeps moving", async () => {
+  // Three lost races in a row is not contention any more, it is something stuck. Retrying
+  // forever would hang a tool call; committing anyway is the exact bug the retry prevents.
+  const { readFile, writeFile: write } = await import("node:fs/promises");
+  const { withRegistry } = await import("./registry.js");
+  const path = join(dataDirectory, "hostile.json");
+  await write(path, JSON.stringify([]));
+
+  let interference = 0;
+  await assert.rejects(
+    () =>
+      withRegistry(
+        {
+          path,
+          lockPath: `${path}.lock`,
+          name: "hostile registry",
+          load: async () => JSON.parse(await readFile(path, "utf8")) as string[],
+          serialize: (value: string[]) => Buffer.from(JSON.stringify(value)),
+        },
+        async (entries) => {
+          // Someone else commits between this attempt's load and its commit, every time.
+          await write(path, JSON.stringify([`other-${++interference}`]));
+          entries.push("mine");
+        },
+      ),
+    /kept changing underneath this write/,
+  );
+  assert.equal(interference, 3, "it must give up after a bounded number of attempts, not spin");
+  assert.deepEqual(
+    JSON.parse(await readFile(path, "utf8")),
+    ["other-3"],
+    "the abandoned write must leave the other writer's state exactly as it was",
+  );
+});

@@ -119,3 +119,72 @@ test("a writer whose lock was reaped mid-operation retries instead of clobbering
     "a write was lost: the stalled process overwrote the store it no longer held the lock for",
   );
 });
+
+/**
+ * The other half of the A3 fix: the stamp has to be a HASH, not (mtime, size).
+ *
+ * The cheap version was almost always right, and "almost" is the problem — the guard exists
+ * for exactly the rare path where being almost right is being wrong. Two ciphertexts of the
+ * same store very often have the identical LENGTH (the plaintext is JSON whose size barely
+ * moves for a field edit, and AES-GCM adds fixed overhead), and mtime resolution is one
+ * second on some filesystems. This reproduces both at once: an out-of-band write of exactly
+ * the same size, with the mtime put back afterwards.
+ */
+test("a same-size write with the mtime restored is still caught, and the mutation is replayed", async () => {
+  const { withStore, readStore } = await import("./storage.js");
+  const { decryptFromBuffer, encryptToBuffer } = await import("./crypto.js");
+  const storePath = join(dataDirectory, "todos.json.enc");
+
+  // A store whose single title is a fixed width, so the interfering edit can be the same
+  // number of characters and the serialized JSON cannot change length.
+  await withStore((store) => {
+    store.todos = [];
+    store.deletedUuids = [];
+  });
+  const { createTodo } = await import("./mutations.js");
+  await withStore((store) => {
+    createTodo(store, { title: "aaaaaaaa", agent: "seed", session: "s" }, "device-seed", "Seed");
+  });
+
+  /*
+   * Both writes are pinned to the same whole-second timestamp. That is not a contrivance to
+   * make the test pass — it is what a filesystem with one-second mtime resolution (HFS+,
+   * ext3, most network filesystems, and FAT at two seconds) gives you for free whenever two
+   * writes land in the same second. Restoring `before.mtime` instead would quietly lose the
+   * sub-millisecond part on a modern filesystem and the old (mtime, size) stamp would
+   * "detect" the change by accident, which is precisely the kind of pass that proves nothing.
+   */
+  const pinned = new Date(Math.floor(Date.now() / 1000) * 1000 - 5_000);
+  await utimes(storePath, pinned, pinned);
+  const before = await stat(storePath);
+  let attempts = 0;
+  let sawInterferingTitle = false;
+
+  await withStore(async (store) => {
+    attempts += 1;
+    if (attempts === 1) {
+      // Someone else commits, without disturbing the lock: same byte count, and the mtime
+      // put back to what this operation saw when it read.
+      const other = JSON.parse(await decryptFromBuffer(await readFile(storePath)));
+      other.todos[0].title = "bbbbbbbb";
+      await writeFile(storePath, await encryptToBuffer(JSON.stringify(other, null, 2)));
+      const after = await stat(storePath);
+      assert.equal(after.size, before.size, "premise broken: the interfering write must be the same size");
+      await utimes(storePath, pinned, pinned);
+      assert.equal(
+        (await stat(storePath)).mtimeMs,
+        before.mtimeMs,
+        "premise broken: the two writes must be indistinguishable by mtime",
+      );
+    } else {
+      sawInterferingTitle = store.todos[0].title === "bbbbbbbb";
+    }
+    store.todos[0].done = true;
+  });
+
+  assert.equal(attempts, 2, "a same-size, same-mtime write slipped past the stamp — this is a silently lost update");
+  assert.equal(sawInterferingTitle, true, "the retry must run against the store that actually won");
+  const final = await readStore();
+  assert.equal(final.todos[0].title, "bbbbbbbb", "the interfering write was overwritten");
+  assert.equal(final.todos[0].done, true, "the retried mutation was not applied");
+});

@@ -152,16 +152,53 @@ async function releaseLock(lockPath: string, identity: string): Promise<void> {
   }
 
   const current = await readFile(claimed, "utf8").catch(() => null);
-  if (current !== null && current !== identity) {
-    // Not ours after all — put it back for its rightful holder and stay out of it. A failed
-    // restore leaves the lock free, which is the same state a reap would have produced.
-    log(`filelock: not releasing ${lockPath} — it is now held by someone else (this process's lock was reaped while held)`);
-    await rename(claimed, lockPath).catch(async () => {
-      await rm(claimed, { force: true });
-    });
+  if (current === null || current === identity) {
+    await rm(claimed, { force: true });
     return;
   }
+
+  /*
+   * Not ours: this process was reaped while it believed it held the lock, and the file it
+   * just moved aside belongs to whoever took over.
+   *
+   * Putting it back with `rename` is what the previous version did, and it is wrong for a
+   * reason that only shows up with three processes. Between this releaser's rename-away and
+   * its rename-back there is a gap in which the lock path is FREE, so a third process can
+   * legitimately acquire it — and rename() on POSIX silently replaces an existing file, so
+   * the restore would delete the third process's brand-new lock and install a stale record
+   * in its place. Restoring a lock is therefore only safe if it cannot clobber.
+   *
+   * `link()` is that operation: it fails with EEXIST rather than overwriting. If the path is
+   * free the rightful holder gets its record back; if someone else has already taken it,
+   * they keep it and this process quietly drops what it was holding. Either outcome leaves
+   * exactly one holder, which is the whole invariant.
+   */
+  log(`filelock: not releasing ${lockPath} — it is now held by someone else (this process's lock was reaped while held)`);
+  await restoreLockRecord(claimed, lockPath);
   await rm(claimed, { force: true });
+}
+
+/**
+ * Puts a claimed lock record back at `lockPath` without ever overwriting what may already
+ * be there.
+ *
+ * Its own function because the distinction it encodes is invisible at the call site and
+ * only observable with three processes: `link` fails with EEXIST where `rename` silently
+ * replaces, and the difference between them is whether a third process's brand-new lock
+ * survives this restore. That is not something a two-process test can reach, so it is
+ * tested here directly.
+ *
+ * "superseded" is a perfectly good outcome — someone else legitimately holds the path and
+ * keeps it. Any other failure leaves the path free, which is the same state the reap that
+ * started this would have produced.
+ */
+export async function restoreLockRecord(claimedPath: string, lockPath: string): Promise<"restored" | "superseded"> {
+  try {
+    await link(claimedPath, lockPath);
+    return "restored";
+  } catch {
+    return "superseded";
+  }
 }
 
 /**
@@ -195,7 +232,35 @@ async function releaseLock(lockPath: string, identity: string): Promise<void> {
  * — but a fast, specific failure names the architecture mistake instead of surfacing five
  * seconds later as a mysterious timeout.
  */
-export async function withFileLock<T>(lockPath: string, fn: () => T | Promise<T>): Promise<T> {
+/**
+ * Proof, checkable at any moment, that the lock this callback was given is still the one on
+ * disk.
+ *
+ * The advisory lock cannot prevent a suspended holder from being reaped — nothing on one
+ * machine can, short of a kernel lease — so the design detects the loss instead. storage.ts
+ * always had that detection through its own content stamp; the peer, device, viewer and
+ * identity registries had nothing, and a writer that woke after a reap would overwrite a
+ * newer registry with its stale copy. Handing every locked callback a lease makes the check
+ * available to all of them for one line at the point of commit.
+ */
+export interface Lease {
+  /** Throws LeaseLostError if the lock is gone or now held by someone else. */
+  assertOwned(): Promise<void>;
+  /** Non-throwing form, for callers that want to decide for themselves. */
+  isOwned(): Promise<boolean>;
+}
+
+export class LeaseLostError extends Error {
+  constructor(lockPath: string) {
+    super(
+      `docket: the lock at ${lockPath} was taken over while this operation held it — ` +
+        `its work has been abandoned rather than written over the newer state`,
+    );
+    this.name = "LeaseLostError";
+  }
+}
+
+export async function withFileLock<T>(lockPath: string, fn: (lease: Lease) => T | Promise<T>): Promise<T> {
   const held = heldLocks.getStore();
   const heldAt = held?.get(lockPath);
   const marker = new Error();
@@ -222,8 +287,17 @@ export async function withFileLock<T>(lockPath: string, fn: () => T | Promise<T>
       .catch(() => {});
   }, LOCK_HEARTBEAT_MS);
   beat.unref();
+  const lease: Lease = {
+    async isOwned() {
+      return (await readFile(lockPath, "utf8").catch(() => null)) === identity;
+    },
+    async assertOwned() {
+      if (!(await this.isOwned())) throw new LeaseLostError(lockPath);
+    },
+  };
+
   try {
-    return await heldLocks.run(nested, async () => fn());
+    return await heldLocks.run(nested, async () => fn(lease));
   } finally {
     clearInterval(beat);
     await releaseLock(lockPath, identity);

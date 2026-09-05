@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { dedupeHistory, HISTORY_FLUSH_THRESHOLD, HISTORY_INLINE_MAX, type HistoryEntry } from "./history.js";
 import { log } from "./log.js";
 import type { TodoStore } from "./types.js";
 import { dataPath } from "./data-dir.js";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 const HISTORY_PATH = await dataPath("history.json.enc");
 
@@ -46,9 +46,7 @@ export async function readHistoryLog(): Promise<HistoryLogRead> {
 }
 
 async function writeHistoryLog(logData: HistoryLog): Promise<void> {
-  const tmpPath = `${HISTORY_PATH}.${randomUUID()}.tmp`;
-  await writeFile(tmpPath, await encryptToBuffer(JSON.stringify(logData)), { mode: 0o600 });
-  await rename(tmpPath, HISTORY_PATH);
+  await atomicWriteFile(HISTORY_PATH, await encryptToBuffer(JSON.stringify(logData)));
 }
 
 /**

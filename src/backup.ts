@@ -1,8 +1,9 @@
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { getDataDirectory } from "./data-dir.js";
 import { resetStoreEpoch } from "./storage.js";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 // Everything a fresh machine needs to become this device again: its identity (so paired
 // peers keep recognizing it — a NEW identity would look like a brand-new, unpaired device
@@ -128,9 +129,7 @@ export async function restoreBackup(buf: Buffer, password: string): Promise<{ re
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
-    const tmpPath = `${targetPath}.${randomUUID()}.tmp`;
-    await writeFile(tmpPath, Buffer.from(base64, "base64"), { mode: 0o600 });
-    await rename(tmpPath, targetPath);
+    await atomicWriteFile(targetPath, Buffer.from(base64, "base64"));
     restoredFiles.push(name);
   }
 

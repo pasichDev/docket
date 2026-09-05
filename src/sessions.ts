@@ -1,7 +1,7 @@
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
 import { dataPath } from "./data-dir.js";
-import { withFileLock } from "./filelock.js";
+import { withFileLock, type Lease } from "./filelock.js";
+import { atomicWriteFile } from "./fs-atomic.js";
 import { log } from "./log.js";
 
 const SESSIONS_PATH = await dataPath("sessions.json");
@@ -48,10 +48,13 @@ async function readSessions(): Promise<LiveSession[]> {
   }
 }
 
-async function writeSessions(sessions: LiveSession[]): Promise<void> {
-  const tmpPath = `${SESSIONS_PATH}.${randomUUID()}.tmp`;
-  await writeFile(tmpPath, JSON.stringify(sessions, null, 2), { mode: 0o600 });
-  await rename(tmpPath, SESSIONS_PATH);
+async function writeSessions(sessions: LiveSession[], lease: Lease): Promise<void> {
+  // Presence is decorative, but a stale writer here is not: it republishes a list of
+  // sessions it reaped minutes ago, resurrecting terminals that have since closed and
+  // dropping ones that have since opened. The list heals on the next heartbeat, so this
+  // costs nothing and closes the window anyway.
+  await lease.assertOwned();
+  await atomicWriteFile(SESSIONS_PATH, JSON.stringify(sessions, null, 2));
 }
 
 /**
@@ -75,13 +78,13 @@ function isLive(session: LiveSession, now: number): boolean {
 }
 
 async function updateSessions(mutate: (sessions: LiveSession[]) => LiveSession[]): Promise<void> {
-  await withFileLock(LOCK_PATH, async () => {
+  await withFileLock(LOCK_PATH, async (lease) => {
     const now = Date.now();
     // Reaped here rather than on a timer: registration, heartbeat and shutdown all pass
     // through this one write, which is often enough to keep the file honest without a
     // background job whose only purpose is tidying.
     const live = (await readSessions()).filter((s) => isLive(s, now));
-    await writeSessions(mutate(live));
+    await writeSessions(mutate(live), lease);
   });
 }
 

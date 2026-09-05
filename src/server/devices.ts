@@ -3,7 +3,7 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { dataPath } from "../data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "../crypto.js";
 import { deriveServerAuthSecret, getDevicePublicKey } from "../device.js";
-import { withFileLock } from "../filelock.js";
+import { withRegistry } from "../registry.js";
 import { CODE_CHARSET, generateShortCode } from "../short-code.js";
 import { checkPairingRateLimit, pairingSas } from "../sync/peering.js";
 
@@ -46,20 +46,22 @@ async function loadDevices(): Promise<PairedDevice[]> {
   }
 }
 
-async function saveDevices(devices: PairedDevice[]): Promise<void> {
-  const tmpPath = `${DEVICES_PATH}.${randomUUID()}.tmp`;
-  const encrypted = await encryptToBuffer(JSON.stringify(devices, null, 2));
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  await rename(tmpPath, DEVICES_PATH);
-}
-
+/**
+ * Fenced, like every other registry — and this one carries the most weight: it is the list
+ * of devices allowed to talk to an authoritative server. A stale writer overwriting it
+ * un-revokes a device someone deliberately revoked.
+ */
 async function withDevices<T>(fn: (devices: PairedDevice[]) => T | Promise<T>): Promise<T> {
-  return withFileLock(DEVICES_LOCK_PATH, async () => {
-    const devices = await loadDevices();
-    const result = await fn(devices);
-    await saveDevices(devices);
-    return result;
-  });
+  return withRegistry(
+    {
+      path: DEVICES_PATH,
+      lockPath: DEVICES_LOCK_PATH,
+      name: "the server's device registry",
+      load: loadDevices,
+      serialize: (devices) => encryptToBuffer(JSON.stringify(devices, null, 2)),
+    },
+    fn,
+  );
 }
 
 export async function listDevices(): Promise<PairedDevice[]> {

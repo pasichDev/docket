@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLineReader } from "../cli-prompt.js";
+import { atomicWriteFile } from "../fs-atomic.js";
 
 /**
  * How an entry is recognised as ours — and nothing else is ever touched.
@@ -169,9 +170,15 @@ export function diffLines(before: string, after: string): string {
   return [...removed.map((l) => `- ${l.trim()}`), ...added.map((l) => `+ ${l.trim()}`)].join("\n");
 }
 
+/**
+ * settings.json is the user's, not ours, and this is a read-modify-write of it: a bare
+ * writeFile truncates first, so a crash between the truncate and the last byte leaves them
+ * with an empty or half-written Claude settings file — every hook, permission and MCP entry
+ * gone, from a command that only meant to add one hook.
+ */
 async function writeSettings(path: string, settings: ClaudeSettings): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+  await atomicWriteFile(path, `${JSON.stringify(settings, null, 2)}\n`, 0o644);
 }
 
 /**

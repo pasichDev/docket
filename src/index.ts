@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -25,6 +25,7 @@ import type { Todo, TodoList } from "./types.js";
 import { checkForUpdate, getCurrentVersion, runUpdate } from "./update.js";
 import { endSession, listSessions, registerSession, touchSession } from "./sessions.js";
 import { currentWorkspace, setWorkspaceRoot, slugifyWorkspace, summarizeWorkspaces } from "./workspace.js";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
@@ -710,7 +711,7 @@ async function handleCli(args: string[]): Promise<boolean> {
     const content = format === "markdown" || format === "md" ? exportToMarkdown(store) : exportToJson(store);
 
     if (outFile) {
-      await writeFile(outFile, content, "utf8");
+      await atomicWriteFile(outFile, content, 0o644);
       console.log(`Exported ${store.todos.length} items to ${outFile}`);
     } else {
       process.stdout.write(content + "\n");
@@ -768,7 +769,10 @@ async function handleCli(args: string[]): Promise<boolean> {
       process.exit(1);
     }
     const bundle = await createBackup(password);
-    await writeFile(file, bundle);
+    // The one write where "it printed success" and "it is on the disk" must not be able to
+    // disagree: a truncated backup is discovered on the day it is needed. 0600 because the
+    // bundle carries this device's private sync identity, encrypted or not.
+    await atomicWriteFile(file, bundle);
     console.log(`Backup written to ${file} (${bundle.length} bytes, encrypted). Restore it with \`docket restore ${file}\` — on this or any other machine.`);
     return true;
   }

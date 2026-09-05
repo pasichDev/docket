@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 /**
  * DeploymentMode config system (RFC "Local and Self-Hosted Backend Modes" §10). Read once
@@ -185,6 +186,6 @@ export async function writeDeploymentConfig(deployment: ConfigFileDeployment, op
     ...(existing.allowInsecureRemote !== undefined ? { allowInsecureRemote: existing.allowInsecureRemote } : {}),
   };
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  await atomicWriteFile(path, `${JSON.stringify(next, null, 2)}\n`);
   return path;
 }

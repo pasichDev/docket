@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, readFile, rename, rm, stat } from "node:fs/promises";
 import { dataPath } from "./data-dir.js";
+import { atomicCreateOrRead, atomicWriteFile } from "./fs-atomic.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
-import { withFileLock } from "./filelock.js";
+import { withFileLock, LeaseLostError, type Lease } from "./filelock.js";
 import { flushOverflowHistory, pruneOrphanedHistory } from "./history-store.js";
 import { log } from "./log.js";
 import { shortId, stampSeq } from "./mutations.js";
@@ -76,10 +77,7 @@ async function readRawStoreJson(): Promise<string | null> {
     throw err;
   }
   log(`storage: migrating legacy plaintext todos.json -> encrypted todos.json.enc`);
-  const tmpPath = `${STORE_PATH}.${randomUUID()}.tmp`;
-  const encrypted = await encryptToBuffer(plaintext);
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  await rename(tmpPath, STORE_PATH);
+  await atomicWriteFile(STORE_PATH, await encryptToBuffer(plaintext));
   try {
     await rename(LEGACY_PLAINTEXT_PATH, `${LEGACY_PLAINTEXT_PATH}.bak`);
   } catch (err) {
@@ -211,45 +209,58 @@ function backfillLocalSeq(store: TodoStore): void {
 }
 
 /**
- * Identity of the store file as we read it. Cheap, and enough to notice that somebody else
- * wrote in the meantime — a write always goes through `rename`, so both the mtime and the
- * size come from a different inode than the one we looked at.
+ * Identity of the store file as we read it — a hash of its actual bytes.
+ *
+ * This used to be (mtime, size), which is cheap and almost always right, and "almost" is
+ * the problem: the guard exists precisely for the case where a suspended writer wakes up
+ * after its lock was reaped, which is a rare path where being almost right is being wrong.
+ * Two ciphertexts of the same store differ in content but very often not in LENGTH — the
+ * plaintext is JSON whose size barely moves for a field edit, and AES-GCM adds a fixed
+ * overhead — and mtime granularity is one second on some filesystems and coarser on others.
+ * A stale writer could satisfy both and overwrite a newer store.
+ *
+ * Hashing the ciphertext costs one read of a file this process is about to rewrite anyway,
+ * and cannot collide by accident.
  */
-type StoreStamp = { mtimeMs: number; size: number } | null;
+type StoreStamp = string | null;
 
 async function stampOf(): Promise<StoreStamp> {
   try {
-    const info = await stat(STORE_PATH);
-    return { mtimeMs: info.mtimeMs, size: info.size };
+    return createHash("sha256").update(await readFile(STORE_PATH)).digest("hex");
   } catch {
     return null; // no store yet — "unchanged" then means "still absent"
   }
 }
 
 function sameStamp(a: StoreStamp, b: StoreStamp): boolean {
-  if (a === null || b === null) return a === b;
-  return a.mtimeMs === b.mtimeMs && a.size === b.size;
+  return a === b;
 }
 
-/** Thrown when the store changed underneath a read-modify-write. Never surfaces to callers — withStore retries. */
-class StoreChangedError extends Error {}
-
-async function saveStore(store: TodoStore, expected: StoreStamp): Promise<void> {
+async function saveStore(store: TodoStore, expected: StoreStamp, lease: Lease): Promise<void> {
   store.formatVersion = CURRENT_FORMAT_VERSION;
-  const tmpPath = `${STORE_PATH}.${randomUUID()}.tmp`;
   const encrypted = await encryptToBuffer(JSON.stringify(store, null, 2));
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  // The last thing before committing. The lock is what normally prevents a concurrent
-  // write, but a process suspended past the staleness threshold (laptop sleep, SIGSTOP)
-  // cannot heartbeat, gets its lock reaped, and wakes up still inside its own critical
-  // section — ownership checks on the NEXT acquisition are too late for that one. Comparing
-  // what we read against what is there now turns a silent lost update into a retry. The
-  // remaining stat→rename window is microseconds and cannot span a sleep.
+
+  // Two independent checks, because they catch different things.
+  //
+  // The lease says "this process still holds the lock it took" — it catches a reap that has
+  // already happened, cheaply and by identity.
+  //
+  // The stamp says "the bytes are the ones this operation read" — it catches a lost update
+  // whatever its cause, including one that left the lock looking untouched. A process
+  // suspended past the staleness threshold (laptop sleep, SIGSTOP) cannot heartbeat, gets
+  // its lock reaped, and wakes still inside its own critical section; ownership checks on
+  // the NEXT acquisition are too late for that one.
+  //
+  // Both raise the same LeaseLostError, and deliberately so: to withStore they mean one
+  // thing — "the state you read is no longer the current state, run the mutation again."
+  // Two exception types for one recovery would only invite a retry loop that handles one
+  // and lets the other escape, which is exactly the bug that shipped when the lease check
+  // was added to a loop that only knew about the stamp.
+  await lease.assertOwned();
   if (!sameStamp(await stampOf(), expected)) {
-    await rm(tmpPath, { force: true });
-    throw new StoreChangedError("the store changed while this operation held it");
+    throw new LeaseLostError(LOCK_PATH);
   }
-  await rename(tmpPath, STORE_PATH);
+  await atomicWriteFile(STORE_PATH, encrypted);
 }
 
 let cachedEpoch: string | null = null;
@@ -257,14 +268,15 @@ let cachedEpoch: string | null = null;
 /** This store's incarnation id, minted on first use. Cached — it changes only via resetStoreEpoch, which is out-of-process by nature (see backup.ts) and already requires a restart. */
 export async function getStoreEpoch(): Promise<string> {
   if (cachedEpoch) return cachedEpoch;
-  try {
-    const existing = (await readFile(STORE_EPOCH_PATH, "utf8")).trim();
-    if (existing) return (cachedEpoch = existing);
-  } catch {
-    // Not minted yet — every install before v8 is in this state, as is a fresh one.
-  }
-  cachedEpoch = randomUUID();
-  await writeFile(STORE_EPOCH_PATH, cachedEpoch, { mode: 0o600 });
+  // Exclusive-create for the same reason as the at-rest key: two fresh processes racing here
+  // would each cache a different epoch, and an epoch is what tells every paired device
+  // whether its cursor into this store still means anything.
+  const contents = await atomicCreateOrRead(
+    STORE_EPOCH_PATH,
+    () => Buffer.from(randomUUID()),
+    (buf) => UUID_RE.test(buf.toString("utf8").trim()),
+  );
+  cachedEpoch = contents.toString("utf8").trim();
   return cachedEpoch;
 }
 
@@ -307,7 +319,7 @@ export async function restorePreUpgradeStore(): Promise<{ restoredFrom: string; 
  */
 export async function resetStoreEpoch(): Promise<void> {
   cachedEpoch = randomUUID();
-  await writeFile(STORE_EPOCH_PATH, cachedEpoch, { mode: 0o600 });
+  await atomicWriteFile(STORE_EPOCH_PATH, cachedEpoch);
   log(`storage: store epoch reset to ${cachedEpoch} — paired devices will re-sync from scratch`);
 }
 
@@ -325,7 +337,7 @@ const MAX_WRITE_ATTEMPTS = 3;
 export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await withFileLock(LOCK_PATH, async () => {
+      return await withFileLock(LOCK_PATH, async (lease) => {
         const expected = await stampOf();
         const { store, fileVersion } = await loadStoreWithVersion();
         // Before the first write that would persist a newer format — this is the only
@@ -337,7 +349,7 @@ export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Pr
         // Under the same lock as the store, and BEFORE it: see flushOverflowHistory for why
         // appending has to come first.
         await flushOverflowHistory(store);
-        await saveStore(store, expected);
+        await saveStore(store, expected, lease);
         // ...and pruning has to come after, because saveStore above can still reject this
         // whole attempt and send it round the retry loop. Gated on the tombstone list having
         // actually grown — an O(1) check, so a write that deleted nothing never opens the
@@ -349,8 +361,8 @@ export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Pr
       // `fn` is re-run against a freshly loaded store. Every caller in this codebase is a
       // pure mutation of the store it is handed, which is what makes that safe; a callback
       // with outside side effects would need to be idempotent.
-      if (!(err instanceof StoreChangedError) || attempt >= MAX_WRITE_ATTEMPTS) {
-        if (err instanceof StoreChangedError) {
+      if (!(err instanceof LeaseLostError) || attempt >= MAX_WRITE_ATTEMPTS) {
+        if (err instanceof LeaseLostError) {
           throw new Error(`docket: the store kept changing underneath this write (${MAX_WRITE_ATTEMPTS} attempts) — is another docket process stuck?`);
         }
         throw err;

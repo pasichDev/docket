@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolveDataDirectory } from "./data-dir.js";
 import { execFile, type ExecFileException } from "node:child_process";
-import { appendFile, cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import { isOnPath } from "./hooks/install.js";
 import { getDeviceName } from "./device.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { beginServerPairing, finishServerPairing, PairingError, probeServer } from "./remote/enrolment.js";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -41,10 +42,9 @@ async function installStatsIntegration(dataDirectory: string): Promise<void> {
   const configDir = `${homedir()}/.config/docket`;
   const integration = `${configDir}/stats.sh`;
   await mkdir(configDir, { recursive: true, mode: 0o700 });
-  await writeFile(
+  await atomicWriteFile(
     integration,
     `# docket terminal helpers\n# Usage: todo_stats (or add it to your shell prompt/tmux status)\ntodo_stats() {\n  npx --yes --prefix /tmp --package=@pasichdev/docket docket stats\n}\nexport DOCKET_DATA_DIR=${JSON.stringify(dataDirectory)}\n`,
-    { mode: 0o600 },
   );
   const shellRc = process.env.SHELL?.endsWith("zsh") ? `${homedir()}/.zshrc` : `${homedir()}/.bashrc`;
   let alreadySourced = false;
@@ -143,7 +143,8 @@ async function configureHosts(env: Record<string, string>): Promise<void> {
       const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
       servers["docket"] = { command: "npx", args: serverArgs, env };
       config.mcpServers = servers;
-      await writeFile(target, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+      // Read-modify-write of a config that already holds the user's other MCP servers.
+      await atomicWriteFile(target, `${JSON.stringify(config, null, 2)}\n`);
       console.log(`Configured ${target}.`);
     } catch { /* host is not installed or config is not writable */ }
   }

@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
-import { withFileLock } from "./filelock.js";
+import { withRegistry } from "./registry.js";
 import type { Peer } from "./types.js";
 
 const PEERS_PATH = await dataPath("peers.json.enc");
@@ -24,27 +24,26 @@ export async function loadPeers(): Promise<Peer[]> {
   }
 }
 
-async function savePeers(peers: Peer[]): Promise<void> {
-  const tmpPath = `${PEERS_PATH}.${randomUUID()}.tmp`;
-  const encrypted = await encryptToBuffer(JSON.stringify(peers, null, 2));
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  await rename(tmpPath, PEERS_PATH);
-}
-
 /**
- * Locked read-modify-write — several peers can finish syncing around the same
- * moment (syncAllPeers runs them concurrently via Promise.allSettled), and
- * without this two `markPeerSynced` calls landing close together would race:
- * both load(), both mutate their own peer, and whichever save()s last wins,
- * silently discarding the other's update.
+ * Locked read-modify-write with lease + content fencing — see registry.ts.
+ *
+ * Several peers can finish syncing around the same moment (syncAllPeers runs them
+ * concurrently), so two markPeerSynced calls landing together must not have the later
+ * save() discard the earlier one's update. And a process whose lock was reaped while it
+ * slept must abort rather than write its stale copy of the peer list over a newer one —
+ * which, for this file, means silently unpairing a device that was just added.
  */
 async function withPeers<T>(fn: (peers: Peer[]) => T | Promise<T>): Promise<T> {
-  return withFileLock(LOCK_PATH, async () => {
-    const peers = await loadPeers();
-    const result = await fn(peers);
-    await savePeers(peers);
-    return result;
-  });
+  return withRegistry(
+    {
+      path: PEERS_PATH,
+      lockPath: LOCK_PATH,
+      name: "the peer list",
+      load: loadPeers,
+      serialize: (peers) => encryptToBuffer(JSON.stringify(peers, null, 2)),
+    },
+    fn,
+  );
 }
 
 export async function addPeer(peer: Peer): Promise<void> {
