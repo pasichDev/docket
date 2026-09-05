@@ -21,8 +21,11 @@ export DOCKET_WEB_PORT=8799
 DOCKET="${DOCKET:-node $(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/dist/launcher.js}"
 
 if [[ "${1:-}" == "--clean" ]]; then
-  pkill -f "DOCKET_WEB_PORT=$DOCKET_WEB_PORT" 2>/dev/null || true
-  pkill -f "dist/web.js" 2>/dev/null || true
+  # Stop THIS demo's dashboard by asking the port which process is behind it — never
+  # `pkill -f dist/web.js`, which is indiscriminate: it also kills the dashboard serving the
+  # user's real data directory, on a different port, that has nothing to do with the demo.
+  pid="$(curl -sS --max-time 1 "http://127.0.0.1:$DOCKET_WEB_PORT/api/version" 2>/dev/null | sed -n 's/.*"pid":\([0-9]*\).*/\1/p')"
+  [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   rm -rf "$ROOT"
   echo "Removed $ROOT"
   exit 0

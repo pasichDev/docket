@@ -455,3 +455,95 @@ async function restoreThenCrashAfter(bundle: Buffer, stoppedAfter: number): Prom
     await rename(join(staging, name), inData(name));
   }
 }
+
+test("the generation guard covers a process that never asked for a generation", async () => {
+  /*
+   * The bug this catches was in the guard itself, and it was found by using it: the check
+   * was gated on "has this process already pinned a generation?", and nothing in an MCP
+   * session or a `docket serve` ever asks for one — so it was a no-op for exactly the
+   * long-running writers it exists to stop. Only the dashboard, which reports the generation
+   * on /api/version, happened to pin one.
+   *
+   * The child below does what those processes do: it writes, without ever mentioning a
+   * generation, and must still be stopped when the directory is replaced underneath it.
+   */
+  const scratch = await mkdtemp(join(tmpdir(), "docket-generation-unpinned-"));
+  try {
+    const ready = join(scratch, "pinned");
+    const go = join(scratch, "go");
+    const child = spawnInDataDir(scratch, UNPINNED_WRITER, [ready, go]);
+    await waitFor(ready);
+
+    const bumper = await runInDataDir(scratch, BUMP_GENERATION, []);
+    assert.equal(bumper.code, 0, `could not mint a new generation: ${bumper.err}`);
+
+    await writeFile(go, "now");
+    const result = await child;
+    assert.equal(result.code, 0, `the writer crashed instead of reporting: ${result.err}`);
+    const reported = JSON.parse(result.out) as { refused: boolean; error: string };
+    assert.equal(reported.refused, true, "a writer that never asked for a generation was allowed to commit into the replaced directory");
+    assert.match(reported.error, /GenerationChangedError/);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a data directory wiped underneath a running process stops it, rather than mixing keys", async () => {
+  /*
+   * How this one was found: a script deleted its scratch data directory and restarted, while
+   * the previous run's dashboard was still listening. That process kept its old at-rest key,
+   * wrote the store into the recreated directory, and the new key beside it could not decrypt
+   * it — a data directory that is unreadable from the next start onwards, produced by two
+   * processes that were each behaving correctly on their own.
+   *
+   * An absent generation is therefore a mismatch once this process has pinned one. The
+   * upgrade case is covered by the pin itself, which mints the file.
+   */
+  const scratch = await mkdtemp(join(tmpdir(), "docket-generation-wiped-"));
+  try {
+    const ready = join(scratch, "pinned");
+    const go = join(scratch, "go");
+    const child = spawnInDataDir(scratch, UNPINNED_WRITER, [ready, go]);
+    await waitFor(ready);
+
+    // Everything the process is holding a key for, gone.
+    for (const name of ["generation", "todos.json.enc", "key"]) await rm(join(scratch, name), { force: true });
+
+    await writeFile(go, "now");
+    const reported = JSON.parse((await child).out) as { refused: boolean; error: string };
+    assert.equal(reported.refused, true, "the process wrote its old ciphertext into a directory whose key it no longer has");
+    assert.match(reported.error, /GenerationChangedError/);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+/** A long-running writer that never mentions a generation — an MCP session, or `docket serve`. */
+const UNPINNED_WRITER = `
+import { writeFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
+import { withStore } from ${JSON.stringify(STORAGE_MODULE)};
+import { createTodo } from ${JSON.stringify(MUTATIONS_MODULE)};
+
+const [readyPath, goPath] = process.argv.slice(2);
+await withStore((store) => {
+  createTodo(store, { title: "before", agent: "long-running", session: "s" }, "device-a", "A");
+});
+writeFileSync(readyPath, "pinned");
+
+for (;;) {
+  try { await stat(goPath); break; } catch { await new Promise((r) => setTimeout(r, 20)); }
+}
+
+let refused = false;
+let error = "";
+try {
+  await withStore((store) => {
+    createTodo(store, { title: "after the directory moved", agent: "long-running", session: "s" }, "device-a", "A");
+  });
+} catch (err) {
+  refused = true;
+  error = err.name + ": " + err.message;
+}
+process.stdout.write(JSON.stringify({ refused, error }));
+`;

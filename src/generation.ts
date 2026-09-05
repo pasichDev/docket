@@ -67,20 +67,31 @@ export class GenerationChangedError extends Error {
 }
 
 /**
- * Throws if the data directory is no longer the one this process pinned.
+ * Throws if the data directory is no longer the one this process has been working against.
  *
- * Called immediately before a commit, never at the start of an operation: the whole point
- * is to catch a replacement that happened while the operation was in flight. A process that
- * has not pinned a generation yet cannot have cached anything stale, so it has nothing to
- * check.
+ * Called immediately before a commit, never at the start of an operation: the whole point is
+ * to catch a replacement that happened while the operation was in flight.
+ *
+ * The FIRST call in a process pins rather than checks. That is not a shortcut — it is the
+ * only way the guard covers the processes that matter. An MCP session or a `docket serve`
+ * may never touch the version endpoint or anything else that would ask for a generation, so
+ * gating the check on "has this process already pinned one?" made it a no-op for exactly the
+ * long-running writers it exists to stop. Pinning on the first write establishes the
+ * baseline at the moment the process first commits, which is also the moment it first has
+ * cached state worth protecting.
+ *
+ * An ABSENT generation after this process has pinned one is a mismatch, not a pass. The
+ * upgrade case — a data directory written by a build that predates this file — is covered by
+ * the pin itself, which mints the file. A generation that existed and is now gone means the
+ * directory was replaced or wiped underneath a process still holding its key.
  */
 export async function assertSameGeneration(): Promise<void> {
-  if (!pinned) return;
+  if (!pinned) {
+    await getGeneration();
+    return;
+  }
   const current = await readGeneration();
-  // Absent is not a mismatch: a data directory predating this file, or one whose generation
-  // has yet to be minted, is the state every install upgrades from. It is re-created on the
-  // next getGeneration() call.
-  if (current === null || current === pinned) return;
+  if (current === pinned) return;
   throw new GenerationChangedError(pinned, current);
 }
 

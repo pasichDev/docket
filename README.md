@@ -44,9 +44,14 @@ workspace — which matters precisely because sync exists. Full resolution
 order and the `.docket.json` override: **[`docs/workspaces.md`](docs/workspaces.md)**.
 
 <p align="center">
-  <img src="docs/assets/demo-dark.jpg" alt="Docket web dashboard, dark theme, showing a claimed in-progress item" width="49%" />
-  <img src="docs/assets/demo-light.jpg" alt="Docket web dashboard, light theme, same list" width="49%" />
+  <img src="docs/assets/demo-dark.jpg" alt="Docket web dashboard, dark theme: the top card is claimed by claude-code and shows a Markdown description clipped with a Read more link" width="49%" />
+  <img src="docs/assets/demo-light.jpg" alt="The same list in the light theme" width="49%" />
 </p>
+<p align="center">
+  <img src="docs/assets/demo-detail.jpg" alt="One item opened: its full Markdown description rendered, and its history showing who claimed it and who created it" width="49%" />
+  <img src="docs/assets/demo-edit.jpg" alt="The same item being edited, with a Markdown editor and Write/Preview tabs alongside category, priority and due date" width="49%" />
+</p>
+<p align="center"><sub>Regenerate these with <code>node docs/assets/demo-seed.mjs</code> — it builds the workspace they show, so they stay a picture of the real dashboard rather than a staged one.</sub></p>
 
 ## Quick start
 
