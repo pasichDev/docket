@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { log } from "../log.js";
 import { json } from "../web/http.js";
+import { getAdminToken } from "./admin-token.js";
 import { sseClients } from "./events.js";
 import { handleServeApiRoute, type ServeApiContext } from "./routes.js";
 
@@ -35,6 +36,8 @@ export async function startServeServer(options: StartServeOptions): Promise<Runn
   const ctx: ServeApiContext = {
     serverVersion: options.serverVersion,
     startedAt: new Date().toISOString(),
+    // Minted here on first run, so `docket devices …` has something to read.
+    adminToken: await getAdminToken(),
   };
   const server = createServeHttpServer(ctx);
 

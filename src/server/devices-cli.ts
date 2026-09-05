@@ -1,3 +1,5 @@
+import { ADMIN_TOKEN_PATH, readAdminToken } from "./admin-token.js";
+
 /**
  * `docket devices pair|pending|approve|deny|list|revoke|restore` — operates the
  * loopback-only admin routes of a `docket serve` process running on THIS machine (RFC
@@ -14,9 +16,23 @@ function adminBaseUrl(): string {
 }
 
 async function adminRequest(method: string, path: string): Promise<{ status: number; body: unknown }> {
+  // Read from the data directory, which this command can do because it runs as the same
+  // user on the same machine as `docket serve` — and which a request arriving through a
+  // reverse proxy cannot. See server/admin-token.ts.
+  const token = await readAdminToken();
+  if (!token) {
+    throw new Error(
+      `no admin token in this data directory (${ADMIN_TOKEN_PATH}). It is created by \`docket serve\` on first run — ` +
+        `start the server first, and make sure DOCKET_DATA_DIR matches the one it uses.`,
+    );
+  }
   let res: Response;
   try {
-    res = await fetch(`${adminBaseUrl()}${path}`, { method, signal: AbortSignal.timeout(5000) });
+    res = await fetch(`${adminBaseUrl()}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000),
+    });
   } catch (err) {
     throw new Error(
       `couldn't reach a running \`docket serve\` on 127.0.0.1:${process.env.DOCKET_SERVER_PORT ?? 8788} (${(err as Error).message}). ` +

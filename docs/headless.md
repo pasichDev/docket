@@ -59,6 +59,13 @@ todo.home.example {
 }
 ```
 
+Note what a proxy does to source addresses: every request it forwards reaches docket from
+`127.0.0.1`. Device management is therefore **not** gated on the request looking local — it
+requires a secret that `docket serve` writes to `admin-token` in the data directory, mode
+0600, which `docket devices …` reads because it runs as the same user on the same machine.
+A proxied request cannot obtain it. Do not forward `/api/v1/admin/` through the proxy, and
+do not add the token to a proxy configuration.
+
 For trusted-LAN-only development, plain HTTP is allowed but requires an explicit opt-in on
 every client — see [`security.md`](security.md#4-self-hosted-clientserver-traffic).
 

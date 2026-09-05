@@ -25,6 +25,7 @@ import {
   SECURITY_HEADERS,
   textOrNull,
 } from "../web/http.js";
+import { isAuthorizedAdminRequest } from "./admin-token.js";
 import { checkDeviceAuth } from "./auth.js";
 import {
   approvePairingRequest,
@@ -50,6 +51,9 @@ export const MIN_CLIENT_PROTOCOL = 1;
 export interface ServeApiContext {
   serverVersion: string;
   startedAt: string;
+  /** The secret from <dataDir>/admin-token. See server/admin-token.ts for why a source
+   *  address is not an identity once a reverse proxy is in the picture. */
+  adminToken: string;
 }
 
 /** RFC §19: the local numeric id MUST NOT be part of the remote protocol. Every wire Todo uses the short human-facing id (see shortId() in mutations.ts) in `id`, plus the canonical `uuid`. */
@@ -125,7 +129,12 @@ function parseJsonBody(res: ServerResponse, raw: string): unknown | null {
   }
 }
 
-/** Strictly 127.0.0.1/::1 — NOT the machine's LAN IP, even though `docket serve` might be bound to 0.0.0.0. Admin device-management is meant to be reachable only from the box itself (SSH, a local terminal), never from anywhere the API port is also reachable from — matching RFC §13's `docket devices pair` being a command run ON the server. */
+/**
+ * Strictly 127.0.0.1/::1. Retained as defence in depth, NOT as the authorization boundary:
+ * a reverse proxy — which the docs recommend for HTTPS — makes every forwarded request look
+ * loopback, so this alone would let anyone on the internet reach the admin routes. The
+ * credential check in isAuthorizedAdminRequest is what actually decides.
+ */
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const addr = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
   return addr === "127.0.0.1" || addr === "::1";
@@ -209,14 +218,20 @@ export async function handleServeApiRoute(
     return true;
   }
 
-  // 4. Admin device management — loopback-only (see isLoopbackRequest above), backing
-  // `docket devices pair|list|revoke` (RFC §24 headless requirement). Deliberately NOT
-  // gated by device-signature auth: the operator running these on the server machine
-  // itself IS the trust boundary, same model web.ts already uses for its own
-  // pairing-approval routes (ctx.hasUiSession — "this browser is running on this device").
+  // 4. Admin device management, backing `docket devices pair|list|revoke` (RFC §24).
+  // Authorised by a local secret rather than by device signature: the operator on the
+  // server machine has no paired device of their own yet — approving the first one is the
+  // whole point — so the credential has to be something only a local process can read.
   if (url.pathname.startsWith("/api/v1/admin/devices")) {
-    if (!isLoopbackRequest(req)) {
-      json(res, 403, { error: "admin device routes are only reachable from the server machine itself (127.0.0.1)" });
+    // Both, and the token is the one that matters. A request forwarded by a reverse proxy
+    // satisfies the loopback check and cannot satisfy this one: the secret lives in a 0600
+    // file on the server, and being proxied does not obtain it.
+    if (!isLoopbackRequest(req) || !isAuthorizedAdminRequest(req, ctx.adminToken)) {
+      json(res, 403, {
+        error:
+          "admin device routes require the local admin token — run `docket devices …` on the server machine itself, " +
+          "as the user that runs `docket serve`",
+      });
       return true;
     }
     if (req.method === "POST" && url.pathname === "/api/v1/admin/devices/pairing-code") {

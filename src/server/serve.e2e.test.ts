@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, type KeyObject } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -37,6 +37,8 @@ test.after(async () => {
 
 interface RunningServe {
   baseUrl: string;
+  /** Where this server keeps its state — and therefore where its admin token lives. */
+  dataDir: string;
   child: ChildProcess;
   stderr(): string;
 }
@@ -76,7 +78,7 @@ async function spawnServe(dataDir: string): Promise<RunningServe> {
     child.once("exit", onExit);
   });
 
-  return { baseUrl, child, stderr: () => stderr };
+  return { baseUrl, dataDir, child, stderr: () => stderr };
 }
 
 /**
@@ -108,6 +110,16 @@ async function fetchJson(url: string, init?: RequestInit): Promise<{ status: num
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
 
+/**
+ * The admin routes need the local secret, exactly as `docket devices …` reads it from the
+ * data directory. Being on loopback is no longer enough, and must not be.
+ */
+async function adminFetch(dataDir: string, url: string, init: RequestInit = {}): Promise<{ status: number; body: unknown }> {
+  const token = (await readFile(join(dataDir, "admin-token"), "utf8")).trim();
+  assert.ok(token.length >= 32, "the server should have minted an admin token on startup");
+  return fetchJson(url, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` } });
+}
+
 interface ServerIdentity {
   deviceId: string;
   devicePublicKeyX: string;
@@ -121,23 +133,24 @@ async function fetchServerIdentity(baseUrl: string): Promise<ServerIdentity> {
 }
 
 /** Generates the pairing code (loopback admin route) the way `docket devices pair` does. */
-async function generatePairingCode(baseUrl: string): Promise<string> {
-  const { status, body } = await fetchJson(`${baseUrl}/api/v1/admin/devices/pairing-code`, { method: "POST" });
+async function generatePairingCode(server: RunningServe): Promise<string> {
+  const { status, body } = await adminFetch(server.dataDir, `${server.baseUrl}/api/v1/admin/devices/pairing-code`, { method: "POST" });
   assert.equal(status, 200);
   return (body as { code: string }).code;
 }
 
-async function approveLatestPending(baseUrl: string, deviceId: string): Promise<void> {
-  const { status, body } = await fetchJson(`${baseUrl}/api/v1/admin/devices/pending`);
+async function approveLatestPending(server: RunningServe, deviceId: string): Promise<void> {
+  const { status, body } = await adminFetch(server.dataDir, `${server.baseUrl}/api/v1/admin/devices/pending`);
   assert.equal(status, 200);
   const pending = (body as { requests: Array<{ requestId: string; deviceId: string }> }).requests.find((r) => r.deviceId === deviceId);
   assert.ok(pending, `expected a pending pairing request for ${deviceId}`);
-  const approve = await fetchJson(`${baseUrl}/api/v1/admin/devices/pending/${pending!.requestId}/approve`, { method: "POST" });
+  const approve = await adminFetch(server.dataDir, `${server.baseUrl}/api/v1/admin/devices/pending/${pending!.requestId}/approve`, { method: "POST" });
   assert.equal(approve.status, 200);
 }
 
 /** Pairs THIS test process's own device.ts identity against the running server, driving the exact same public routes `docket pair` uses. Returns the derived secret. */
-async function pairThisDevice(baseUrl: string): Promise<{ deviceId: string; deviceName: string; secret: string }> {
+async function pairThisDevice(server: RunningServe): Promise<{ deviceId: string; deviceName: string; secret: string }> {
+  const baseUrl = server.baseUrl;
   const identity = await fetchServerIdentity(baseUrl);
   const deviceId = await getDeviceId();
   const deviceName = await getDeviceName();
@@ -145,7 +158,7 @@ async function pairThisDevice(baseUrl: string): Promise<{ deviceId: string; devi
   const secret = await deriveServerAuthSecret(identity.devicePublicKeyX);
   const sas = pairingSas(secret, ownPublicKeyX, identity.devicePublicKeyX);
 
-  const code = await generatePairingCode(baseUrl);
+  const code = await generatePairingCode(server);
   const request = await fetchJson(`${baseUrl}/api/v1/pair/request`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -155,7 +168,7 @@ async function pairThisDevice(baseUrl: string): Promise<{ deviceId: string; devi
   const { requestId, sas: serverSas } = request.body as { requestId: string; sas: string };
   assert.equal(serverSas, sas, "client- and server-derived SAS must match (both sides derived the secret via the SAME ECDH inputs)");
 
-  await approveLatestPending(baseUrl, deviceId);
+  await approveLatestPending(server, deviceId);
 
   const status = await fetchJson(`${baseUrl}/api/v1/pair/status/${requestId}`);
   assert.equal(status.status, 200);
@@ -172,20 +185,21 @@ function deriveSecretForRawKeypair(privateKey: KeyObject, serverPublicKeyX: stri
   return Buffer.from(derived).toString("hex");
 }
 
-async function pairSecondDevice(baseUrl: string, deviceId: string, deviceName: string): Promise<{ secret: string }> {
+async function pairSecondDevice(server: RunningServe, deviceId: string, deviceName: string): Promise<{ secret: string }> {
+  const baseUrl = server.baseUrl;
   const identity = await fetchServerIdentity(baseUrl);
   const { publicKey, privateKey } = generateKeyPairSync("x25519");
   const publicKeyX = (publicKey.export({ format: "jwk" }) as { x: string }).x;
   const secret = deriveSecretForRawKeypair(privateKey, identity.devicePublicKeyX);
 
-  const code = await generatePairingCode(baseUrl);
+  const code = await generatePairingCode(server);
   const request = await fetchJson(`${baseUrl}/api/v1/pair/request`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, deviceId, deviceName, publicKeyX }),
   });
   assert.equal(request.status, 200);
-  await approveLatestPending(baseUrl, deviceId);
+  await approveLatestPending(server, deviceId);
   return { secret };
 }
 
@@ -204,7 +218,7 @@ test("docket serve: real pairing (SAS matches) then a full /api/v1 lifecycle ove
     const noAuth = await fetchJson(`${baseUrl}/api/v1/todos`);
     assert.equal(noAuth.status, 401);
 
-    const { deviceId, deviceName, secret } = await pairThisDevice(baseUrl);
+    const { deviceId, deviceName, secret } = await pairThisDevice(running);
     const repo = new RemoteTodoRepository({ serverUrl: baseUrl, deviceId, deviceName, secret });
     const context = { agent: "agent-a", session: "s1", deviceId, deviceName };
 
@@ -270,7 +284,7 @@ test("docket serve: pairing security invariants — invalid code rejected, revok
     assert.equal(badCode.status, 400);
     void secret;
 
-    const { deviceId, deviceName, secret: realSecret } = await pairThisDevice(baseUrl);
+    const { deviceId, deviceName, secret: realSecret } = await pairThisDevice(running);
     const repo = new RemoteTodoRepository({ serverUrl: baseUrl, deviceId, deviceName, secret: realSecret });
     const context = { agent: "a", session: "s", deviceId, deviceName };
 
@@ -278,7 +292,7 @@ test("docket serve: pairing security invariants — invalid code rejected, revok
     await repo.create({ title: "before revoke" }, context);
 
     // Revoke it via the loopback admin route (RFC §37.5: "Revoked devices cannot authenticate").
-    const revoke = await fetchJson(`${baseUrl}/api/v1/admin/devices/${deviceId}/revoke`, { method: "POST" });
+    const revoke = await adminFetch(running.dataDir, `${baseUrl}/api/v1/admin/devices/${deviceId}/revoke`, { method: "POST" });
     assert.equal(revoke.status, 200);
 
     await assert.rejects(() => repo.create({ title: "after revoke — must fail" }, context));
@@ -298,8 +312,8 @@ test("docket serve: two independently paired devices — concurrent claim resolv
     running = await spawnServe(serverDataDir);
     const { baseUrl } = running;
 
-    const deviceA = await pairThisDevice(baseUrl);
-    const deviceB = await pairSecondDevice(baseUrl, "device-b-raw", "Device B");
+    const deviceA = await pairThisDevice(running);
+    const deviceB = await pairSecondDevice(running, "device-b-raw", "Device B");
 
     const repoA = new RemoteTodoRepository({ serverUrl: baseUrl, deviceId: deviceA.deviceId, deviceName: deviceA.deviceName, secret: deviceA.secret });
     const contextA = { agent: "agent-a", session: "s1", deviceId: deviceA.deviceId, deviceName: deviceA.deviceName };
@@ -364,7 +378,7 @@ test("docket serve: SSE /api/v1/events requires a signed request and streams a t
     assert.equal(noAuthSse.status, 401);
     await noAuthSse.body?.cancel();
 
-    const { deviceId, deviceName, secret } = await pairThisDevice(baseUrl);
+    const { deviceId, deviceName, secret } = await pairThisDevice(running);
     const { signDeviceRequest, generateNonce, hashBody } = await import("../remote/device-auth.js");
     const timestamp = new Date().toISOString();
     const nonce = generateNonce();
@@ -418,5 +432,59 @@ test("docket serve: binding with no --host defaults to 127.0.0.1, never 0.0.0.0 
     assert.ok(running.baseUrl.startsWith("http://127.0.0.1:"), `expected a 127.0.0.1 bind, got ${running.baseUrl}`);
   } finally {
     await cleanup(running, serverDataDir);
+  }
+});
+
+test("docket serve: a loopback request without the admin token cannot manage devices", async () => {
+  /*
+   * The reason this test exists, stated plainly: the documented way to put HTTPS in front of
+   * `docket serve` is a reverse proxy on the same box —
+   *
+   *     todo.example.com { reverse_proxy 127.0.0.1:8788 }
+   *
+   * — and every request arriving that way has a loopback source address. When loopback WAS
+   * the authorization boundary, that meant anyone on the internet could mint a pairing code,
+   * approve their own request, and walk away with an authorised device against the
+   * authoritative store. A network property is not an identity.
+   */
+  const serverDataDir = await mkdtemp(join(tmpdir(), "docket-serve-admin-"));
+  let running: RunningServe | undefined;
+  try {
+    running = await spawnServe(serverDataDir);
+    const { baseUrl } = running;
+
+    const routes: Array<[string, string]> = [
+      ["POST", "/api/v1/admin/devices/pairing-code"],
+      ["GET", "/api/v1/admin/devices/pending"],
+      ["GET", "/api/v1/admin/devices"],
+      ["POST", "/api/v1/admin/devices/pending/anything/approve"],
+      ["POST", "/api/v1/admin/devices/someone/revoke"],
+      ["DELETE", "/api/v1/admin/devices/someone"],
+    ];
+    for (const [method, path] of routes) {
+      // Straight at the server over loopback, exactly as a proxied request would arrive.
+      const bare = await fetchJson(`${baseUrl}${path}`, { method });
+      assert.equal(bare.status, 403, `${method} ${path} was served without the admin token`);
+
+      const forged = await fetchJson(`${baseUrl}${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${"0".repeat(64)}` },
+      });
+      assert.equal(forged.status, 403, `${method} ${path} accepted a forged admin token`);
+    }
+
+    // A forwarded header must not buy anything either — it is set by whoever spoke to the proxy.
+    const spoofed = await fetchJson(`${baseUrl}/api/v1/admin/devices/pairing-code`, {
+      method: "POST",
+      headers: { "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1" },
+    });
+    assert.equal(spoofed.status, 403, "a forwarded-for header was treated as authorization");
+
+    // The real credential still works, or the routes would be unusable rather than protected.
+    const authorised = await adminFetch(running.dataDir, `${baseUrl}/api/v1/admin/devices`, { method: "GET" });
+    assert.equal(authorised.status, 200, "the admin token no longer opens the admin routes");
+  } finally {
+    running?.child.kill();
+    await rm(serverDataDir, { recursive: true, force: true });
   }
 });
