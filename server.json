@@ -6,12 +6,12 @@
     "url": "https://github.com/pasichDev/docket",
     "source": "github"
   },
-  "version": "3.0.0-rc.1",
+  "version": "3.0.0-rc.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@pasichdev/docket",
-      "version": "3.0.0-rc.1",
+      "version": "3.0.0-rc.2",
       "transport": {
         "type": "stdio"
       }
