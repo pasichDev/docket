@@ -1,5 +1,62 @@
 # Changelog
 
+## 3.0.0-rc.1
+
+Release candidate. Publish under `npm publish --tag next` so `latest` keeps
+pointing at 2.3.1 until this has run on machines that are not the author's.
+
+### Fixed since the first 3.0.0 branch cut
+
+Six issues from PR review, each with a regression test:
+
+- **A peer's `maxSeq` is no longer taken on trust.** The delivery cursor is the
+  one piece of sync state where a wrong value is silent *and* permanent: advance
+  it past records that were never sent and this device stops asking for that
+  range forever. A page that carried records can no longer promise more than its
+  highest record, and a `maxSeq` that is not a sequence number is rejected
+  outright.
+- **Peer timestamps are validated before they enter the store.** `createdAt` and
+  `updatedAt` must parse; a record whose timestamps do not is refused. Shape
+  alone was not enough — `2026-13-45T99:99:99Z` looks right and still parses to
+  `NaN`, which made `new Date(Date.parse(x) + 1).toISOString()` in `mutations.ts`
+  throw `RangeError` on the next ordinary edit, long after the sync that accepted
+  it. Optional timestamps (`completedAt`, the working-lease pair, per-field
+  stamps) degrade to `null` instead of failing the record.
+- **History pruning moved after the store commit.** `withStore`'s write is
+  optimistic and retries; a prune done before the commit could delete the audit
+  log of an item the winning write had kept alive. Appending still happens
+  before the commit, which is what buys the crash-safety ordering.
+- **Restoring a backup without `history.json.enc` no longer leaves the current
+  one in place.** An old store paired with a newer sidecar produces an audit log
+  describing edits the store does not contain. Only that file is swept aside —
+  `peers.json.enc` is independent state, and clearing it would silently unpair
+  every device.
+- **Workspace slugs now include the git host.** `owner/repo` alone collided
+  whenever two forges shared a namespace. **This changes existing slugs:**
+  `acme/backend` becomes `gitlab.com/acme/backend`, so items filed under the old
+  name stay under it and appear as a separate project in the switcher. Rename
+  them with `.docket.json` or `DOCKET_WORKSPACE` if you have any.
+- **`compareVersions` implements SemVer §11.** It split on `.` and ran `Number()`
+  over the parts, so `0-rc` became `NaN` and every comparison against it fell
+  through to the "greater" branch — `3.0.0-rc.1` compared as *newer* than
+  `3.0.0-rc.2`, which would have offered an RC user a downgrade as an update.
+
+### Dashboard
+
+- Cards lead with the title. The meta row moved below it and stopped repeating
+  what the filter row above already says: the Todo/Backlog badge disappears once
+  you have filtered to one, and `via web` is gone entirely — web is where you are
+  looking.
+- The project switcher is a select in the toolbar rather than a second row of
+  pills that opened with its own "All".
+- Long descriptions are previewed at 300 characters with a **Read more**; the
+  full item and its history open in a modal. Editing moved into a modal too, with
+  a markdown editor (formatting bar, Write/Preview, `Ctrl`/`⌘`+`B`/`I`/`K`).
+- Descriptions render markdown. Emphasis follows CommonMark's flanking rule, so
+  ordinary prose like `rename *.js to *.ts` is left alone, and four-space indented
+  blocks keep their shape.
+- Clicking an item's id copies it.
+
 ## 3.0.0
 
 Three silent data-loss bugs in the sync layer, one latent lock-corruption bug,
