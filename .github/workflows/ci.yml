@@ -50,19 +50,26 @@ jobs:
       - name: Install the packed artifact into an isolated HOME
         run: |
           set -euo pipefail
-          npm pack --silent | tail -1 > /tmp/tarball
+          # Output is captured and matched in memory, never piped into `grep -q` or `head`.
+          # Those exit as soon as they have what they need, which closes the pipe under a
+          # `docket` that is still writing — SIGPIPE, exit 141, and with `pipefail` that is
+          # a failed step reporting nothing about what actually went wrong.
+          tarball="$(npm pack --silent | tail -1)"
           scratch="$(mktemp -d)"
           export HOME="$scratch"
           export DOCKET_DATA_DIR="$scratch/data"
-          npm install -g "$PWD/$(cat /tmp/tarball)"
+          npm install -g "$PWD/$tarball"
           docket help > /dev/null
           docket import /dev/stdin <<'EOF'
           # Docket
           - [ ] packed artifact smoke test
           EOF
-          docket list --all | grep -q "packed artifact smoke test"
-          docket export --format json | grep -q "packed artifact smoke test"
-          docket status | grep -q "^Mode: local"
+          listed="$(docket list --all)"
+          grep -q "packed artifact smoke test" <<< "$listed"
+          exported="$(docket export --format json)"
+          grep -q "packed artifact smoke test" <<< "$exported"
+          status="$(docket status)"
+          grep -q "^Mode: local" <<< "$status"
           echo "packed artifact works end to end"
 
   # The documented build path — `npm run build` inside the image — was never executed by CI,
@@ -81,11 +88,17 @@ jobs:
             if docker exec docket-ci wget -q --spider http://127.0.0.1:8788/api/v1/health; then break; fi
             sleep 1
           done
-          docker exec docket-ci wget -qO- http://127.0.0.1:8788/api/v1/health | grep -q '"ok":true'
+          health="$(docker exec docket-ci wget -qO- http://127.0.0.1:8788/api/v1/health)"
+          grep -q '"ok":true' <<< "$health"
           # docs/headless.md's first instruction to a new self-hoster. It needs `docket` on
           # PATH inside the runtime image, which the image did not have.
-          docker exec docket-ci docket devices pair | head -1 | grep -qE '^[A-Z0-9]{6}$'
+          #
+          # Captured whole, then matched: `… | head -1` closes the pipe after the first of
+          # this command's four lines, and the SIGPIPE that kills the writer is exit 141.
+          pairing="$(docker exec docket-ci docket devices pair)"
+          grep -qE '^[A-Z0-9]{6}$' <<< "$(head -1 <<< "$pairing")"
           # Non-root, on the volume the compose file actually uses.
-          docker exec docket-ci id | grep -q 'uid=100(docket)'
+          whoami_out="$(docker exec docket-ci id)"
+          grep -q 'uid=100(docket)' <<< "$whoami_out"
           docker rm -f docket-ci
           docker volume rm docket-ci-data

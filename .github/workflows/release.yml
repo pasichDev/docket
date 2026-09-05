@@ -64,11 +64,13 @@ jobs:
       - name: The packed artifact must work in an isolated HOME
         run: |
           set -euo pipefail
-          npm pack --silent | tail -1 > /tmp/tarball
+          # Captured and matched in memory rather than piped into `grep -q`, which exits on
+          # its first match and SIGPIPEs the still-writing `docket` — exit 141 under pipefail.
+          tarball="$(npm pack --silent | tail -1)"
           scratch="$(mktemp -d)"
           export HOME="$scratch"
           export DOCKET_DATA_DIR="$scratch/data"
-          npm install -g "$PWD/$(cat /tmp/tarball)"
+          npm install -g "$PWD/$tarball"
           installed="$(docket --version)"
           if [ "$installed" != "${{ steps.version.outputs.version }}" ]; then
             echo "::error::the packed artifact reports $installed, not ${{ steps.version.outputs.version }}."
@@ -78,8 +80,10 @@ jobs:
           # Docket
           - [ ] release gate smoke test
           EOF
-          docket list --all | grep -q "release gate smoke test"
-          docket status | grep -q "^Mode: local"
+          listed="$(docket list --all)"
+          grep -q "release gate smoke test" <<< "$listed"
+          status="$(docket status)"
+          grep -q "^Mode: local" <<< "$status"
 
       - name: The published server metadata must match this version
         run: |
@@ -101,8 +105,10 @@ jobs:
             if docker exec docket-release wget -q --spider http://127.0.0.1:8788/api/v1/health; then break; fi
             sleep 1
           done
-          docker exec docket-release wget -qO- http://127.0.0.1:8788/api/v1/health | grep -q '"ok":true'
-          docker exec docket-release docket devices pair | head -1 | grep -qE '^[A-Z0-9]{6}$'
+          health="$(docker exec docket-release wget -qO- http://127.0.0.1:8788/api/v1/health)"
+          grep -q '"ok":true' <<< "$health"
+          pairing="$(docker exec docket-release docket devices pair)"
+          grep -qE '^[A-Z0-9]{6}$' <<< "$(head -1 <<< "$pairing")"
           docker rm -f docket-release
           docker volume rm docket-release-data
 
