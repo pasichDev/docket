@@ -1,5 +1,73 @@
 # Changelog
 
+## 3.0.0-rc.2 (unreleased)
+
+Second review pass over the self-hosted half. One security fix, three
+data-correctness fixes, and the reason CI was green while a directory of tests
+went unexecuted.
+
+### Security
+
+**Device management no longer trusts a source address.** The admin routes behind
+`docket devices …` were gated on the request arriving from `127.0.0.1`, on the
+reasoning that the operator on the server machine is the trust boundary. A
+reverse proxy — which `docs/headless.md` recommends for HTTPS, with a worked
+Caddy example — breaks that reasoning completely: every request it forwards
+arrives from `127.0.0.1`. Anyone on the internet could mint a pairing code,
+approve their own request, and end up with a fully authorised device against the
+authoritative store.
+
+They now require a secret written to `admin-token` in the data directory (mode
+0600), which the CLI reads because it runs as the same user on the same machine.
+The loopback check stays as defence in depth rather than as the boundary, and
+`X-Forwarded-For` is deliberately not consulted — it is set by whoever spoke to
+the proxy.
+
+### Data correctness
+
+- **A server backup now includes `devices.json.enc`.** The documented
+  disaster-recovery path restored the todos and the server's identity but not the
+  registry of authorised devices, so every paired client silently stopped
+  authenticating at exactly the wrong moment.
+
+- **The delivery cursor no longer steps over records the sanitiser refused.** A
+  record rejected for a malformed timestamp still occupied a position in the
+  peer's delivery order, and the cursor was computed from the raw page — so the
+  next request started above it and it was never asked for again. The merge now
+  reports where it refused; the cursor stops below that, and the peer record says
+  why syncing is held.
+
+- **A tombstone's `deletedAt` must be a real timestamp.** Deletions are compared
+  by string ordering, so `"zzzz"` sorted above every ISO date and produced a
+  deletion no later edit from any device could beat.
+
+- **Timestamps at the ISO boundary are refused.** `9999-12-31T23:59:59.999Z` was
+  accepted, and one millisecond past it is year 10000, which serialises as
+  `+010000-01-01T…` — a shape no Docket accepts. This device could manufacture a
+  record the next device would refuse.
+
+- **Releasing a file lock claims it by rename first.** Read-then-unlink had a
+  window: a process suspended between the two steps woke to find its lock reaped
+  and deleted the new holder's lock instead.
+
+- **Workspace slugs keep the full repository path.** `team-a/platform/backend`
+  and `team-b/platform/backend` both collapsed to `platform/backend`, merging two
+  teams' lists. **This changes existing slugs again** for nested groups only.
+
+### Release plumbing
+
+- CI runs `npm test` rather than a hand-copied glob of it. The copy stopped
+  running the browser-client tests the moment they moved, and CI stayed green.
+- `docket check-update` follows the channel it was installed from, so an RC hears
+  about the next RC instead of being told 2.3.1 is the newest build.
+- A protocol-v1 peer with more records than one merge can accept is reported as
+  incompatible instead of "syncing" forever without converging.
+- The sync error told users to `npm install -g docket@latest`; the package is
+  `@pasichdev/docket`.
+- `qs` is pinned past a moderate advisory. It reaches us only through the MCP
+  SDK's `express` dependency, which Docket never loads — but a red audit trains
+  people to ignore audits.
+
 ## 3.0.0-rc.1
 
 Release candidate. Publish under `npm publish --tag next` so `latest` keeps

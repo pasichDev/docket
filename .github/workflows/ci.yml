@@ -16,4 +16,7 @@ jobs:
           node-version: "lts/*"
       - run: npm ci
       - run: npm run build
-      - run: DOCKET_DATA_DIR="$(mktemp -d)" node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js dist/hooks/*.test.js
+      # `npm test`, not a copy of its glob. The duplicate silently stopped running the
+      # browser-client tests the moment they moved into dist/web/client/app, and CI stayed
+      # green while a whole directory went unexecuted.
+      - run: npm test

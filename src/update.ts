@@ -43,14 +43,26 @@ export interface LatestVersionInfo {
   tarball: string;
 }
 
-/** Public npm registry metadata endpoint — no auth needed, no custom signing to manage. */
-export async function getLatestVersion(fetchImpl: typeof fetch = fetch): Promise<LatestVersionInfo> {
-  const res = await fetchImpl(`https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`, {
+/**
+ * Public npm registry metadata endpoint — no auth needed, no custom signing to manage.
+ *
+ * `tag` matters for pre-releases. A release candidate is published under `next` so that
+ * `latest` keeps pointing at the last stable build, which means someone running 3.0.0-rc.1
+ * who asks about updates would be told about 2.3.1 and never hear about rc.2 — the channel
+ * that needs update checking most would be the one channel without it.
+ */
+export async function getLatestVersion(fetchImpl: typeof fetch = fetch, tag = "latest"): Promise<LatestVersionInfo> {
+  const res = await fetchImpl(`https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/${encodeURIComponent(tag)}`, {
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`npm registry responded ${res.status}`);
   const body = (await res.json()) as { version: string; dist: { shasum: string; tarball: string } };
   return { version: body.version, shasum: body.dist.shasum, tarball: body.dist.tarball };
+}
+
+/** A build carrying a pre-release identifier follows the `next` channel it came from. */
+export function releaseChannelFor(version: string): "latest" | "next" {
+  return version.includes("-") ? "next" : "latest";
 }
 
 const cmp = (a: number | string, b: number | string): -1 | 0 | 1 => (a === b ? 0 : a < b ? -1 : 1);
@@ -123,7 +135,21 @@ export interface UpdateCheckResult {
 export async function checkForUpdate(scriptPath: string, fetchImpl: typeof fetch = fetch): Promise<UpdateCheckResult> {
   const installKind = detectInstallKind(scriptPath);
   const currentVersion = await getCurrentVersion(scriptPath);
-  const latest = await getLatestVersion(fetchImpl);
+  /*
+   * A pre-release follows the channel it came from, but never ONLY that channel: `next` may
+   * not exist yet (nothing published to it), and it lags behind `latest` once a release
+   * ships. Ask both and take whichever is genuinely newer, so an RC hears about the next RC
+   * AND about the stable build that supersedes it.
+   */
+  const channel = releaseChannelFor(currentVersion);
+  const candidates = channel === "next" ? ["next", "latest"] : ["latest"];
+  const found: LatestVersionInfo[] = [];
+  for (const tag of candidates) {
+    const info = await getLatestVersion(fetchImpl, tag).catch(() => null);
+    if (info) found.push(info);
+  }
+  if (found.length === 0) throw new Error(`couldn't reach the npm registry for ${PACKAGE_NAME}`);
+  const latest = found.reduce((best, info) => (compareVersions(info.version, best.version) > 0 ? info : best));
   return {
     installKind,
     currentVersion,
