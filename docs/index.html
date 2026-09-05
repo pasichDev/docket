@@ -5,152 +5,282 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Docket — one list every AI tool can write to</title>
 <meta name="description" content="One list every AI tool you use can write to — Claude Code, Codex, Cursor, Warp — across every project, before the work is worth a ticket. Items file under the current project automatically. Local-first, self-hostable, no SaaS account." />
-<link rel="icon" href="data:," />
+
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://pasichdev.github.io/docket/" />
+<meta property="og:title" content="Docket — one list every AI tool can write to" />
+<meta property="og:description" content="Scoped per project, local-first, self-hostable. No SaaS account." />
+<meta property="og:image" content="https://pasichdev.github.io/docket/assets/demo-dark.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233f7a50'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11.5' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap">
 <style>
+  /* ------------------------------------------------------------------------------------
+   * Palette
+   *
+   * Light is the original warm cream identity, kept deliberately: it is what the project
+   * already looks like, and the dashboard's own light theme sits on the same ground.
+   * Dark is not an inversion — the greens and the amber are re-picked so they still read
+   * as the same accents at the lower contrast a dark ground allows.
+   * ------------------------------------------------------------------------------------ */
   :root {
-    --bg: #faf5ec; --text: #3d3229; --muted: #8a7a63; --muted2: #a8987f; --meta: #b4a488;
-    --card-bg: #ffffff; --card-border: #f0e2c9; --card-shadow: 0 2px 8px rgba(61,50,41,.05);
-    --sage: #3f7a50; --sage-bg: #e7f3ea;
+    color-scheme: light;
+    --bg: #faf5ec; --bg-alt: #f4ecdd;
+    --text: #3d3229; --muted: #7d6d57; --meta: #a3927a;
+    --card-bg: #ffffff; --card-border: #ece0c8; --card-shadow: 0 1px 2px rgba(61,50,41,.05), 0 8px 24px rgba(61,50,41,.05);
+    --rule: #e8dcc4;
+    --sage: #3f7a50; --sage-strong: #356844; --sage-bg: #e7f3ea;
     --lavender: #7c4f9e; --lavender-bg: #f1e9f7;
-    --accent: #f5a623; --ink: #3d3229; --ink-text: #ffffff;
+    --amber: #b8722f; --amber-bg: #fdeee0;
+    --clay: #b8402c; --clay-bg: #fbdcd6;
+    --ink: #33291f; --ink-text: #f3ead9; --ink-dim: #a8987f;
+    --sage-shadow: rgba(63,122,80,.30); --amber-border: rgba(184,114,47,.34); --amber-code: rgba(184,114,47,.16);
+    --on-accent: #ffffff; --on-accent-dim: rgba(255,255,255,.85);
+    --focus: #b8722f;
   }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #17140f; --bg-alt: #1e1a14;
+      --text: #ece3d4; --muted: #a2947f; --meta: #7d7161;
+      --card-bg: #211c15; --card-border: #332b21; --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.28);
+      --rule: #2e271e;
+      --sage: #6bbd83; --sage-strong: #7ccb93; --sage-bg: #1c2f22;
+      --lavender: #bb95d8; --lavender-bg: #271d31;
+      --amber: #e0a165; --amber-bg: #2e2216;
+      --clay: #e08a75; --clay-bg: #2f1d18;
+      --ink: #0f0d09; --ink-text: #ece3d4; --ink-dim: #8a7c69;
+      --sage-shadow: rgba(107,189,131,.22); --amber-border: rgba(224,161,101,.32); --amber-code: rgba(224,161,101,.16);
+      --on-accent: #12100b; --on-accent-dim: rgba(18,16,11,.72);
+      --focus: #e0a165;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #17140f; --bg-alt: #1e1a14;
+    --text: #ece3d4; --muted: #a2947f; --meta: #7d7161;
+    --card-bg: #211c15; --card-border: #332b21; --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.28);
+    --rule: #2e271e;
+    --sage: #6bbd83; --sage-strong: #7ccb93; --sage-bg: #1c2f22;
+    --lavender: #bb95d8; --lavender-bg: #271d31;
+    --amber: #e0a165; --amber-bg: #2e2216;
+    --clay: #e08a75; --clay-bg: #2f1d18;
+    --ink: #0f0d09; --ink-text: #ece3d4; --ink-dim: #8a7c69;
+    --sage-shadow: rgba(107,189,131,.22); --amber-border: rgba(224,161,101,.32); --amber-code: rgba(224,161,101,.16);
+    --on-accent: #12100b; --on-accent-dim: rgba(18,16,11,.72);
+    --focus: #e0a165;
+  }
+
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { animation: none !important; transition: none !important; } }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font-family: 'Karla', system-ui, sans-serif; line-height: 1.5;
+    font-family: 'Karla', system-ui, -apple-system, sans-serif; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
   }
-  h1, h2, h3 { font-family: 'Fredoka', sans-serif; font-weight: 600; margin: 0; }
+  h1, h2, h3 { font-family: 'Fredoka', system-ui, sans-serif; font-weight: 600; margin: 0; text-wrap: balance; }
   a { color: var(--sage); }
-  code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
+  code, pre { font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace; }
+  img { max-width: 100%; }
 
   .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 56px 0; }
+  @media (max-width: 620px) { section { padding: 40px 0; } .step { padding: 18px; gap: 12px; } }
+  section + section { border-top: 1px solid var(--rule); }
 
+  /* --- nav ------------------------------------------------------------------------- */
   nav.top {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 22px 0; max-width: 1040px; margin: 0 auto; padding-left: 24px; padding-right: 24px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    max-width: 1040px; margin: 0 auto; padding: 20px 24px;
   }
-  nav.top .logo { font-size: 19px; font-weight: 700; }
-  nav.top .links { display: flex; gap: 20px; font-size: 14px; font-weight: 600; }
-  nav.top .links a { color: var(--muted); text-decoration: none; }
+  nav.top .logo { font-family: 'Fredoka', sans-serif; font-size: 19px; font-weight: 700; display: flex; align-items: center; gap: 9px; }
+  nav.top .logo .mark { width: 22px; height: 22px; border-radius: 6px; background: var(--sage); display: grid; place-items: center; flex: none; }
+  nav.top .links { display: flex; align-items: center; gap: 18px; font-size: 14px; font-weight: 600; }
+  nav.top .links a { color: var(--muted); text-decoration: none; white-space: nowrap; }
   nav.top .links a:hover { color: var(--text); }
-
-  .hero { padding: 40px 0 20px; text-align: center; }
-  .hero h1 { font-size: 40px; letter-spacing: -.01em; }
-  .hero .tagline {
-    font-size: 19px; color: var(--muted); max-width: 620px; margin: 16px auto 0;
+  .theme-toggle {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted);
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 999px;
+    padding: 5px 12px; display: inline-flex; align-items: center; gap: 6px;
   }
-  .badges { display: flex; gap: 8px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+  .theme-toggle:hover { color: var(--text); }
+  /* The nav is the one row with no natural wrap point: a logo plus five links plus a button
+     is wider than a phone, and `justify-content: space-between` on a non-wrapping flex row
+     overflows silently rather than reflowing. Links drop out in order of how much they
+     duplicate what is already on the page — GitHub and npm are in the footer too. */
+  @media (max-width: 760px) { nav.top .links a.hide-sm { display: none; } nav.top .links { gap: 14px; } }
+  @media (max-width: 480px) {
+    nav.top { padding: 16px; gap: 10px; }
+    nav.top .links { gap: 12px; font-size: 13px; }
+    nav.top .links a[href="#self-host"] { display: none; }
+    .theme-toggle .theme-label { display: none; }
+  }
+
+  /* --- hero ------------------------------------------------------------------------ */
+  .hero { padding: 28px 0 8px; text-align: center; }
+  .hero h1 { font-size: clamp(30px, 5.4vw, 44px); letter-spacing: -.015em; line-height: 1.12; }
+  .hero .tagline { font-size: clamp(16px, 2.2vw, 19px); color: var(--muted); max-width: 640px; margin: 18px auto 0; text-wrap: pretty; }
+  .badges { display: flex; gap: 8px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
   .badges img { height: 20px; }
 
-  .cta-row { display: flex; gap: 12px; justify-content: center; margin-top: 28px; flex-wrap: wrap; }
+  .cta-row { display: flex; gap: 12px; justify-content: center; margin-top: 26px; flex-wrap: wrap; }
   .btn {
     font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 15px; text-decoration: none;
     padding: 12px 22px; border-radius: 999px; display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid transparent;
   }
-  .btn.primary { background: var(--sage); color: #fff; box-shadow: 0 4px 14px rgba(63,122,80,.3); }
-  .btn.secondary { background: var(--card-bg); color: var(--text); box-shadow: 0 0 0 1px var(--card-border); }
+  .btn.primary { background: var(--sage); color: var(--on-accent); box-shadow: 0 4px 14px var(--sage-shadow); }
+  .btn.secondary { background: var(--card-bg); color: var(--text); border-color: var(--card-border); }
 
   .install-cmd {
-    max-width: 560px; margin: 22px auto 0; background: var(--ink); color: #f0e6d8;
-    border-radius: 12px; padding: 14px 18px; font-size: 14px; text-align: left;
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    max-width: 620px; margin: 24px auto 0; background: var(--ink); color: var(--ink-text);
+    border-radius: 12px; padding: 13px 16px; font-size: 14px; text-align: left;
+    display: flex; align-items: center; gap: 12px; overflow-x: auto;
   }
-  .install-cmd code { color: #f0e6d8; }
-  .install-cmd .prompt { opacity: .5; margin-right: 8px; }
+  .install-cmd code { color: var(--ink-text); white-space: nowrap; }
+  .install-cmd .prompt { color: var(--ink-dim); margin-right: 8px; user-select: none; }
+  .copy-btn {
+    margin-left: auto; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    background: transparent; color: var(--ink-dim); border: 1px solid #4a3f31; border-radius: 6px; padding: 4px 9px; flex: none;
+  }
+  .copy-btn:hover { color: var(--ink-text); }
+  .install-note { font-size: 13.5px; color: var(--meta); margin: 12px auto 0; max-width: 620px; }
+  .install-note code { color: var(--text); }
 
-  section { padding: 56px 0; }
-  .section-title { text-align: center; margin-bottom: 8px; font-size: 28px; }
-  .section-sub { text-align: center; color: var(--muted); max-width: 560px; margin: 0 auto 36px; }
+  /* --- release banner --------------------------------------------------------------- */
+  .rc-banner {
+    max-width: 1040px; margin: 26px auto 0; padding: 14px 18px;
+    background: var(--amber-bg); border: 1px solid var(--amber-border);
+    border-radius: 12px; font-size: 14.5px; color: var(--text);
+    display: flex; gap: 12px; align-items: flex-start;
+  }
+  .rc-banner .pill {
+    flex: none; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 12px; letter-spacing: .04em;
+    text-transform: uppercase; background: var(--amber); color: var(--on-accent); border-radius: 999px; padding: 3px 10px; margin-top: 1px;
+  }
+  .rc-banner code { background: var(--amber-code); padding: 1px 5px; border-radius: 4px; }
 
-  .demo-shot {
-    border-radius: 20px; box-shadow: 0 12px 40px rgba(61,50,41,.14), 0 0 0 1px var(--card-border);
-    overflow: hidden; max-width: 900px; margin: 0 auto;
+  /* --- section headings -------------------------------------------------------------- */
+  .eyebrow {
+    font-family: 'Fredoka', sans-serif; font-size: 12.5px; font-weight: 600; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--meta); text-align: center; margin-bottom: 10px;
   }
-  .demo-shot img { display: block; width: 100%; height: auto; }
-  .demo-tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; }
-  .demo-tabs button {
-    font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13px; cursor: pointer;
-    border: none; background: var(--card-bg); color: var(--muted2); box-shadow: 0 0 0 1px var(--card-border);
-    padding: 8px 18px; border-radius: 999px;
-  }
-  .demo-tabs button[data-active="true"] { background: var(--ink); color: var(--ink-text); box-shadow: none; }
-  .demo-pane { display: none; }
-  .demo-pane[data-active="true"] { display: block; }
+  .section-title { font-size: clamp(24px, 3.4vw, 30px); text-align: center; letter-spacing: -.01em; }
+  .section-sub { color: var(--muted); text-align: center; max-width: 720px; margin: 14px auto 30px; font-size: 16px; }
 
-  .features {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px;
-  }
-  .feature-card {
-    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 18px;
-    padding: 22px; box-shadow: var(--card-shadow);
-  }
-  .feature-card .icon {
-    width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
-    margin-bottom: 14px;
-  }
-  .feature-card h3 { font-size: 16px; margin-bottom: 6px; }
-  .feature-card p { font-size: 14px; color: var(--muted); margin: 0; }
-
-  .flow {
-    display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
-    max-width: 900px; margin: 0 auto;
-  }
-  .flow-box {
-    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px;
-    padding: 16px 20px; box-shadow: var(--card-shadow); text-align: center; min-width: 150px;
-  }
-  .flow-box.center { background: var(--accent); color: #fff; border: none; box-shadow: 0 6px 20px rgba(245,166,35,.3); }
-  .flow-box.store { background: var(--sage); color: #fff; border: none; }
-  .flow-box .label { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 14px; }
-  .flow-box .sub { font-size: 12px; opacity: .8; margin-top: 2px; }
+  /* --- flow diagram ------------------------------------------------------------------ */
+  .flow { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; }
   .flow-stack { display: flex; flex-direction: column; gap: 8px; }
-  .flow-arrow { color: var(--muted2); font-size: 20px; }
-
-  .steps { display: flex; flex-direction: column; gap: 14px; max-width: 700px; margin: 0 auto; }
-  .step {
-    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 18px;
-    padding: 20px 22px; box-shadow: var(--card-shadow); display: flex; gap: 16px;
+  .flow-box {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px;
+    padding: 12px 16px; min-width: 148px; text-align: center; box-shadow: var(--card-shadow);
   }
+  .flow-box .label { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 14px; }
+  .flow-box .sub { font-size: 12px; color: var(--meta); margin-top: 2px; }
+  .flow-box.center { background: var(--amber); border-color: transparent; color: var(--on-accent); }
+  .flow-box.store { background: var(--sage); border-color: transparent; color: var(--on-accent); }
+  .flow-box.center .sub, .flow-box.store .sub { color: var(--on-accent-dim); }
+  .flow-arrow { color: var(--meta); font-size: 20px; }
+  @media (max-width: 620px) { .flow-arrow { transform: rotate(90deg); } }
+
+  /* --- screenshots -------------------------------------------------------------------- */
+  .demo-tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 18px; flex-wrap: wrap; }
+  .demo-tabs button {
+    font: inherit; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13.5px; cursor: pointer;
+    padding: 7px 16px; border-radius: 999px; border: 1px solid var(--card-border);
+    background: var(--card-bg); color: var(--muted);
+  }
+  .demo-tabs button[data-active="true"] { background: var(--ink); color: var(--ink-text); border-color: transparent; }
+  .demo-pane[data-active="false"] { display: none; }
+  .demo-shot {
+    border-radius: 14px; overflow: hidden; border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow); background: var(--card-bg); line-height: 0;
+    /* The shots are 660px wide: shown any larger they are upscaled, and the dashboard's own
+       type stops being legible, which is the only reason to show a screenshot at all. */
+    max-width: 660px; margin: 0 auto;
+  }
+  .demo-shot img { width: 100%; display: block; }
+  .shot-caption { text-align: center; font-size: 13.5px; color: var(--meta); margin-top: 12px; }
+
+  /* --- feature cards ------------------------------------------------------------------ */
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 18px; }
+  .feature-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 22px; box-shadow: var(--card-shadow); }
+  .feature-card .icon { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; margin-bottom: 13px; }
+  .feature-card h3 { font-size: 16.5px; margin-bottom: 7px; }
+  .feature-card p { margin: 0; font-size: 14.5px; color: var(--muted); }
+  .feature-card code { font-size: 13px; background: var(--bg-alt); padding: 1px 5px; border-radius: 4px; color: var(--text); }
+
+  /* --- steps ---------------------------------------------------------------------------- */
+  .steps { display: flex; flex-direction: column; gap: 14px; }
+  .step { display: flex; gap: 16px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; padding: 20px 22px; box-shadow: var(--card-shadow); }
   .step .num {
-    font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 15px; color: #fff;
-    background: var(--sage); width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
+    flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--sage); color: var(--on-accent);
+    display: grid; place-items: center; font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 14px;
   }
-  .step .body h3 { font-size: 16px; margin-bottom: 6px; }
-  .step .body p { font-size: 14px; color: var(--muted); margin: 0 0 8px; }
-  .step pre {
-    background: var(--ink); color: #f0e6d8; border-radius: 10px; padding: 12px 14px;
-    font-size: 13px; overflow-x: auto; margin: 8px 0 0;
+  .step .body { min-width: 0; flex: 1; }
+  .step h3 { font-size: 16.5px; margin-bottom: 6px; }
+  .step p { margin: 0 0 10px; font-size: 14.5px; color: var(--muted); }
+  .step p:last-child { margin-bottom: 0; }
+  .step .optional {
+    display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--lavender); background: var(--lavender-bg); border-radius: 999px; padding: 2px 9px; margin-bottom: 7px;
   }
-  .step pre code { color: #f0e6d8; }
-  .step .optional { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--lavender); font-weight: 700; }
+  pre {
+    background: var(--ink); color: var(--ink-text); border-radius: 10px; padding: 14px 16px;
+    font-size: 13px; line-height: 1.6; overflow-x: auto; margin: 0;
+  }
+  pre code { color: inherit; }
+  pre .c { color: var(--ink-dim); }
+  pre .ok { color: #7ccb93; }
+  .step code { font-size: 13px; background: var(--bg-alt); padding: 1px 5px; border-radius: 4px; }
+  .step pre code { background: none; padding: 0; }
 
-  footer {
-    padding: 40px 0 60px; text-align: center; border-top: 1px solid var(--card-border); margin-top: 20px;
-  }
-  footer .links { display: flex; gap: 20px; justify-content: center; margin-bottom: 14px; flex-wrap: wrap; }
-  footer .links a { color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px; }
+  /* --- comparison table ------------------------------------------------------------------ */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--card-border); border-radius: 14px; background: var(--card-bg); box-shadow: var(--card-shadow); }
+  table.modes { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 560px; }
+  table.modes th, table.modes td { text-align: left; padding: 13px 18px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  table.modes tr:last-child td { border-bottom: none; }
+  table.modes th { font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 14px; color: var(--text); }
+  table.modes td { color: var(--muted); }
+  table.modes td:first-child { color: var(--text); font-weight: 600; }
+
+  /* --- quality strip ---------------------------------------------------------------------- */
+  .quality { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+  .stat { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 14px; padding: 18px; text-align: center; box-shadow: var(--card-shadow); }
+  .stat .n { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 26px; color: var(--sage); font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* --- footer -------------------------------------------------------------------------------- */
+  footer { border-top: 1px solid var(--rule); padding: 34px 24px 46px; text-align: center; }
+  footer .links { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; font-size: 14px; font-weight: 600; }
+  footer .links a { color: var(--muted); text-decoration: none; }
   footer .links a:hover { color: var(--text); }
-  footer .fine { font-size: 12px; color: var(--meta); }
-
-  @media (max-width: 640px) {
-    .hero h1 { font-size: 30px; }
-    .install-cmd { flex-direction: column; align-items: flex-start; }
-  }
+  footer .fine { color: var(--meta); font-size: 13px; margin-top: 14px; }
 </style>
 </head>
 <body>
 
 <nav class="top">
-  <div class="logo">Docket</div>
+  <div class="logo">
+    <span class="mark" aria-hidden="true">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4.5 4.5L19 7"/></svg>
+    </span>
+    Docket
+  </div>
   <div class="links">
     <a href="#demo">Demo</a>
+    <a href="#modes" class="hide-sm">Modes</a>
     <a href="#install">Install</a>
     <a href="#self-host">Self-host</a>
-    <a href="https://github.com/pasichDev/docket">GitHub</a>
-    <a href="https://www.npmjs.com/package/@pasichdev/docket">npm</a>
+    <a href="https://github.com/pasichDev/docket" class="hide-sm">GitHub</a>
+    <a href="https://www.npmjs.com/package/@pasichdev/docket" class="hide-sm">npm</a>
+    <button class="theme-toggle" type="button" aria-label="Switch colour theme">
+      <span class="theme-icon" aria-hidden="true">◐</span><span class="theme-label">Theme</span>
+    </button>
   </div>
 </nav>
 
@@ -163,7 +293,7 @@
     Local-first, self-hostable, no SaaS account.
   </p>
   <div class="badges">
-    <img src="https://img.shields.io/npm/v/%40pasichdev%2Fdocket.svg" alt="npm version" />
+    <img src="https://img.shields.io/npm/v/%40pasichdev%2Fdocket?label=npm&color=3f7a50" alt="version on npm" />
     <img src="https://github.com/pasichDev/docket/actions/workflows/ci.yml/badge.svg" alt="CI status" />
     <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT license" />
   </div>
@@ -173,87 +303,116 @@
   </div>
   <div class="install-cmd">
     <code><span class="prompt">$</span>claude mcp add docket -- npx -y @pasichdev/docket</code>
+    <button class="copy-btn" type="button" data-copy="claude mcp add docket -- npx -y @pasichdev/docket">Copy</button>
+  </div>
+  <p class="install-note">
+    Node 18 or newer, and no account. Everything on this page ships in 3.0.
+  </p>
+</div>
+
+<div class="rc-banner wrap">
+  <span class="pill">3.0</span>
+  <div>
+    <strong>Upgrading from 2.x?</strong> The store format changes on the first write. A copy of the old
+    one is kept beside it and <code>docket restore --from-v7</code> puts it back, so the upgrade is
+    reversible — but it is worth reading the two paragraphs under
+    <a href="https://github.com/pasichDev/docket/blob/main/CHANGELOG.md">Breaking / migration</a> before
+    you run it. Projects your items are filed under also get more specific names in 3.0.
   </div>
 </div>
 
 <section id="demo" class="wrap">
+  <p class="eyebrow">The problem it solves</p>
   <h2 class="section-title">One list, many projects</h2>
   <p class="section-sub">Every item is filed under the project it was captured in — resolved from the git remote, so the same repo on your laptop and your desktop is one project, not two. The dashboard switches between them; agents see only the one they're standing in. It starts itself the moment your MCP client first uses the server.</p>
-  <div class="flow" style="margin-bottom:26px;">
+  <div class="flow" style="margin-bottom:34px;">
     <div class="flow-stack">
       <div class="flow-box"><div class="label">~/work/backend</div><div class="sub">claude-code, codex</div></div>
       <div class="flow-box"><div class="label">~/side/tracker</div><div class="sub">claude-code</div></div>
       <div class="flow-box"><div class="label">~/side/notes</div><div class="sub">codex, warp</div></div>
     </div>
-    <div class="flow-arrow">→</div>
+    <div class="flow-arrow" aria-hidden="true">→</div>
     <div class="flow-box center"><div class="label">Docket</div><div class="sub">one list, three scopes</div></div>
-    <div class="flow-arrow">→</div>
+    <div class="flow-arrow" aria-hidden="true">→</div>
     <div class="flow-box store"><div class="label">acme/backend</div><div class="sub">what this agent sees</div></div>
   </div>
-  <p class="section-sub" style="margin-top:-6px;">The dashboard itself — both themes, one item opened, and the same item being edited:</p>
-  <div class="demo-tabs">
-    <button data-pane="dark" data-active="true">Dark</button>
-    <button data-pane="light" data-active="false">Light</button>
-    <button data-pane="detail" data-active="false">Detail</button>
-    <button data-pane="edit" data-active="false">Editing</button>
+
+  <div class="demo-tabs" role="tablist">
+    <button role="tab" data-pane="dark" data-active="true" aria-selected="true">Dark</button>
+    <button role="tab" data-pane="light" data-active="false" aria-selected="false">Light</button>
+    <button role="tab" data-pane="detail" data-active="false" aria-selected="false">Detail</button>
+    <button role="tab" data-pane="edit" data-active="false" aria-selected="false">Editing</button>
   </div>
   <div class="demo-pane" data-pane="dark" data-active="true">
-    <div class="demo-shot"><img src="assets/demo-dark.jpg" alt="Docket web dashboard, dark theme: the top card is claimed by claude-code and shows a Markdown description clipped with a Read more link" loading="lazy" /></div>
+    <div class="demo-shot"><img src="assets/demo-dark.jpg" alt="Docket web dashboard, dark theme: the top card is claimed by claude-code and shows a Markdown description clipped with a Read more link" /></div>
+    <p class="shot-caption">The list, scoped to a project. The claimed item is the one an agent is working on right now.</p>
   </div>
   <div class="demo-pane" data-pane="light" data-active="false">
     <div class="demo-shot"><img src="assets/demo-light.jpg" alt="The same list in the light theme" loading="lazy" /></div>
+    <p class="shot-caption">The same list, light theme. It follows your system setting.</p>
   </div>
   <div class="demo-pane" data-pane="detail" data-active="false">
     <div class="demo-shot"><img src="assets/demo-detail.jpg" alt="One item opened: its full Markdown description rendered, and its history showing who claimed it and who created it" loading="lazy" /></div>
+    <p class="shot-caption">One item opened: Markdown rendered, and a history of who did what — including which agent claimed it.</p>
   </div>
   <div class="demo-pane" data-pane="edit" data-active="false">
     <div class="demo-shot"><img src="assets/demo-edit.jpg" alt="The same item being edited, with a Markdown editor and Write/Preview tabs alongside category, priority and due date" loading="lazy" /></div>
+    <p class="shot-caption">Editing, with Write/Preview — descriptions are Markdown everywhere, including from agents.</p>
   </div>
 </section>
 
 <section class="wrap">
+  <p class="eyebrow">Why not just a text file</p>
   <h2 class="section-title">What it adds beyond "just a list"</h2>
   <p class="section-sub">Built for one person running more than one AI tool, in more than one project, at once.</p>
   <div class="features">
     <div class="feature-card">
       <div class="icon" style="background:var(--sage-bg)">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f7a50" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--sage)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
       </div>
       <h3>Scoped to your project</h3>
       <p>Items file themselves under the project they were captured in. An agent in one repo never pulls two other projects' items into its context.</p>
     </div>
     <div class="feature-card">
       <div class="icon" style="background:var(--lavender-bg)">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c4f9e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v5h5"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--lavender)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v5h5"/></svg>
       </div>
       <h3>See what's open, on arrival</h3>
       <p>An optional Claude Code <code>SessionStart</code> hook injects what's open in this project — at most 7 items, under 120 tokens, nothing when there's nothing. It fails open: if docket is down, your session is unaffected.</p>
     </div>
     <div class="feature-card">
-      <div class="icon" style="background:#fdeee0">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b8722f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h11"/></svg>
+      <div class="icon" style="background:var(--amber-bg)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
       </div>
       <h3>Bridges, not replaces</h3>
       <p>Set <code>sourceUrl</code> and an item carries a link straight back to the GitLab issue, Notion page or Obsidian note it belongs to. Work lands here first, then graduates.</p>
     </div>
     <div class="feature-card">
-      <div class="icon" style="background:#fbdcd6">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b8402c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      <div class="icon" style="background:var(--clay-bg)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--clay)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
       </div>
       <h3>Private by default</h3>
-      <p>The data file is AES-256-GCM encrypted on disk — nobody browsing your filesystem sees your tasks in plain text.</p>
+      <p>The store is AES-256-GCM encrypted on disk. Nothing leaves your machine unless you pair it with a server you run — there is no account, and no telemetry.</p>
     </div>
     <div class="feature-card">
       <div class="icon" style="background:var(--sage-bg)">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3f7a50" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--sage)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
       </div>
       <h3>Local or self-hosted</h3>
       <p>Keep everything on this machine, or run one always-on Docket Server (Raspberry Pi, NAS, VPS) and pair every device to it. <a href="#self-host">See how ↓</a></p>
     </div>
+    <div class="feature-card">
+      <div class="icon" style="background:var(--lavender-bg)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--lavender)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6a2 2 0 0 0-2-2H9"/><path d="M3 9v9a2 2 0 0 0 2 2h10"/><path d="M3 9l6-5 6 5"/></svg>
+      </div>
+      <h3>Your data stays yours</h3>
+      <p>One command writes an encrypted, portable backup of the whole workspace — identity, keys and all — and one restores it on another machine. Plain <code>docket export</code> gives you JSON or Markdown.</p>
+    </div>
   </div>
 </section>
 
-<section class="wrap">
+<section id="modes" class="wrap">
+  <p class="eyebrow">Where the data lives</p>
   <h2 class="section-title">Two ways to run it</h2>
   <p class="section-sub">Local Mode is the default and needs nothing below. Self-hosted Mode is opt-in, for an always-on machine you control.</p>
 
@@ -264,11 +423,11 @@
       <div class="flow-box"><div class="label">Cursor / Windsurf</div></div>
       <div class="flow-box"><div class="label">Warp / Codex</div></div>
     </div>
-    <div class="flow-arrow">→</div>
+    <div class="flow-arrow" aria-hidden="true">→</div>
     <div class="flow-box center"><div class="label">Docket</div><div class="sub">MCP tools</div></div>
-    <div class="flow-arrow">→</div>
+    <div class="flow-arrow" aria-hidden="true">→</div>
     <div class="flow-box store"><div class="label">Encrypted store</div><div class="sub">on your machine</div></div>
-    <div class="flow-arrow">←</div>
+    <div class="flow-arrow" aria-hidden="true">←</div>
     <div class="flow-stack">
       <div class="flow-box"><div class="label">Web dashboard</div><div class="sub">:8787</div></div>
       <div class="flow-box"><div class="label">Your phone</div><div class="sub">same Wi-Fi</div></div>
@@ -282,16 +441,35 @@
       <div class="flow-box"><div class="label">Desktop</div></div>
       <div class="flow-box"><div class="label">Phone (Web UI)</div></div>
     </div>
-    <div class="flow-arrow">→</div>
+    <div class="flow-arrow" aria-hidden="true">→</div>
     <div class="flow-box center"><div class="label">Docket Server</div><div class="sub">docket serve</div></div>
-    <div class="flow-arrow">→</div>
+    <div class="flow-arrow" aria-hidden="true">→</div>
     <div class="flow-box store"><div class="label">Authoritative store</div><div class="sub">your Pi / NAS / VPS</div></div>
   </div>
-  <p class="section-sub" style="margin-top:20px;">Every device is a thin, per-device-authenticated forwarder — there's no local writable copy, and the list stays up even when every laptop is off. <a href="#self-host">See how to set it up ↓</a></p>
-  <p class="section-sub" style="margin-top:10px;"><strong>Claims are advisory in Local Mode</strong> (they can be taken over, and across P2P sync they can be up to one 15-second pull interval stale) and <strong>atomic in Self-hosted Mode</strong> (a racing claim gets a <code>409</code>, decided by one authority). P2P sync is deprecated in v3.0 for exactly that reason — it still works, and nothing is removed, but Self-hosted is the supported multi-machine path.</p>
+
+  <div class="table-scroll" style="margin-top:34px;">
+    <table class="modes">
+      <thead>
+        <tr><th scope="col"></th><th scope="col">Local Mode</th><th scope="col">Self-hosted Mode</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Setup</td><td>Nothing — it is the default</td><td>One always-on machine, plus a pairing step per device</td></tr>
+        <tr><td>Where the data is</td><td>Encrypted on this machine</td><td>Encrypted on your server; devices keep no writable copy</td></tr>
+        <tr><td>Available when the laptop is off</td><td>No</td><td>Yes</td></tr>
+        <tr><td>Claims</td><td>Advisory — can be taken over</td><td>Atomic — a racing claim gets a <code>409</code> from one authority</td></tr>
+        <tr><td>Auth</td><td>Nothing to authenticate; it is your machine</td><td>Per-device signed requests; no device can call the API until you approve it</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="section-sub" style="margin-top:24px;">
+    Peer-to-peer sync between laptops still works and nothing has been removed, but it is deprecated in 3.0:
+    two devices that both accept writes can only ever agree eventually, and claims across it can be a pull
+    interval stale. Self-hosted is the supported multi-machine path.
+  </p>
 </section>
 
 <section id="install" class="wrap">
+  <p class="eyebrow">Getting started</p>
   <h2 class="section-title">Installation guide</h2>
   <p class="section-sub">Five minutes, no prior MCP experience needed.</p>
   <div class="steps">
@@ -301,6 +479,7 @@
         <h3>Register the server</h3>
         <p>Open a terminal and run:</p>
         <pre><code>claude mcp add docket -- npx -y @pasichdev/docket</code></pre>
+        <p style="margin-top:10px;">Using something other than Claude Code? Point it at the same command — the server speaks plain MCP over stdio.</p>
       </div>
     </div>
     <div class="step">
@@ -321,7 +500,14 @@
       <div class="num">4</div>
       <div class="body">
         <h3>Open the web UI</h3>
-        <p>Go to <code>http://localhost:8787</code> — it started itself the moment step 3 ran.</p>
+        <p>Go to <code>http://localhost:8787</code> — it started itself the moment step 3 ran. Check on it from a terminal any time:</p>
+        <pre><code>$ docket status
+Mode: local
+Store: ~/.docket <span class="c">(from the default location)</span>
+Web: http://localhost:8787
+Workspace: github.com/acme/backend via git-remote at ~/work/backend
+Sessions: 2 open
+Peers: 0</code></pre>
       </div>
     </div>
     <div class="step">
@@ -342,8 +528,9 @@ docket hook doctor
 </section>
 
 <section id="self-host" class="wrap">
+  <p class="eyebrow">Optional</p>
   <h2 class="section-title">Want an always-on shared workspace?</h2>
-  <p class="section-sub">Run one Docket Server on a Raspberry Pi, mini PC, NAS, home server, or VPS — every device you pair with it shares the same authoritative workspace, even when your laptop is off. This is the actual CLI output, not a mockup.</p>
+  <p class="section-sub">Run one Docket Server on a Raspberry Pi, mini PC, NAS, home server, or VPS — every device you pair with it shares the same authoritative workspace, even when your laptop is off. Every transcript below is real output, not a mockup.</p>
   <div class="steps">
     <div class="step">
       <div class="num">1</div>
@@ -354,57 +541,94 @@ docket hook doctor
 $ docket serve --host 0.0.0.0
 docket server ready
 API:  http://0.0.0.0:8788/api/v1
-Data: ~/.docket (default)
-Auth: per-device signed requests — no client can call the API until it's paired.
+Data: ~/.docket
+Auth: per-device signed requests (RFC §14) — no client can call the API until it's paired.
       Pair a new device from THIS machine with: docket devices pair</code></pre>
+        <p style="margin-top:10px;">Prefer containers? <code>docker compose up -d</code> from the repo brings up the same thing, with a healthcheck and a named volume.</p>
       </div>
     </div>
     <div class="step">
       <div class="num">2</div>
       <div class="body">
-        <h3>Pair a device</h3>
-        <p>From the client machine — this waits for explicit approval on the server, never silent:</p>
-        <pre><code>$ docket pair https://docket.home.example
-✓ Server reachable
-✓ docket server v2.3.0
-✓ Protocol compatible
-
-Confirmation code: 7XP-KR4
-Check that the SAME code appears next to this request on the server (docket devices pending) before approving it there.
-
-Waiting for approval...
-✓ Device paired
-✓ Connection authenticated
-✓ Remote workspace ready</code></pre>
+        <h3>Mint a pairing code, on the server</h3>
+        <pre><code>$ docket devices pair
+4PYD2F
+Expires in 5 minute(s).
+Give this code to the device being paired (it runs `docket pair &lt;this server's URL&gt;`), then approve it here:
+  docket devices pending
+  docket devices approve &lt;requestId&gt;</code></pre>
       </div>
     </div>
     <div class="step">
       <div class="num">3</div>
+      <div class="body">
+        <h3>Pair the device</h3>
+        <p>From the client machine. It waits for explicit approval on the server — never silent, and the confirmation code has to match on both ends:</p>
+        <pre><code>$ docket pair https://docket.home.example
+Pairing code (from `docket devices pair` on the server): 4PYD2F
+<span class="ok">✓</span> Server reachable
+<span class="ok">✓</span> docket server v3.0.0
+<span class="ok">✓</span> Protocol compatible
+
+Confirmation code: 096674
+Check that the SAME code appears next to this request on the server (docket devices pending) before approving it there.
+
+Waiting for approval...
+<span class="ok">✓</span> Device paired
+<span class="ok">✓</span> Connection authenticated
+<span class="ok">✓</span> Remote workspace ready</code></pre>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">4</div>
       <div class="body">
         <h3>Check on it, any time</h3>
         <pre><code>$ docket status
 Mode: remote
 Server: https://docket.home.example
 Status: connected
-Latency: 18 ms
-Server version: 2.3.0
+Latency: 27 ms
+Server version: 3.0.0
 Device: andrii-desktop
 Device authorization: active</code></pre>
       </div>
     </div>
     <div class="step">
-      <div class="num">4</div>
+      <div class="num">5</div>
       <div class="body">
         <h3>Use Claude/Codex/Cursor exactly like Local Mode</h3>
-        <p>Same MCP config, same tools — only where the data lives changed:</p>
-        <pre><code>claude mcp add docket -- npx -y @pasichdev/docket</code></pre>
+        <p>Same MCP config, same tools — only where the data lives changed. The mode is recorded once, centrally, so switching back later takes one command and no config editing:</p>
+        <pre><code>$ docket backend use https://docket.home.example   <span class="c"># move this device to the server</span>
+$ docket backend localize                          <span class="c"># …and bring the workspace back later</span></code></pre>
       </div>
     </div>
   </div>
   <div class="cta-row" style="margin-top:32px;">
-    <a class="btn primary" href="https://github.com/pasichDev/docket#deployment-modes">Read the full self-hosted guide</a>
+    <a class="btn primary" href="https://github.com/pasichDev/docket/blob/main/docs/self-hosting.md">Read the full self-hosted guide</a>
     <a class="btn secondary" href="https://github.com/pasichDev/docket/blob/main/docs/headless.md">Docker / systemd deployment</a>
   </div>
+</section>
+
+<section class="wrap">
+  <p class="eyebrow">How much you can trust it</p>
+  <h2 class="section-title">It holds your only copy, so it is built like it</h2>
+  <p class="section-sub">
+    A todo list is not important — until it is the only record of what you were doing. Every write goes to
+    disk atomically and durably, is checked against the exact bytes it read, and refuses rather than guesses
+    when two processes disagree. 3.0 went through a full release-readiness audit before it shipped; all 27 blockers are closed,
+    each with a regression test verified to fail against the code it replaced.
+  </p>
+  <div class="quality">
+    <div class="stat"><div class="n">510</div><div class="l">tests, run on Node 18–24 and macOS</div></div>
+    <div class="stat"><div class="n">20k</div><div class="l">random sync topologies, all converging</div></div>
+    <div class="stat"><div class="n">3</div><div class="l">runtime dependencies</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">accounts, trackers, telemetry</div></div>
+  </div>
+  <p class="section-sub" style="margin-top:26px;">
+    <a href="https://github.com/pasichDev/docket/blob/main/CHANGELOG.md">What changed in 3.0</a> ·
+    <a href="https://github.com/pasichDev/docket/blob/main/docs/security.md">Security model</a> ·
+    <a href="https://github.com/pasichDev/docket/blob/main/SECURITY.md">Reporting a vulnerability</a>
+  </p>
 </section>
 
 <footer>
@@ -412,7 +636,8 @@ Device authorization: active</code></pre>
     <a href="https://github.com/pasichDev/docket">GitHub</a>
     <a href="https://www.npmjs.com/package/@pasichdev/docket">npm</a>
     <a href="https://registry.modelcontextprotocol.io">MCP Registry</a>
-    <a href="https://github.com/pasichDev/docket/blob/main/docs/headless.md">Self-hosting docs</a>
+    <a href="https://github.com/pasichDev/docket/blob/main/docs/self-hosting.md">Self-hosting</a>
+    <a href="https://github.com/pasichDev/docket/blob/main/docs/workspaces.md">Projects</a>
     <a href="https://github.com/pasichDev/docket/blob/main/CONTRIBUTING.md">Contributing</a>
     <a href="https://github.com/pasichDev/docket/blob/main/SECURITY.md">Security</a>
     <a href="https://github.com/pasichDev/docket/blob/main/LICENSE">MIT License</a>
@@ -421,11 +646,53 @@ Device authorization: active</code></pre>
 </footer>
 
 <script>
+  // Screenshot tabs.
   document.querySelectorAll('.demo-tabs button').forEach((btn) => {
     btn.addEventListener('click', () => {
       const pane = btn.dataset.pane;
-      document.querySelectorAll('.demo-tabs button').forEach((b) => (b.dataset.active = String(b === btn)));
+      document.querySelectorAll('.demo-tabs button').forEach((b) => {
+        b.dataset.active = String(b === btn);
+        b.setAttribute('aria-selected', String(b === btn));
+      });
       document.querySelectorAll('.demo-pane').forEach((p) => (p.dataset.active = String(p.dataset.pane === pane)));
+    });
+  });
+
+  // Theme: follows the system until the visitor says otherwise, and then remembers.
+  // Wrapped because a browser set to block site data throws on the accessor itself, and a
+  // themed page that cannot remember the choice is still better than a page that fails to run.
+  const root = document.documentElement;
+  const store = {
+    get() { try { return localStorage.getItem('docket-theme'); } catch { return null; } },
+    set(v) { try { localStorage.setItem('docket-theme', v); } catch { /* private mode */ } },
+  };
+  const saved = store.get();
+  if (saved === 'dark' || saved === 'light') root.dataset.theme = saved;
+  const label = () => (root.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+  const paint = () => {
+    const now = label();
+    document.querySelectorAll('.theme-icon').forEach((i) => (i.textContent = now === 'dark' ? '☾' : '☀'));
+    document.querySelectorAll('.theme-label').forEach((l) => (l.textContent = now === 'dark' ? 'Dark' : 'Light'));
+  };
+  paint();
+  document.querySelector('.theme-toggle').addEventListener('click', () => {
+    const next = label() === 'dark' ? 'light' : 'dark';
+    root.dataset.theme = next;
+    store.set(next);
+    paint();
+  });
+
+  // Copy button on the install command.
+  document.querySelectorAll('.copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        const was = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => (btn.textContent = was), 1400);
+      } catch {
+        btn.textContent = 'Select it';
+      }
     });
   });
 </script>
