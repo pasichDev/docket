@@ -116,15 +116,38 @@ test("hostile: unparseable and absurd timestamps cannot crash a merge or a later
   assert.doesNotThrow(() => mergeHostile(store, [wireTodo({ updatedAt: "also-not-a-date" })]));
 });
 
-test("hostile: a far-future timestamp cannot make a record permanently unbeatable... but is at least recorded honestly", () => {
+test("hostile: a timestamp at the ISO boundary is refused, because this device could not step it", () => {
   const store = emptyStore();
   const ours = createTodo(store, { title: "ours", agent: null, session: null }, "device-a", "A");
-  mergeHostile(store, [wireTodo({ uuid: ours.uuid, title: "theirs", updatedAt: "9999-12-31T23:59:59.999Z", fieldTimestamps: { title: "9999-12-31T23:59:59.999Z" } })]);
-  // Last-write-wins means the future timestamp DOES win — that is the documented model, not
-  // a bug to assert away. What matters is that it is stored as sent, so `docket history` and
-  // the web UI show a visibly absurd date rather than something silently plausible.
-  assert.equal(store.todos[0].title, "theirs");
-  assert.equal(store.todos[0].updatedAt, "9999-12-31T23:59:59.999Z");
+  mergeHostile(store, [
+    wireTodo({
+      uuid: ours.uuid,
+      title: "theirs",
+      updatedAt: "9999-12-31T23:59:59.999Z",
+      fieldTimestamps: { title: "9999-12-31T23:59:59.999Z" },
+    }),
+  ]);
+  /*
+   * This used to be accepted, on the reasoning that last-write-wins means a future timestamp
+   * legitimately wins and an absurd date on screen is honest. The flaw is one step further
+   * on: mutations.ts keeps timestamps monotonic with `Date.parse(x) + 1`, and one
+   * millisecond past this value is year 10000, which serialises as "+010000-01-01T…". No
+   * Docket accepts that shape — so a local edit to this record would produce something the
+   * NEXT device refuses, and refusal plus delivery accounting is a gap neither side sees.
+   *
+   * A record this device cannot safely edit is not one it should store.
+   */
+  assert.equal(store.todos[0].title, "ours", "a record with an unsteppable timestamp was merged");
+  assert.equal(store.todos.length, 1);
+
+  // One millisecond below the boundary is fine, and still wins on the merits.
+  const safe = "9999-12-31T23:59:58.998Z";
+  mergeHostile(store, [wireTodo({ uuid: ours.uuid, title: "far but safe", updatedAt: safe, fieldTimestamps: { title: safe } })]);
+  assert.equal(store.todos[0].title, "far but safe", "a far-future but steppable timestamp must still win");
+
+  // ...and the value this device would produce from it is still something a peer accepts.
+  const stepped = new Date(Date.parse(store.todos[0].updatedAt) + 1).toISOString();
+  assert.match(stepped, /^\d{4}-/, `stepping the stored timestamp produced ${stepped}, which no peer will accept`);
 });
 
 // --- Volume ----------------------------------------------------------------------------
@@ -433,4 +456,57 @@ test("optional timestamps degrade to null instead of poisoning the record", () =
   assert.equal(stored.completedAt, null);
   assert.equal(stored.workingSince, null);
   assert.equal(stored.workingLeaseExpiresAt, null);
+});
+
+/* ==========================================================================================
+ * Delivery accounting
+ *
+ * The sanitiser refusing a record and the cursor counting it as delivered are two decisions
+ * that have to agree. When they did not, the record was skipped forever and nothing said so.
+ * ========================================================================================== */
+
+test("a record the sanitiser refuses holds the cursor below it, instead of being skipped forever", () => {
+  const store = emptyStore();
+  const good = wireTodo({ uuid: "aaaa1111-1111-7111-8111-111111111111", title: "delivered", localSeq: 10 });
+  // Refused for an unparseable updatedAt, but it still occupies position 20 in the peer's
+  // delivery order — so the cursor may not go past 19.
+  const bad = wireTodo({ uuid: "bbbb2222-2222-7222-8222-222222222222", title: "refused", updatedAt: "not-a-date", localSeq: 20 });
+  const later = wireTodo({ uuid: "cccc3333-3333-7333-8333-333333333333", title: "after the bad one", localSeq: 30 });
+
+  const merged = mergeSyncPayload(store, { ...payload([good, bad, later]), maxSeq: 30 } as unknown as SyncPayload, "peer");
+  assert.equal(merged.rejectedBelow, 20, "the merge must report where it refused, not just how many it took");
+
+  const cursor = cursorAfterPage({ ...payload([good, bad, later]), maxSeq: 30 } as unknown as SyncPayload, 0, merged.rejectedBelow);
+  assert.equal(cursor, 19, `the cursor advanced to ${cursor}, stepping over the record at 20`);
+
+  // What DID arrive is kept — holding the cursor is not the same as discarding the page.
+  assert.ok(store.todos.some((t) => t.title === "delivered"), "a valid record below the refusal was dropped");
+});
+
+test("a clean page still advances the cursor normally", () => {
+  // The clamp must not fire when there is nothing to clamp, or every sync stalls at once.
+  const store = emptyStore();
+  const page = { ...payload([wireTodo({ localSeq: 5 }), wireTodo({ uuid: "dddd4444-4444-7444-8444-444444444444", localSeq: 9 })]), maxSeq: 9 } as unknown as SyncPayload;
+  const merged = mergeSyncPayload(store, page, "peer");
+  assert.equal(merged.rejectedBelow, null);
+  assert.equal(cursorAfterPage(page, 0, merged.rejectedBelow), 9);
+});
+
+test("a tombstone with an unorderable deletedAt is refused, not stored", () => {
+  /*
+   * The merge compares deletions by STRING ordering — `tombstone.deletedAt >= remote.updatedAt`
+   * — so "zzzz" sorts above every real ISO timestamp. Stored, it would produce a deletion
+   * that no later edit from any device could ever beat: an item that cannot be brought back.
+   */
+  const store = emptyStore();
+  const live = createTodo(store, { title: "still wanted", agent: null, session: null }, "device-a", "A");
+  for (const deletedAt of ["zzzz", "", "not-a-date", "9999-12-31T23:59:59.999Z", "tomorrow"]) {
+    mergeHostile(store, [], [{ uuid: live.uuid, deletedAt, deviceId: "peer" }]);
+  }
+  assert.equal(store.deletedUuids.length, 0, `an unorderable tombstone was stored: ${JSON.stringify(store.deletedUuids)}`);
+  assert.ok(store.todos.some((t) => t.uuid === live.uuid), "the item was deleted by a tombstone that should have been refused");
+
+  // A well-formed one still works, or this would be a denial of deletion rather than a guard.
+  mergeHostile(store, [], [{ uuid: live.uuid, deletedAt: new Date(Date.now() + 60_000).toISOString(), deviceId: "peer" }]);
+  assert.equal(store.deletedUuids.length, 1, "a valid tombstone was refused too");
 });

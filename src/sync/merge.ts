@@ -105,7 +105,7 @@ export function mergeSyncPayload(
   store: TodoStore,
   payload: SyncPayload,
   peerId: string,
-): { inserted: number; updated: number; deleted: number; truncated: boolean } {
+): { inserted: number; updated: number; deleted: number; truncated: boolean; rejectedBelow: number | null } {
   let inserted = 0;
   let updated = 0;
   let deleted = 0;
@@ -125,11 +125,44 @@ export function mergeSyncPayload(
   // because on the legacy path it is the difference between "everything the peer offered
   // landed" and "the cursor must not move".
   const truncated = rawTodos.length > MAX_INCOMING_ITEMS || rawTombstones.length > MAX_INCOMING_ITEMS;
-  const incomingTodos = rawTodos.slice(0, MAX_INCOMING_ITEMS).filter(isPlausibleTodo).map(sanitizeRemoteTodo);
-  const incomingTombstones = rawTombstones
-    .slice(0, MAX_INCOMING_ITEMS)
-    .map(sanitizeTombstone)
-    .filter((t): t is Tombstone => t !== null);
+
+  /*
+   * Records this merge REFUSES still occupy a position in the peer's delivery order, and
+   * that position is what the cursor must respect. Sanitising a page and then computing the
+   * cursor from the raw page — which is what happened before — meant a record rejected for a
+   * malformed timestamp was counted as delivered: the next request started above it, and it
+   * was never asked for again. A silent, permanent gap, which is the exact failure localSeq
+   * exists to prevent.
+   *
+   * So the lowest refused sequence number is reported back, and the caller clamps the cursor
+   * below it. Everything under that still lands and still counts; the bad record is
+   * re-requested every tick and named on the peer, which is loud rather than silent.
+   */
+  let rejectedBelow: number | null = null;
+  const noteRejected = (record: unknown): void => {
+    const seq = (record as { localSeq?: unknown } | null)?.localSeq;
+    if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 0) return;
+    if (rejectedBelow === null || seq < rejectedBelow) rejectedBelow = seq;
+  };
+
+  const incomingTodos: Todo[] = [];
+  for (const raw of rawTodos.slice(0, MAX_INCOMING_ITEMS)) {
+    if (!isPlausibleTodo(raw)) {
+      noteRejected(raw);
+      continue;
+    }
+    incomingTodos.push(sanitizeRemoteTodo(raw));
+  }
+
+  const incomingTombstones: Tombstone[] = [];
+  for (const raw of rawTombstones.slice(0, MAX_INCOMING_ITEMS)) {
+    const clean = sanitizeTombstone(raw);
+    if (clean === null) {
+      noteRejected(raw);
+      continue;
+    }
+    incomingTombstones.push(clean);
+  }
 
   // The newest author-clock value this merge actually took in. The legacy (protocol v1)
   // cursor is a timestamp, and advancing it to the peer's "now" would step over anything
@@ -207,7 +240,7 @@ export function mergeSyncPayload(
 
   if (inserted || updated || deleted) log(`sync: merged from peer ${peerId} — +${inserted} ~${updated} -${deleted}`);
   if (truncated) log(`sync: peer ${peerId} sent more than ${MAX_INCOMING_ITEMS} records in one response — merged what fit, cursor held back`);
-  return { inserted, updated, deleted, truncated };
+  return { inserted, updated, deleted, truncated, rejectedBelow };
 }
 
 /**

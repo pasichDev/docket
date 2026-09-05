@@ -38,13 +38,12 @@ export function slugifyWorkspace(raw: string): string | null {
 }
 
 /**
- * Turns a git remote URL into `owner/repo`.
+ * Turns a git remote URL into a stable workspace slug: `host/full/repo/path`.
  *
  * The remote, not the path, is what makes this feature work across machines: the same
  * project cloned to ~/src/backend on a laptop and /work/backend on a desktop has to land in
- * ONE workspace, or sync produces two half-lists. Only the last two path segments are kept,
- * so the same repo reached over SSH and over HTTPS — different hosts, credentials, ports —
- * still normalises to the same slug.
+ * ONE workspace, or sync produces two half-lists. Credentials, ports and the ssh-vs-https
+ * spelling are all discarded, so the same repo fetched either way normalises to one slug.
  */
 export function normalizeGitRemote(url: string): string | null {
   const trimmed = url.trim().replace(/\.git\/?$/, "");
@@ -69,15 +68,22 @@ export function normalizeGitRemote(url: string): string | null {
   const segments = path.split("/").filter(Boolean);
   if (segments.length === 0) return null;
   /*
-   * The host is part of the identity, not decoration. "owner/repo" alone collides the
-   * moment two forges share a namespace — a GitLab group and a GitHub org with the same
-   * name, a self-hosted mirror of a public repo, a fork on a company server — and the
-   * failure mode is two unrelated projects quietly sharing one list.
+   * Host plus the WHOLE path. Both halves earn their place.
    *
-   * A remote with no host at all (a plain local path) keeps the last two segments, because
-   * there is nothing better to key on.
+   * The host, because "owner/repo" alone collides the moment two forges share a namespace —
+   * a GitLab group and a GitHub org with the same name, a self-hosted mirror of a public
+   * repo, a fork on a company server.
+   *
+   * The whole path, not the last two segments, because GitLab nests groups, so
+   * "gitlab.company/team-a/platform/backend" and "gitlab.company/team-b/platform/backend"
+   * were different projects that both collapsed to "gitlab.company/platform/backend" — two
+   * teams' lists silently merged into one.
+   *
+   * A remote with no host at all (a plain local path) still takes the last two segments: a
+   * filesystem path has no namespace to preserve, and its leading directories differ per
+   * machine, which is the thing this function exists to see past.
    */
-  const parts = host ? [host, ...segments.slice(-2)] : segments.slice(-2);
+  const parts = host ? [host, ...segments] : segments.slice(-2);
   return slugifyWorkspace(parts.join("/"));
 }
 

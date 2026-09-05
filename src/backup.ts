@@ -10,7 +10,19 @@ import { resetStoreEpoch } from "./storage.js";
 // themselves. Deliberately NOT re-decrypting todos/peers first — the backup stays exactly
 // as sensitive as the live data directory either way, and re-encrypting a copy would be
 // pure extra risk (a second place a bug could leak plaintext) for no benefit.
-const BACKUP_FILES = ["device.json", "key", "todos.json.enc", "history.json.enc", "peers.json.enc", "viewers.json.enc"];
+const BACKUP_FILES = [
+  "device.json",
+  "key",
+  "todos.json.enc",
+  "history.json.enc",
+  "peers.json.enc",
+  "viewers.json.enc",
+  // The self-hosted server's registry of authorised devices. Without it, restoring a server
+  // backup onto a fresh machine gives you the todos and the server's identity but not the
+  // list of clients allowed to talk to it — every paired device silently stops
+  // authenticating, which is exactly the disaster the backup was taken for.
+  "devices.json.enc",
+];
 /** Files whose contents only make sense alongside the store they were captured with. */
 const STORE_COUPLED_FILES = ["history.json.enc"];
 const MAGIC = "docket-backup-v1";

@@ -171,3 +171,37 @@ test("withFileLock: a lock that came back to life between judging and reaping is
   assert.ok((await stat(lockPath)).isFile(), "and it must still be there afterwards");
   await rm(lockPath, { force: true });
 });
+
+test("withFileLock: ownership decided by rename, so a lock taken between judging and unlinking survives", async () => {
+  /*
+   * The narrow window the previous test could not reach.
+   *
+   * Release used to be read-then-unlink: read the holder record, see "mine", unlink. A
+   * process suspended between those two steps — which is what a laptop lid does — wakes up
+   * to find its lock long since reaped and a NEW holder in place, and then unlinks that
+   * holder's lock. One bad reap turns into a chain of them, and the second victim has no
+   * optimistic stamp to catch it the way the todo store does.
+   *
+   * Claiming by rename removes the window rather than narrowing it: rename is atomic and
+   * has exactly one winner, so whatever this call moves aside is the file it is entitled to
+   * judge, and nobody else can still be looking at it.
+   */
+  const { readFile, writeFile, stat } = await import("node:fs/promises");
+  const lockPath = join(dataDirectory, "toctou.lock");
+  const newHolder = JSON.stringify({ id: "new-holder", pid: 424242, host: "elsewhere", startedAt: new Date().toISOString() });
+
+  await withFileLock(lockPath, async () => {
+    // Precisely the suspension: this process still believes it holds the lock, and by the
+    // time it releases, the file on disk belongs to someone else.
+    await writeFile(lockPath, newHolder);
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  assert.ok((await stat(lockPath)).isFile(), "the new holder's lock was deleted by the previous holder's release");
+  assert.equal(JSON.parse(await readFile(lockPath, "utf8")).id, "new-holder", "the lock file was replaced rather than left alone");
+
+  // And the new holder can still release its own lock normally afterwards.
+  await rm(lockPath, { force: true });
+  await withFileLock(lockPath, async () => {});
+  await assert.rejects(() => stat(lockPath), "a normal release must still remove the lock");
+});

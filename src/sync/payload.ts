@@ -133,6 +133,7 @@ const isSeq = (v: unknown): v is number => typeof v === "number" && Number.isSaf
  *
  * Two rules, and deliberately only two:
  *  - the number must BE a sequence number (a non-negative safe integer);
+ *  - a record the merge could not accept was not delivered, so the cursor stops below it;
  *  - a page that carried records cannot promise more than its highest record. A correct
  *    peer's `maxSeq` is already at or below that (buildSyncPayload takes the min-ceiling of
  *    the two streams), so this clamps liars without touching honest peers.
@@ -142,7 +143,7 @@ const isSeq = (v: unknown): v is number => typeof v === "number" && Number.isSaf
  * always simply withhold them. The epoch check upstream covers the honest version of this
  * (a peer whose counter went backwards after a restore).
  */
-export function cursorAfterPage(payload: SyncPayload, current: number): number {
+export function cursorAfterPage(payload: SyncPayload, current: number, acceptedBelow: number | null = null): number {
   if (!isSeq(payload.maxSeq)) {
     throw new InvalidSyncEnvelopeError(`peer sent maxSeq ${JSON.stringify(payload.maxSeq)}, which is not a sequence number`);
   }
@@ -151,7 +152,10 @@ export function cursorAfterPage(payload: SyncPayload, current: number): number {
     const seq = (record as { localSeq?: unknown } | null)?.localSeq;
     if (isSeq(seq)) delivered.push(seq);
   }
-  const promised = delivered.length > 0 ? Math.min(payload.maxSeq, Math.max(...delivered)) : payload.maxSeq;
+  let promised = delivered.length > 0 ? Math.min(payload.maxSeq, Math.max(...delivered)) : payload.maxSeq;
+  // A record the merge refused was NOT delivered, whatever the envelope claims. Stop below
+  // it so it is asked for again, instead of stepping over it forever.
+  if (acceptedBelow !== null) promised = Math.min(promised, acceptedBelow - 1);
   // Never backwards: re-merging is harmless but re-requesting the same range every tick is
   // not, and a peer that keeps sending a lower number would pin this device there forever.
   return Math.max(current, promised);

@@ -7,6 +7,7 @@ import {
   cursorAfterPage,
   decryptSyncPayload,
   isSyncProtocolCompatible,
+  MAX_INCOMING_ITEMS,
   MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION,
   SYNC_PROTOCOL_VERSION,
   type SyncPayload,
@@ -78,7 +79,7 @@ async function fetchSyncPage(
     if (body.reason === "revoked") throw new Error("this peer has revoked this device — re-pair from that device to resume syncing");
     if (body.reason === "protocol-incompatible") {
       throw new Error(
-        `this peer requires sync protocol v${body.minVersion}+ — this device is running an older docket; update it (npm install -g docket@latest) to resume syncing`,
+        `this peer requires sync protocol v${body.minVersion}+ — this device is running an older docket; update it (npm install -g @pasichdev/docket@latest) to resume syncing`,
       );
     }
     // A 403 the peer gave no reason for, on the seq path, is overwhelmingly a v1 peer
@@ -111,6 +112,7 @@ export async function pullFromPeer(
     let knownEpoch = peer.epoch;
     let legacyCursor = peer.lastSyncAt ?? EPOCH;
     let degraded: string | undefined;
+    let rejection: string | undefined;
     let payload: SyncPayload | undefined;
     let pages = 0;
 
@@ -157,7 +159,14 @@ export async function pullFromPeer(
       // THE rule this stage exists for: the cursor advances only to what was actually
       // merged — never to "wherever the peer is now", and never past what this page
       // carried. See cursorAfterPage for why the peer's own number cannot be trusted.
-      const advanced = degraded ? cursor : cursorAfterPage(payload, cursor);
+      const advanced = degraded ? cursor : cursorAfterPage(payload, cursor, merged.rejectedBelow);
+      if (merged.rejectedBelow !== null) {
+        // Loud, and on the peer record so it survives past this log line: a record the
+        // sanitiser refused will be re-requested every tick until that peer stops sending
+        // it, and the user deserves to know their list is not converging and why.
+        rejection = `peer sent a record at sequence ${merged.rejectedBelow} that failed validation — syncing is held below it until that peer is fixed or updated`;
+        log(`sync: peer ${peer.name} (${peer.id}) — ${rejection}`);
+      }
       const stalled = advanced === cursor;
       cursor = advanced;
       mergedThrough = advanced;
@@ -167,6 +176,24 @@ export async function pullFromPeer(
       // starts past records that never landed. Staying in the PEER's clock is the point:
       // a merged record can have been authored by a third device, and its `updatedAt` says
       // nothing about where this peer's own timeline has reached.
+      if (degraded && merged.truncated) {
+        /*
+         * A protocol-v1 peer does not page: it answers with everything since the timestamp
+         * it was given, and if that is more than MAX_INCOMING_ITEMS the merge clamps it and
+         * the legacy cursor deliberately does not move. The next tick asks the same question
+         * and gets the same too-large answer — forever, while reporting a successful sync.
+         *
+         * There is no fix on this side; the peer has to page, which is what protocol v2 is.
+         * So say so instead of looping quietly: an explicit incompatibility is worth more
+         * than an indefinite "syncing" that never converges.
+         */
+        const msg =
+          `this peer is on sync protocol v1 and has more than ${MAX_INCOMING_ITEMS} records to send — ` +
+          `that cannot be delivered without paging, so syncing with it will never complete. Update that device to Docket 3.x.`;
+        log(`sync: pull from peer ${peer.name} (${peer.id}) cannot complete — ${msg}`);
+        await markPeerSynced(peer.id, false, { error: msg, lastSeq: mergedThrough });
+        return false;
+      }
       if (degraded && !merged.truncated) legacyCursor = payload.serverTime;
       if (payload.hasMore !== true) break;
       // "More to come" plus a cursor that did not move is a peer that will hand back this
@@ -189,7 +216,8 @@ export async function pullFromPeer(
       epoch: payload?.epoch,
       protocolVersion: payload?.protocolVersion,
       clockSkewMs,
-      error: degraded,
+      // A rejection is the more actionable of the two, so it wins the single error slot.
+      error: rejection ?? degraded,
     });
     if (pages === MAX_PAGES_PER_TICK) {
       // Not an error and not a partial write: everything merged is merged and the cursor

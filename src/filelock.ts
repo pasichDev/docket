@@ -134,12 +134,34 @@ async function acquireLock(lockPath: string): Promise<string> {
  * something it inflicts on everyone after.
  */
 async function releaseLock(lockPath: string, identity: string): Promise<void> {
-  const current = await readFile(lockPath, "utf8").catch(() => null);
+  /*
+   * Claim it by RENAME before deciding, rather than read-then-unlink.
+   *
+   * The obvious version — read the holder record, compare, unlink — has a window between the
+   * two: a process suspended after the read can wake to find its lock reaped and a new
+   * holder in place, and then unlink THAT holder's lock. One bad reap becomes a chain of
+   * them. Rename is atomic and single-winner, so whatever this call moves aside is the file
+   * this call is entitled to judge; nobody else can be looking at it any more.
+   */
+  const claimed = `${lockPath}.releasing.${randomUUID()}`;
+  try {
+    await rename(lockPath, claimed);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // already reaped; nothing owed
+    throw err;
+  }
+
+  const current = await readFile(claimed, "utf8").catch(() => null);
   if (current !== null && current !== identity) {
+    // Not ours after all — put it back for its rightful holder and stay out of it. A failed
+    // restore leaves the lock free, which is the same state a reap would have produced.
     log(`filelock: not releasing ${lockPath} — it is now held by someone else (this process's lock was reaped while held)`);
+    await rename(claimed, lockPath).catch(async () => {
+      await rm(claimed, { force: true });
+    });
     return;
   }
-  await rm(lockPath, { force: true });
+  await rm(claimed, { force: true });
 }
 
 /**

@@ -91,7 +91,11 @@ test("normalizeGitRemote: keeps host/owner/repo across every URL shape", () => {
     ["https://github.com/acme/backend.git", "github.com/acme/backend"],
     ["https://user:token@github.com/acme/backend.git", "github.com/acme/backend"],
     ["ssh://git@ssh.github.com:443/acme/backend.git", "ssh.github.com/acme/backend"],
-    ["https://gitlab.com/acme/group/backend.git", "gitlab.com/group/backend"],
+    // A nested GitLab group is part of the identity, not noise to trim: two teams whose
+    // "platform/backend" both collapsed to the same slug had their lists silently merged.
+    ["https://gitlab.com/acme/group/backend.git", "gitlab.com/acme/group/backend"],
+    ["https://gitlab.company/team-a/platform/backend.git", "gitlab.company/team-a/platform/backend"],
+    ["https://gitlab.company/team-b/platform/backend.git", "gitlab.company/team-b/platform/backend"],
     // The whole point of carrying the host: these two are different projects.
     ["git@gitlab.com:acme/backend.git", "gitlab.com/acme/backend"],
     ["git@github.com:acme/backend.git", "github.com/acme/backend"],

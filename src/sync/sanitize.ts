@@ -50,7 +50,19 @@ function nullableString(v: unknown): string | null {
  * the arithmetic in mutations.ts throw.
  */
 function isIsoTimestamp(v: unknown): v is string {
-  return typeof v === "string" && ISO_TIMESTAMP_RE.test(v) && Number.isFinite(Date.parse(v));
+  if (typeof v !== "string" || !ISO_TIMESTAMP_RE.test(v)) return false;
+  const ms = Date.parse(v);
+  if (!Number.isFinite(ms)) return false;
+  /*
+   * ...and it must survive the arithmetic this codebase does to it. mutations.ts keeps
+   * timestamps monotonic with `new Date(Date.parse(x) + 1).toISOString()`, and one
+   * millisecond after 9999-12-31T23:59:59.999Z is year 10000, which JS serialises in
+   * extended form: "+010000-01-01T00:00:00.000Z". That does not match the four-digit shape
+   * every Docket validates against — so accepting a timestamp at the boundary lets this
+   * device manufacture a record the NEXT device will refuse, which combined with delivery
+   * accounting is a gap neither side can see. Nothing real is dated year 9999.
+   */
+  return ISO_TIMESTAMP_RE.test(new Date(ms + 1).toISOString());
 }
 
 /**
@@ -140,7 +152,11 @@ function sanitizeRemoteTodo(t: Todo): Todo {
 function sanitizeTombstone(t: unknown): Tombstone | null {
   if (typeof t !== "object" || t === null) return null;
   const o = t as Record<string, unknown>;
-  if (typeof o.uuid !== "string" || typeof o.deletedAt !== "string") return null;
+  // deletedAt is held to the same standard as a todo's updatedAt, and for a sharper reason:
+  // the merge compares it by STRING ordering ("tombstone.deletedAt >= remote.updatedAt"), so
+  // a value like "zzzz" sorts above every real ISO timestamp and produces a tombstone that
+  // no later edit can ever beat. An unorderable deletion is worse than a rejected one.
+  if (typeof o.uuid !== "string" || !isIsoTimestamp(o.deletedAt)) return null;
   return { uuid: o.uuid, deletedAt: o.deletedAt, deviceId: nullableString(o.deviceId), localSeq: 0 }; // localSeq re-stamped locally, same as todos
 }
 

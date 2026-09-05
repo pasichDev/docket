@@ -20,7 +20,7 @@ import type { TodoStore } from "./types.js";
 const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-resilience-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
-const { buildLegacySyncPayload, buildSyncPayload, encryptSyncPayload, PAGE_SIZE } = await import("./sync/payload.js");
+const { buildLegacySyncPayload, buildSyncPayload, encryptSyncPayload, MAX_INCOMING_ITEMS, PAGE_SIZE } = await import("./sync/payload.js");
 const { pullFromPeer, V1_PEER_WARNING } = await import("./sync/client.js");
 const { verifySyncRequest } = await import("./sync/auth.js");
 const { addPeer, loadPeers } = await import("./peers.js");
@@ -231,5 +231,48 @@ test("a peer answering nonsense is a failure, not a cursor advance", async () =>
     } finally {
       server.close();
     }
+  }
+});
+
+test("v1 peer: more records than one merge can take is reported as incompatible, not synced forever", async () => {
+  /*
+   * A protocol-v1 peer does not page — it answers with everything since the timestamp it was
+   * given. Above MAX_INCOMING_ITEMS the merge clamps, and the legacy cursor deliberately does
+   * not advance, so the next tick asks the same question and receives the same oversized
+   * answer. For ever, while reporting a successful sync each time.
+   *
+   * Nothing on this side can fix that; the peer has to page, which is what v2 is. So the
+   * only honest outcome is to say so, because "syncing" that never converges is worse than
+   * a stated incompatibility.
+   */
+  const remote = seeded(MAX_INCOMING_ITEMS + 50, "flood");
+  const { server, url } = await startRawPeer((req, res) => {
+    if (req.sinceSeq !== null) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "signature invalid" }));
+      return;
+    }
+    if (!verifySyncRequest(SECRET, req.deviceId, req.since, req.timestamp, req.signature)) {
+      res.writeHead(403).end();
+      return;
+    }
+    ok(res, buildLegacySyncPayload(remote, req.since));
+  });
+
+  try {
+    const id = await pairWith(url);
+    const local = emptyStore();
+    await pullFromPeer(await peerById(id), "device-local", async (fn) => fn(local));
+
+    const after = await peerById(id);
+    assert.equal(after.lastSyncOk, false, "an unfinishable sync must not be recorded as successful");
+    assert.match(after.lastError ?? "", /protocol v1/i, `unhelpful error: ${after.lastError}`);
+    assert.match(after.lastError ?? "", /never complete|cannot be delivered/i, "the message must say it will not finish, not just that it is degraded");
+    assert.match(after.lastError ?? "", /3\.x/, "the message must say what to do about it");
+
+    // The legacy cursor must not have moved past a payload that was clamped.
+    assert.ok(!after.lastSyncAt, "the timestamp cursor advanced past records that never landed");
+  } finally {
+    server.close();
   }
 });
