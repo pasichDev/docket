@@ -164,19 +164,43 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Wait for npm to actually serve the version that was just published
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          # npm's read replicas lag its writes by anything up to a couple of minutes, and
+          # every step after this one asks npm a question about the version. Skipping the
+          # wait is what made the dist-tag check below read the PREVIOUS value and pass on
+          # it, and what made the MCP registry — which does its own npm lookup — reject the
+          # release outright with "version was not found".
+          for attempt in $(seq 1 40); do
+            if [ "$(npm view "@pasichdev/docket@$version" version 2>/dev/null || echo '')" = "$version" ]; then
+              echo "npm is serving $version after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::npm still does not serve @pasichdev/docket@$version four minutes after publishing it."
+          exit 1
+
       - name: Confirm the dist-tags landed where they were meant to
         run: |
           set -euo pipefail
           version="${{ needs.verify.outputs.version }}"
-          for attempt in $(seq 1 10); do
-            latest="$(npm view @pasichdev/docket dist-tags.latest 2>/dev/null || echo '')"
-            if [ -n "$latest" ]; then break; fi
-            sleep 5
-          done
+          latest="$(npm view @pasichdev/docket dist-tags.latest)"
           echo "latest is now $latest"
-          if [[ "$version" == *-* ]] && [ "$latest" = "$version" ]; then
-            echo "::error::prerelease $version became the 'latest' dist-tag. Fix with: npm dist-tag add @pasichdev/docket@<previous stable> latest"
-            exit 1
+          # Both directions, because only asserting the bad one lets a stale or missing
+          # answer look like a pass — which is exactly what happened when this ran before
+          # npm had caught up.
+          if [[ "$version" == *-* ]]; then
+            if [ "$latest" = "$version" ]; then
+              echo "::error::prerelease $version became the 'latest' dist-tag. Fix with: npm dist-tag add @pasichdev/docket@<previous stable> latest"
+              exit 1
+            fi
+            next="$(npm view @pasichdev/docket dist-tags.next)"
+            [ "$next" = "$version" ] || { echo "::error::prerelease $version did not become the 'next' dist-tag (it is $next)."; exit 1; }
+          else
+            [ "$latest" = "$version" ] || { echo "::error::stable $version did not become the 'latest' dist-tag (it is $latest)."; exit 1; }
           fi
 
       # --- Publish server metadata to the official MCP Registry ---
@@ -193,4 +217,16 @@ jobs:
         run: ./mcp-publisher login github --token ${{ secrets.MCP_GITHUB_TOKEN }}
 
       - name: Publish server to MCP Registry
-        run: ./mcp-publisher publish
+        run: |
+          set -euo pipefail
+          # The registry validates by looking the package up on npm itself, against replicas
+          # that are not the ones the step above just satisfied. Its own error message asks
+          # for a retry, so the workflow does that rather than failing a release that is
+          # otherwise complete.
+          for attempt in $(seq 1 6); do
+            if ./mcp-publisher publish; then exit 0; fi
+            echo "mcp-publisher attempt ${attempt} failed; waiting for npm to propagate further."
+            sleep 20
+          done
+          echo "::error::the MCP registry would not accept this release after six attempts."
+          exit 1
