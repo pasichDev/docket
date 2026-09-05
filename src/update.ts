@@ -53,16 +53,63 @@ export async function getLatestVersion(fetchImpl: typeof fetch = fetch): Promise
   return { version: body.version, shasum: body.dist.shasum, tarball: body.dist.tarball };
 }
 
-/** X.Y.Z comparison — this package's own releases never use pre-release tags, so this is enough. */
+const cmp = (a: number | string, b: number | string): -1 | 0 | 1 => (a === b ? 0 : a < b ? -1 : 1);
+
+/**
+ * SemVer §11 precedence, pre-release identifiers included.
+ *
+ * The previous version split on "." and ran Number() over the parts, which turns "0-rc"
+ * into NaN — and every comparison against NaN is false, so the loop fell through to its
+ * "greater than" branch on the first pre-release segment it met. compareVersions(
+ * "3.0.0-rc.1", "3.0.0-rc.2") therefore answered "rc.1 is newer", which would have offered
+ * an RC user a downgrade and called it an update. It only ever LOOKED right because
+ * release-vs-prerelease comparisons happened to land on that same branch correctly.
+ */
 export function compareVersions(a: string, b: string): -1 | 0 | 1 {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] ?? 0;
-    const nb = pb[i] ?? 0;
-    if (na !== nb) return na < nb ? -1 : 1;
+  // Build metadata is explicitly not part of precedence.
+  const [coreA, preA] = splitVersion(a);
+  const [coreB, preB] = splitVersion(b);
+
+  for (let i = 0; i < 3; i++) {
+    const result = cmp(coreA[i] ?? 0, coreB[i] ?? 0);
+    if (result !== 0) return result;
+  }
+  // "1.0.0-rc.1" precedes "1.0.0": a pre-release is always older than its own release.
+  const hasPreA = preA.length > 0;
+  const hasPreB = preB.length > 0;
+  if (!hasPreA || !hasPreB) return cmp(hasPreA ? 0 : 1, hasPreB ? 0 : 1);
+
+  for (let i = 0; i < Math.max(preA.length, preB.length); i++) {
+    const idA = preA[i];
+    const idB = preB[i];
+    // A larger set of identifiers wins when all the preceding ones are equal.
+    if (idA === undefined) return -1;
+    if (idB === undefined) return 1;
+    const numA = /^\d+$/.test(idA) ? Number(idA) : null;
+    const numB = /^\d+$/.test(idB) ? Number(idB) : null;
+    // Numeric identifiers compare numerically and always rank below alphanumeric ones.
+    if (numA !== null && numB !== null) {
+      const result = cmp(numA, numB);
+      if (result !== 0) return result;
+    } else if (numA !== null) return -1;
+    else if (numB !== null) return 1;
+    else {
+      const result = cmp(idA, idB);
+      if (result !== 0) return result;
+    }
   }
   return 0;
+}
+
+function splitVersion(version: string): [number[], string[]] {
+  const withoutBuild = version.trim().replace(/^v/, "").split("+")[0];
+  const dash = withoutBuild.indexOf("-");
+  const core = (dash === -1 ? withoutBuild : withoutBuild.slice(0, dash)).split(".").map((part) => {
+    const n = Number(part);
+    return Number.isFinite(n) ? n : 0;
+  });
+  const pre = dash === -1 ? [] : withoutBuild.slice(dash + 1).split(".").filter(Boolean);
+  return [core, pre];
 }
 
 export interface UpdateCheckResult {

@@ -11,7 +11,7 @@ import { writeDeploymentConfig } from "./config.js";
 import { isOnPath } from "./hooks/install.js";
 import { getDeviceName } from "./device.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
-import { beginServerPairing, finishServerPairing, PairingError, probeServer } from "./remote/pairing.js";
+import { beginServerPairing, finishServerPairing, PairingError, probeServer } from "./remote/enrolment.js";
 
 const execFileAsync = promisify(execFile);
 

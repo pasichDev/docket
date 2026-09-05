@@ -9,23 +9,14 @@ import type { Todo, TodoStore } from "./types.js";
 const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-sync-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
-const {
-  checkPairingRateLimit,
-  confirmProof,
-  createInvite,
-  generateShortCode,
-  redeemInvite,
-  decryptSyncPayload,
-  encryptSyncPayload,
-  isSyncProtocolCompatible,
-  MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION,
-  mergeSyncPayload,
-  pairingSas,
-  signSyncRequest,
-  verifyConfirmProof,
-  verifySyncRequest,
-} = await import("./sync.js");
-import type { SyncPayload } from "./sync.js";
+const { checkPairingRateLimit, confirmProof, createInvite, redeemInvite, pairingSas, verifyConfirmProof } =
+  await import("./sync/peering.js");
+const { signSyncRequest, verifySyncRequest } = await import("./sync/auth.js");
+const { decryptSyncPayload, encryptSyncPayload, isSyncProtocolCompatible, MIN_COMPATIBLE_SYNC_PROTOCOL_VERSION } =
+  await import("./sync/payload.js");
+const { mergeSyncPayload } = await import("./sync/merge.js");
+const { generateShortCode } = await import("./short-code.js");
+import type { SyncPayload } from "./sync/payload.js";
 
 test.after(() => {
   if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;

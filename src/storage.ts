@@ -4,7 +4,7 @@ import { copyFile, readFile, rename, rm, stat, writeFile } from "node:fs/promise
 import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { withFileLock } from "./filelock.js";
-import { flushOverflowHistory } from "./history-store.js";
+import { flushOverflowHistory, pruneOrphanedHistory } from "./history-store.js";
 import { log } from "./log.js";
 import { shortId, stampSeq } from "./mutations.js";
 import type { Todo, TodoStore } from "./types.js";
@@ -334,12 +334,15 @@ export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Pr
 
         const tombstonesBefore = store.deletedUuids.length;
         const result = await fn(store);
-        // Under the same lock as the store, and before it: see flushOverflowHistory for why
-        // the order matters. `prune` is driven by the tombstone list having grown during
-        // this call — an O(1) check, so a write that deleted nothing never reads the
-        // history file at all.
-        await flushOverflowHistory(store, { prune: store.deletedUuids.length !== tombstonesBefore });
+        // Under the same lock as the store, and BEFORE it: see flushOverflowHistory for why
+        // appending has to come first.
+        await flushOverflowHistory(store);
         await saveStore(store, expected);
+        // ...and pruning has to come after, because saveStore above can still reject this
+        // whole attempt and send it round the retry loop. Gated on the tombstone list having
+        // actually grown — an O(1) check, so a write that deleted nothing never opens the
+        // history file at all.
+        if (store.deletedUuids.length !== tombstonesBefore) await pruneOrphanedHistory(store);
         return result;
       });
     } catch (err) {

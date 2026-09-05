@@ -38,7 +38,7 @@ test("resolve: .docket.json at the repo root wins over the git remote", async ()
 test("resolve: a malformed .docket.json falls through instead of failing startup", async () => {
   const dir = await makeRepo("broken-config-repo", { remote: "git@gitlab.com:acme/backend.git", config: "{not json" });
   const resolved = await resolveWorkspace(dir, {});
-  assert.equal(resolved.workspace, "acme/backend");
+  assert.equal(resolved.workspace, "gitlab.com/acme/backend");
   assert.equal(resolved.source, "git-remote");
 });
 
@@ -47,7 +47,7 @@ test("resolve: the git remote is used, and reached from a subdirectory too", asy
   const nested = join(dir, "src", "deep");
   await mkdir(nested, { recursive: true });
   const resolved = await resolveWorkspace(nested, {});
-  assert.equal(resolved.workspace, "acme/backend");
+  assert.equal(resolved.workspace, "gitlab.com/acme/backend");
   assert.equal(resolved.source, "git-remote");
   assert.equal(resolved.root, dir, "resolution anchors on the git root, not the directory it was called from");
 });
@@ -60,7 +60,7 @@ test("resolve: SSH and HTTPS clones of the same repo normalise to the same works
   const a = await resolveWorkspace(ssh, {});
   const b = await resolveWorkspace(https, {});
   assert.equal(a.workspace, b.workspace);
-  assert.equal(a.workspace, "acme/backend");
+  assert.equal(a.workspace, "gitlab.com/acme/backend");
 });
 
 test("resolve: a repo with no remote falls back to the git root's basename", async () => {
@@ -84,14 +84,19 @@ test("resolve: no cwd at all means no workspace — never a guess", async () => 
   assert.equal(resolved.source, "none");
 });
 
-test("normalizeGitRemote: keeps owner/repo across every URL shape", () => {
+test("normalizeGitRemote: keeps host/owner/repo across every URL shape", () => {
   const cases: Array<[string, string | null]> = [
-    ["git@gitlab.com:acme/backend.git", "acme/backend"],
-    ["git@github.com:Acme/Backend", "acme/backend"],
-    ["https://github.com/acme/backend.git", "acme/backend"],
-    ["https://user:token@github.com/acme/backend.git", "acme/backend"],
-    ["ssh://git@ssh.github.com:443/acme/backend.git", "acme/backend"],
-    ["https://gitlab.com/acme/group/backend.git", "group/backend"],
+    ["git@gitlab.com:acme/backend.git", "gitlab.com/acme/backend"],
+    ["git@github.com:Acme/Backend", "github.com/acme/backend"],
+    ["https://github.com/acme/backend.git", "github.com/acme/backend"],
+    ["https://user:token@github.com/acme/backend.git", "github.com/acme/backend"],
+    ["ssh://git@ssh.github.com:443/acme/backend.git", "ssh.github.com/acme/backend"],
+    ["https://gitlab.com/acme/group/backend.git", "gitlab.com/group/backend"],
+    // The whole point of carrying the host: these two are different projects.
+    ["git@gitlab.com:acme/backend.git", "gitlab.com/acme/backend"],
+    ["git@github.com:acme/backend.git", "github.com/acme/backend"],
+    // A remote with no host at all has nothing better to key on.
+    ["/srv/git/backend.git", "git/backend"],
     ["", null],
   ];
   for (const [input, expected] of cases) {
@@ -112,7 +117,7 @@ test("resolve: an empty or whitespace-only DOCKET_WORKSPACE falls through instea
   const dir = await makeRepo("env-blank", { remote: "git@gitlab.com:acme/backend.git" });
   for (const value of ["", "   ", "\t\n"]) {
     const resolved = await resolveWorkspace(dir, { DOCKET_WORKSPACE: value });
-    assert.equal(resolved.workspace, "acme/backend", `"${value}" should not have won the resolution`);
+    assert.equal(resolved.workspace, "gitlab.com/acme/backend", `"${value}" should not have won the resolution`);
     assert.equal(resolved.source, "git-remote");
   }
 });
@@ -120,19 +125,19 @@ test("resolve: an empty or whitespace-only DOCKET_WORKSPACE falls through instea
 test("resolve: an env value that slugifies to nothing falls through rather than unfiling everything", async () => {
   const dir = await makeRepo("env-junk", { remote: "git@gitlab.com:acme/backend.git" });
   const resolved = await resolveWorkspace(dir, { DOCKET_WORKSPACE: "!!!" });
-  assert.equal(resolved.workspace, "acme/backend");
+  assert.equal(resolved.workspace, "gitlab.com/acme/backend");
 });
 
 test("resolve: a .docket.json without a workspace key is ignored, not treated as null", async () => {
   const dir = await makeRepo("config-no-key", { remote: "git@gitlab.com:acme/backend.git", config: '{"somethingElse":true}' });
   const resolved = await resolveWorkspace(dir, {});
-  assert.equal(resolved.workspace, "acme/backend");
+  assert.equal(resolved.workspace, "gitlab.com/acme/backend");
   assert.equal(resolved.source, "git-remote");
 });
 
 test("resolve: a .docket.json with a non-string workspace is ignored", async () => {
   const dir = await makeRepo("config-wrong-type", { remote: "git@gitlab.com:acme/backend.git", config: '{"workspace":42}' });
-  assert.equal((await resolveWorkspace(dir, {})).workspace, "acme/backend");
+  assert.equal((await resolveWorkspace(dir, {})).workspace, "gitlab.com/acme/backend");
 });
 
 test("resolve: every URL shape of the same remote normalises to one workspace", async () => {
@@ -153,7 +158,7 @@ test("resolve: every URL shape of the same remote normalises to one workspace", 
     const dir = await makeRepo(`shape-${i}`, { remote });
     resolved.add((await resolveWorkspace(dir, {})).workspace);
   }
-  assert.deepEqual([...resolved], ["acme/backend"], `these clone URLs split into ${resolved.size} workspaces: ${[...resolved].join(", ")}`);
+  assert.deepEqual([...resolved], ["gitlab.com/acme/backend"], `these clone URLs split into ${resolved.size} workspaces: ${[...resolved].join(", ")}`);
 });
 
 test("resolve: with several remotes, origin wins; without origin, the first defined one is used", async () => {
@@ -163,12 +168,12 @@ test("resolve: with several remotes, origin wins; without origin, the first defi
     join(dir, ".git", "config"),
     '[remote "upstream"]\n\turl = git@gitlab.com:upstream/project.git\n[remote "origin"]\n\turl = git@gitlab.com:acme/backend.git\n',
   );
-  assert.equal((await resolveWorkspace(dir, {})).workspace, "acme/backend", "origin must win however late it appears");
+  assert.equal((await resolveWorkspace(dir, {})).workspace, "gitlab.com/acme/backend", "origin must win however late it appears");
 
   const noOrigin = await makeRepo("no-origin", { git: false });
   await mkdir(join(noOrigin, ".git"), { recursive: true });
   await writeFile(join(noOrigin, ".git", "config"), '[remote "fork"]\n\turl = git@gitlab.com:someone/fork.git\n');
-  assert.equal((await resolveWorkspace(noOrigin, {})).workspace, "someone/fork");
+  assert.equal((await resolveWorkspace(noOrigin, {})).workspace, "gitlab.com/someone/fork");
 });
 
 test("resolve: a worktree resolves to the same workspace as the checkout it belongs to", async () => {
@@ -183,7 +188,7 @@ test("resolve: a worktree resolves to the same workspace as the checkout it belo
   await writeFile(join(worktree, ".git"), `gitdir: ${join(main, ".git", "worktrees", "feature")}\n`);
 
   const resolved = await resolveWorkspace(worktree, {});
-  assert.equal(resolved.workspace, "acme/backend", "a worktree must not become its own workspace");
+  assert.equal(resolved.workspace, "gitlab.com/acme/backend", "a worktree must not become its own workspace");
 });
 
 test("resolve: a submodule uses its own remote, not its parent's", async () => {
@@ -195,7 +200,7 @@ test("resolve: a submodule uses its own remote, not its parent's", async () => {
   await mkdir(submodule, { recursive: true });
   await writeFile(join(submodule, ".git"), `gitdir: ${join(parent, ".git", "modules", "lib")}\n`);
 
-  assert.equal((await resolveWorkspace(submodule, {})).workspace, "acme/lib");
+  assert.equal((await resolveWorkspace(submodule, {})).workspace, "gitlab.com/acme/lib");
 });
 
 test("resolve: a .git file pointing nowhere degrades to the directory name, not a crash", async () => {

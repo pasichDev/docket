@@ -9,7 +9,8 @@ import type { TodoStore } from "./types.js";
 const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-transitive-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
-const { buildSyncPayload, mergeSyncPayload } = await import("./sync.js");
+const { buildSyncPayload } = await import("./sync/payload.js");
+const { mergeSyncPayload } = await import("./sync/merge.js");
 
 test.after(() => {
   if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;

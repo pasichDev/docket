@@ -82,3 +82,45 @@ test("checkForUpdate: combines install kind, local version, and registry version
   assert.equal(result.latestVersion, "9.9.9");
   assert.equal(result.updateAvailable, true);
 });
+
+test("compareVersions: a pre-release sorts below its own release", () => {
+  // The rule that decides whether an RC user gets offered the final build.
+  assert.equal(compareVersions("3.0.0-rc.1", "3.0.0"), -1);
+  assert.equal(compareVersions("3.0.0", "3.0.0-rc.1"), 1);
+  assert.equal(compareVersions("3.0.0-rc.1", "3.0.0-rc.1"), 0);
+});
+
+test("compareVersions: pre-release identifiers are ordered, not just detected", () => {
+  // The bug this replaces: splitting on "." and running Number() over the parts turned
+  // "0-rc" into NaN, every comparison against NaN is false, and the loop fell through to
+  // its "greater than" branch. compareVersions("3.0.0-rc.1", "3.0.0-rc.2") answered 1 —
+  // so someone on rc.2 would have been offered rc.1 as an update.
+  assert.equal(compareVersions("3.0.0-rc.1", "3.0.0-rc.2"), -1);
+  assert.equal(compareVersions("3.0.0-rc.2", "3.0.0-rc.1"), 1);
+  assert.equal(compareVersions("3.0.0-rc.9", "3.0.0-rc.10"), -1, "numeric identifiers compare numerically, not as text");
+
+  // SemVer §11 in full: numeric ranks below alphanumeric, and a longer identifier set wins
+  // when everything before it is equal.
+  assert.equal(compareVersions("1.0.0-1", "1.0.0-alpha"), -1);
+  assert.equal(compareVersions("1.0.0-alpha", "1.0.0-alpha.1"), -1);
+  assert.equal(compareVersions("1.0.0-alpha.1", "1.0.0-beta"), -1);
+  assert.equal(compareVersions("1.0.0-beta.2", "1.0.0-beta.11"), -1);
+});
+
+test("compareVersions: build metadata and a leading v are not part of precedence", () => {
+  assert.equal(compareVersions("3.0.0+build.7", "3.0.0"), 0);
+  assert.equal(compareVersions("v3.0.1", "3.0.0"), 1);
+  assert.equal(compareVersions("3.0.0-rc.1+sha.abc", "3.0.0-rc.1"), 0);
+});
+
+test("compareVersions: an update is never offered as a downgrade in either direction", () => {
+  // Property check over the whole ladder: every pair must agree with its own reverse, and
+  // the ordering must be transitive along the release train.
+  const ladder = ["2.3.1", "3.0.0-alpha.1", "3.0.0-beta.1", "3.0.0-rc.1", "3.0.0-rc.2", "3.0.0-rc.10", "3.0.0", "3.0.1"];
+  for (let i = 0; i < ladder.length; i++) {
+    for (let j = 0; j < ladder.length; j++) {
+      const expected = i === j ? 0 : i < j ? -1 : 1;
+      assert.equal(compareVersions(ladder[i], ladder[j]), expected, `${ladder[i]} vs ${ladder[j]}`);
+    }
+  }
+});

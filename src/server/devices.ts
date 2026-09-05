@@ -4,7 +4,8 @@ import { dataPath } from "../data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "../crypto.js";
 import { deriveServerAuthSecret, getDevicePublicKey } from "../device.js";
 import { withFileLock } from "../filelock.js";
-import { checkPairingRateLimit, CODE_CHARSET, generateShortCode, pairingSas } from "../sync.js";
+import { CODE_CHARSET, generateShortCode } from "../short-code.js";
+import { checkPairingRateLimit, pairingSas } from "../sync/peering.js";
 
 /**
  * Server-side half of RFC "Local and Self-Hosted Backend Modes" §13 (Pairing) — the

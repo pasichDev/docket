@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { log } from "../log.js";
-import { json } from "../web/api.js";
+import { json } from "../web/http.js";
 import { sseClients } from "./events.js";
 import { handleServeApiRoute, type ServeApiContext } from "./routes.js";
 

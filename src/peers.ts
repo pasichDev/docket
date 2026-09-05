@@ -137,7 +137,12 @@ export async function markPeerSynced(
     const peer = peers.find((p) => p.id === id);
     if (!peer) return;
     if (ok && details.cursor) peer.lastSyncAt = details.cursor;
-    if (ok && details.lastSeq !== undefined) peer.lastSeq = details.lastSeq;
+    // Not gated on `ok`, unlike the rest. lastSeq records what actually MERGED, which is a
+    // fact about this store and not about whether the tick finished: a pull that merged four
+    // pages and then lost the connection has still merged four pages. Discarding that credit
+    // made the next tick re-fetch and re-merge them, so a peer that fails late every time
+    // would re-do the same work forever and never converge.
+    if (details.lastSeq !== undefined) peer.lastSeq = details.lastSeq;
     if (ok && details.epoch !== undefined) peer.epoch = details.epoch;
     peer.lastSyncOk = ok;
     peer.lastError = details.error ?? (ok ? null : "unknown error");

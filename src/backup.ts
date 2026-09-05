@@ -11,6 +11,8 @@ import { resetStoreEpoch } from "./storage.js";
 // as sensitive as the live data directory either way, and re-encrypting a copy would be
 // pure extra risk (a second place a bug could leak plaintext) for no benefit.
 const BACKUP_FILES = ["device.json", "key", "todos.json.enc", "history.json.enc", "peers.json.enc", "viewers.json.enc"];
+/** Files whose contents only make sense alongside the store they were captured with. */
+const STORE_COUPLED_FILES = ["history.json.enc"];
 const MAGIC = "docket-backup-v1";
 // RFC 7914's own "interactive login" recommendation (N=2^14, r=8, p=1) — strong enough to
 // meaningfully slow down offline password guessing against a stolen backup file, while
@@ -118,6 +120,26 @@ export async function restoreBackup(buf: Buffer, password: string): Promise<{ re
     await writeFile(tmpPath, Buffer.from(base64, "base64"), { mode: 0o600 });
     await rename(tmpPath, targetPath);
     restoredFiles.push(name);
+  }
+
+  // A backup that carries no history side file must not leave the CURRENT one in place.
+  // history.json.enc is keyed by todo uuid and is a continuation of each item's inline
+  // history, so pairing a restored (older) store with a newer sidecar produces an audit log
+  // describing edits the store does not contain, attached to items that may not exist.
+  //
+  // Only this file. peers.json.enc and viewers.json.enc are independent state — which
+  // devices you have paired is not a property of the todo list — and sweeping them aside
+  // because a backup happened to predate them would silently unpair every device. Likewise
+  // `key`: a backup without one cannot have carried a readable store anyway, and moving the
+  // live key aside would make the data directory unreadable rather than restored.
+  for (const name of STORE_COUPLED_FILES) {
+    if (restoredFiles.includes(name)) continue;
+    const stalePath = join(dir, name);
+    try {
+      await rename(stalePath, `${stalePath}.pre-restore-${restoreStamp}.bak`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
   }
   // The restored store is a different incarnation from the one paired devices were reading:
   // its sequence counter has gone backwards, so every cursor they hold points past records

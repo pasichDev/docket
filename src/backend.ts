@@ -3,7 +3,7 @@ import { assertSecureRemoteUrl, writeDeploymentConfig } from "./config.js";
 import { createLineReader, type LineReader } from "./cli-prompt.js";
 import { dataPath, getDataDirectory } from "./data-dir.js";
 import { getDeviceId, getDeviceName } from "./device.js";
-import { beginServerPairing, finishServerPairing, PairingError } from "./remote/pairing.js";
+import { beginServerPairing, finishServerPairing, PairingError } from "./remote/enrolment.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } from "./remote/client.js";
 import { LocalTodoRepository, type MutationContext, type TodoRepository } from "./repository.js";

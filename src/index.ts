@@ -105,6 +105,15 @@ function getMcpTodoService(): Promise<TodoService> {
  * running instead of double-spawning.
  */
 async function ensureWebUiRunning(): Promise<void> {
+  // Port 0 means "any free port", which the probe below can never find again: every MCP
+  // session would fail to detect the dashboard it started last time and spawn another
+  // detached one, forever. Nineteen orphans accumulated on one machine before this was
+  // noticed, because each is silent and unref'd. Any value that is not a real port has the
+  // same problem, so auto-start requires a fixed, knowable one.
+  if (!Number.isInteger(WEB_PORT) || WEB_PORT < 1 || WEB_PORT > 65535) {
+    log(`skipping web UI auto-start: DOCKET_WEB_PORT=${process.env.DOCKET_WEB_PORT} is not a fixed port to find it on again`);
+    return;
+  }
   try {
     const res = await fetch(`http://127.0.0.1:${WEB_PORT}/api/version`, {
       signal: AbortSignal.timeout(800),

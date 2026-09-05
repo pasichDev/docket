@@ -51,6 +51,12 @@ test("smoke: GET / serves the dashboard, with the workspace switcher in it", asy
   assert.match(body, /class="open-list"/);
   assert.match(body, /renderWorkspaceSwitcher/, "the switcher's script never made it into the page");
   assert.ok(body.length > 20_000, `page looks truncated (${body.length} bytes)`);
+
+  // A NUL in served markup is not inert: an HTML parser rewrites it to U+FFFD, so any value
+  // carrying one reads back different from what was written. That is exactly how the
+  // "Unfiled" project filter silently stopped matching anything — its sentinel was a NUL,
+  // and the control ended up holding a value no item could equal.
+  assert.doesNotMatch(body, /\u0000/, "a NUL byte reached the served page");
 });
 
 test("smoke: the endpoints the hook and the dashboard poll all return valid JSON", async () => {

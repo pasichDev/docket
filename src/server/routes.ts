@@ -12,7 +12,7 @@ import {
 import { CURRENT_FORMAT_VERSION } from "../storage.js";
 import { todoService } from "../todo-service.js";
 import type { Todo } from "../types.js";
-import { checkPairingRateLimit } from "../sync.js";
+import { checkPairingRateLimit } from "../sync/peering.js";
 import {
   isDate,
   isPriority,
@@ -24,7 +24,7 @@ import {
   readRawBody,
   SECURITY_HEADERS,
   textOrNull,
-} from "../web/api.js";
+} from "../web/http.js";
 import { checkDeviceAuth } from "./auth.js";
 import {
   approvePairingRequest,

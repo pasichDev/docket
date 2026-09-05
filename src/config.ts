@@ -32,6 +32,15 @@ export interface DeploymentConfig {
   source: "cli" | "env" | "config" | "default";
 }
 
+/**
+ * A deployment that cannot be resolved into something safe to run: "remote" mode with no
+ * server URL, a malformed URL, or a plaintext http:// server without the explicit
+ * allow-insecure opt-in.
+ *
+ * Always fatal at startup, never recoverable at runtime, and deliberately so — the
+ * alternative to failing here is silently falling back to local storage while the operator
+ * believes their data is going to a server.
+ */
 export class DeploymentConfigError extends Error {
   constructor(message: string) {
     super(message);

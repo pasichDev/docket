@@ -8,7 +8,8 @@ const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-convergence-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
 const { applyEdits, createTodo, tombstoneDelete } = await import("./mutations.js");
-const { buildSyncPayload, mergeSyncPayload } = await import("./sync.js");
+const { buildSyncPayload } = await import("./sync/payload.js");
+const { mergeSyncPayload } = await import("./sync/merge.js");
 import type { Todo, TodoStore } from "./types.js";
 
 test.after(() => {

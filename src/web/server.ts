@@ -4,11 +4,13 @@ import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { getDeviceId, getDeviceName, getDeviceRole } from "../device.js";
 import { installProcessLogging, log } from "../log.js";
-import { removePeer } from "../peers.js";
+import { loadPeers, removePeer } from "../peers.js";
 import { migrateLegacyFields, withStore } from "../storage.js";
-import { syncAllPeers } from "../sync.js";
+import { syncAllPeers } from "../sync/client.js";
 import { loadViewers, touchViewer } from "../viewers.js";
-import { BadRequestError, handleApiRoute, json, removePeerAndMaybeRevertRole, SECURITY_HEADERS, type ApiContext } from "./api.js";
+import { handleApiRoute } from "./api.js";
+import { BadRequestError, json, SECURITY_HEADERS, type ApiContext } from "./http.js";
+import { removePeerAndMaybeRevertRole } from "./peer-admin.js";
 import { GATE_PAGE, PAGE } from "./views.js";
 
 installProcessLogging("web");
@@ -134,8 +136,8 @@ export async function isAuthorizedBrowser(req: IncomingMessage): Promise<boolean
 
 export const sseClients = new Set<ServerResponse>();
 
-export function broadcastUpdate(): void {
-  const payload = `event: update\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n`;
+function broadcastEvent(name: string, data: Record<string, unknown>): void {
+  const payload = `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) {
     try {
       client.write(payload);
@@ -143,6 +145,20 @@ export function broadcastUpdate(): void {
       sseClients.delete(client);
     }
   }
+}
+
+export function broadcastUpdate(): void {
+  broadcastEvent("update", { timestamp: Date.now() });
+}
+
+/**
+ * Device sync runs on this process's own interval, so the browser has no way to know one is
+ * happening — it would otherwise show a static "synced 4m ago" throughout. Announcing the
+ * start and the end is what lets the header show a real spinner instead of a guess made
+ * from the dashboard's own polling, which is a different thing entirely.
+ */
+export function broadcastSync(phase: "start" | "end", detail: Record<string, unknown> = {}): void {
+  broadcastEvent("sync", { phase, ...detail });
 }
 
 const BROWSER_PROTECTED_PATHS = [
@@ -256,13 +272,21 @@ export async function startWebServer(port: number = PORT): Promise<Server> {
   });
 
   // Pull-based gossip sync with paired devices
-  setInterval(() => {
-    syncAllPeers(DEVICE_ID, withStore)
-      .then((unpairedIds) => {
-        broadcastUpdate();
-        return Promise.all(unpairedIds.map((id) => removePeer(id)));
-      })
-      .catch((err) => log(`sync loop error: ${(err as Error).message}`));
+  setInterval(async () => {
+    // No peers means nothing to sync, and announcing a "sync" that talks to nobody would
+    // spin the header on a single-device install every few seconds for no reason.
+    const peerCount = await loadPeers().then((p) => p.filter((peer) => !peer.revoked).length).catch(() => 0);
+    if (peerCount === 0) return;
+    broadcastSync("start", { peers: peerCount });
+    try {
+      const unpairedIds = await syncAllPeers(DEVICE_ID, withStore);
+      broadcastUpdate();
+      await Promise.all(unpairedIds.map((id) => removePeer(id)));
+      broadcastSync("end", { ok: true });
+    } catch (err) {
+      log(`sync loop error: ${(err as Error).message}`);
+      broadcastSync("end", { ok: false });
+    }
   }, SYNC_INTERVAL_MS);
 
   // Graceful shutdown handlers

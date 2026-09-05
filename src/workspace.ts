@@ -51,20 +51,34 @@ export function normalizeGitRemote(url: string): string | null {
   if (!trimmed) return null;
 
   // scp-style `[user@]host:path`, which is not a URL and never parses as one.
-  const scp = /^[^/\s]+@[^/:\s]+:(.+)$/.exec(trimmed);
+  const scp = /^[^/\s]+@([^/:\s]+):(.+)$/.exec(trimmed);
   let path: string;
+  let host: string | null = null;
   if (scp) {
-    path = scp[1];
+    host = scp[1];
+    path = scp[2];
   } else {
     try {
-      path = new URL(trimmed).pathname;
+      const parsed = new URL(trimmed);
+      host = parsed.hostname || null;
+      path = parsed.pathname;
     } catch {
       path = trimmed;
     }
   }
   const segments = path.split("/").filter(Boolean);
   if (segments.length === 0) return null;
-  return slugifyWorkspace(segments.slice(-2).join("/"));
+  /*
+   * The host is part of the identity, not decoration. "owner/repo" alone collides the
+   * moment two forges share a namespace — a GitLab group and a GitHub org with the same
+   * name, a self-hosted mirror of a public repo, a fork on a company server — and the
+   * failure mode is two unrelated projects quietly sharing one list.
+   *
+   * A remote with no host at all (a plain local path) keeps the last two segments, because
+   * there is nothing better to key on.
+   */
+  const parts = host ? [host, ...segments.slice(-2)] : segments.slice(-2);
+  return slugifyWorkspace(parts.join("/"));
 }
 
 async function isDirectory(path: string): Promise<boolean> {

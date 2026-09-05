@@ -11,7 +11,7 @@ const { HISTORY_FLUSH_THRESHOLD, HISTORY_INLINE_MAX } = await import("./history.
 const { fullHistoryFor, readHistoryLog } = await import("./history-store.js");
 const { LocalTodoRepository } = await import("./repository.js");
 const { withStore } = await import("./storage.js");
-const { mergeSyncPayload } = await import("./sync.js");
+const { mergeSyncPayload } = await import("./sync/merge.js");
 
 const repo = new LocalTodoRepository();
 const context = { agent: "test", session: "s1", deviceId: "d1", deviceName: "Dev" };

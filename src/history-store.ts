@@ -70,29 +70,14 @@ async function writeHistoryLog(logData: HistoryLog): Promise<void> {
  *
  * Either way history can lag the store by one write; docs/security.md §5 says so out loud.
  */
-export async function flushOverflowHistory(store: TodoStore, options: { prune: boolean }): Promise<void> {
+export async function flushOverflowHistory(store: TodoStore): Promise<void> {
   const overflowing = store.todos.filter((t) => (t.history?.length ?? 0) > HISTORY_FLUSH_THRESHOLD);
-  if (overflowing.length === 0 && !options.prune) return; // the common case: no file touched, nothing allocated
-
-  // Prune is keyed on tombstoned uuids that are ACTUALLY gone. A tombstone can coexist with
-  // a live item — a deletion that lost to a newer edit leaves both behind (see
-  // mergeSyncPayload) — and pruning on the tombstone alone would wipe the audit log of an
-  // item still sitting in the list. Built only when a deletion actually happened, since
-  // this runs inside the store lock on every write.
-  let orphaned: string[] = [];
-  if (options.prune) {
-    const live = new Set(store.todos.map((t) => t.uuid));
-    orphaned = store.deletedUuids.filter((t) => !live.has(t.uuid)).map((t) => t.uuid);
-  }
-  if (overflowing.length === 0 && orphaned.length === 0) return;
+  if (overflowing.length === 0) return; // the common case: no file touched, nothing allocated
 
   const { entries: logData, readable } = await readHistoryLog();
   if (!readable) return;
 
   for (const todo of overflowing) logData[todo.uuid] = dedupeHistory([...(logData[todo.uuid] ?? []), ...todo.history]);
-  // An item's audit log outliving the item would keep describing work the user asked us to
-  // forget.
-  for (const uuid of orphaned) delete logData[uuid];
 
   try {
     await writeHistoryLog(logData);
@@ -101,6 +86,48 @@ export async function flushOverflowHistory(store: TodoStore, options: { prune: b
     return; // nothing trimmed, so nothing lost; the next write tries again
   }
   for (const todo of overflowing) todo.history = todo.history.slice(-HISTORY_INLINE_MAX);
+}
+
+/**
+ * Drops the side-file history of items that are gone for good. Runs AFTER the store commit,
+ * unlike the flush above, and the asymmetry is the point:
+ *
+ *  - appending is idempotent, so doing it before the commit costs at worst some duplicate
+ *    entries that the next flush's dedupe absorbs — which is what buys the crash-safety
+ *    ordering described above;
+ *  - deleting is not. withStore's write is optimistic and retries when another process got
+ *    there first, so a prune done before the commit could delete the audit log of an item
+ *    that the winning write had kept alive — a deletion that lost to a newer edit leaves
+ *    both tombstone and item behind (see mergeSyncPayload). Nothing brings that log back.
+ *
+ * The cost of the later position is that a crash between the commit and this leaves an
+ * orphaned log entry behind. The next delete's prune collects it.
+ */
+export async function pruneOrphanedHistory(store: TodoStore): Promise<void> {
+  // Keyed on tombstoned uuids that are ACTUALLY gone, never on the tombstone alone.
+  const live = new Set(store.todos.map((t) => t.uuid));
+  const orphaned = store.deletedUuids.filter((t) => !live.has(t.uuid)).map((t) => t.uuid);
+  if (orphaned.length === 0) return;
+
+  const { entries: logData, readable } = await readHistoryLog();
+  if (!readable) return;
+
+  let removed = false;
+  // An item's audit log outliving the item would keep describing work the user asked us to
+  // forget.
+  for (const uuid of orphaned) {
+    if (uuid in logData) {
+      delete logData[uuid];
+      removed = true;
+    }
+  }
+  if (!removed) return;
+
+  try {
+    await writeHistoryLog(logData);
+  } catch (err) {
+    log(`history: could not prune ${HISTORY_PATH} (${(err as Error).message}) — retrying on the next delete`);
+  }
 }
 
 /**

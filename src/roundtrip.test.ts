@@ -11,8 +11,8 @@ const { decryptFromBuffer, decryptWithKey, encryptToBuffer, encryptWithKey } = a
 const { applyEdits, claimTodo, createTodo, tombstoneDelete } = await import("./mutations.js");
 const { exportToJson, exportToMarkdown, importFromJson, importFromMarkdown } = await import("./export.js");
 const { readStore, withStore } = await import("./storage.js");
-const { mergeSyncPayload } = await import("./sync.js");
-import type { SyncPayload } from "./sync.js";
+const { mergeSyncPayload } = await import("./sync/merge.js");
+import type { SyncPayload } from "./sync/payload.js";
 import type { TodoStore } from "./types.js";
 
 test.after(() => {

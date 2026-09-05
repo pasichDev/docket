@@ -12,7 +12,9 @@ import type { TodoStore } from "./types.js";
 const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-pagination-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
-const { buildSyncPayload, encryptSyncPayload, MAX_PAGES_PER_TICK, PAGE_SIZE, pullFromPeer, verifySyncRequest } = await import("./sync.js");
+const { buildSyncPayload, encryptSyncPayload, PAGE_SIZE } = await import("./sync/payload.js");
+const { MAX_PAGES_PER_TICK, pullFromPeer } = await import("./sync/client.js");
+const { verifySyncRequest } = await import("./sync/auth.js");
 const { addPeer, loadPeers } = await import("./peers.js");
 
 const SECRET = randomBytes(32).toString("hex");
@@ -33,7 +35,7 @@ function emptyStore(): TodoStore {
  * instead would let the test pass while the client and server disagreed about the wire
  * format — which is precisely the seam the silent-truncation bug lived in.
  */
-async function startPeer(store: TodoStore, seen: number[]): Promise<{ server: Server; url: string }> {
+async function startPeer(store: TodoStore, seen: number[], epoch?: string): Promise<{ server: Server; url: string }> {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const sinceSeq = url.searchParams.get("sinceSeq") ?? "";
@@ -46,7 +48,7 @@ async function startPeer(store: TodoStore, seen: number[]): Promise<{ server: Se
       return;
     }
     seen.push(Number(sinceSeq));
-    const payload = buildSyncPayload(store, Number(sinceSeq));
+    const payload = buildSyncPayload(store, Number(sinceSeq), epoch);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(encryptSyncPayload(SECRET, payload)));
   });
@@ -350,6 +352,59 @@ test("pullFromPeer: a known-v2 peer that rejects us is not mistaken for a v1 pee
     const after = (await loadPeers()).find((p) => p.id === "peer-v2-broken")!;
     assert.equal(after.lastSyncOk, false);
     assert.doesNotMatch(after.lastError ?? "", /protocol v1/, "reporting 'update that peer' would send the user after the wrong problem");
+  } finally {
+    server.close();
+  }
+});
+
+test("pullFromPeer: a peer that restored a backup is caught up in ONE tick, not ping-ponged", async () => {
+  /*
+   * Found by running two real servers against each other, not by reading the code.
+   *
+   * When a peer's store epoch changes, the cursor this device holds is meaningless and has
+   * to go back to zero. That worked — once. The check compared against `peer.epoch`, the
+   * value read off disk when the tick began, which nothing updated as the tick ran: so the
+   * SECOND page, fetched with a non-zero cursor, looked like another fresh restore and reset
+   * the cursor to zero again. The tick ping-ponged 0 -> PAGE_SIZE -> 0 until it exhausted
+   * MAX_PAGES_PER_TICK, and a peer with more than one page of data needed an extra tick —
+   * 15 seconds — to deliver anything above the first page.
+   */
+  const remote = emptyStore();
+  const TOTAL = PAGE_SIZE * 2 + 40; // three pages, so a single reset is not enough to hide it
+  for (let i = 0; i < TOTAL; i++) {
+    createTodo(remote, { title: `restored ${i}`, agent: null, session: null }, "device-remote", "Remote");
+  }
+
+  const requested: number[] = [];
+  const { server, url } = await startPeer(remote, requested, "epoch-after-the-restore");
+  try {
+    await addPeer({
+      id: "peer-epoch",
+      name: "Remote",
+      url,
+      secret: SECRET,
+      pairedAt: new Date().toISOString(),
+      lastSyncAt: null,
+      lastSyncOk: false,
+      // Caught up against the PREVIOUS incarnation of that store.
+      lastSeq: 99_999,
+      epoch: "epoch-before-the-restore",
+    });
+    const local = emptyStore();
+    const peer = (await loadPeers()).find((p) => p.id === "peer-epoch")!;
+    await pullFromPeer(peer, "device-local", async (fn) => fn(local));
+
+    assert.equal(local.todos.length, TOTAL, "one tick must deliver the whole restored store");
+    const zeroRequests = requested.filter((c) => c === 0).length;
+    assert.equal(zeroRequests, 1, `the cursor should be reset exactly once, was reset ${zeroRequests} times`);
+    assert.ok(
+      requested.length <= Math.ceil(TOTAL / PAGE_SIZE) + 1,
+      `expected about ${Math.ceil(TOTAL / PAGE_SIZE)} requests, made ${requested.length}: ${requested.join(", ")}`,
+    );
+
+    const after = (await loadPeers()).find((p) => p.id === "peer-epoch")!;
+    assert.equal(after.lastSeq, remote.seqCounter, "the cursor must end on the restored store's high-water mark");
+    assert.equal(after.epoch, "epoch-after-the-restore", "the new epoch must be remembered, or the next tick resets all over again");
   } finally {
     server.close();
   }

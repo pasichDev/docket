@@ -9,8 +9,10 @@ import type { Todo, TodoStore } from "./types.js";
 const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-hostile-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
-const { buildLegacySyncPayload, buildSyncPayload, MAX_INCOMING_ITEMS, mergeSyncPayload } = await import("./sync.js");
-import type { SyncPayload } from "./sync.js";
+const { buildLegacySyncPayload, buildSyncPayload, cursorAfterPage, InvalidSyncEnvelopeError, MAX_INCOMING_ITEMS } =
+  await import("./sync/payload.js");
+const { mergeSyncPayload } = await import("./sync/merge.js");
+import type { SyncPayload } from "./sync/payload.js";
 
 test.after(() => {
   if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;
@@ -325,4 +327,110 @@ test("hostile: a field tie between two copies with the SAME device id still reso
   mergeHostile(storeB, [structuredClone(left)]);
 
   assert.equal(storeA.todos[0].title, storeB.todos[0].title, "the two devices resolved the same tie differently — they will never converge");
+});
+
+/* ===========================================================================================
+ * The envelope
+ *
+ * Everything above defends the RECORDS. These defend the cursor, which is the more dangerous
+ * half: a bad record is visible in the list, while a bad cursor is an absence — the range it
+ * skipped is simply never requested again, and nothing anywhere reports it.
+ * =========================================================================================== */
+
+test("a peer's maxSeq must be a sequence number before it can move the cursor", () => {
+  for (const bogus of [undefined, null, -1, 1.5, NaN, Infinity, "42", {}, [], Number.MAX_SAFE_INTEGER + 2]) {
+    assert.throws(
+      () => cursorAfterPage({ ...payload([]), maxSeq: bogus } as unknown as SyncPayload, 10),
+      InvalidSyncEnvelopeError,
+      `maxSeq ${JSON.stringify(bogus)} was accepted`,
+    );
+  }
+});
+
+test("a page cannot promise delivery beyond the highest record it actually carried", () => {
+  // The failure this prevents: a peer claims it has delivered everything up to 9999, this
+  // device believes it, and every record between the page's real end and 9999 is never
+  // asked for again. Silent, permanent, and invisible from both ends.
+  const carried = [wireTodo({ localSeq: 4 }), wireTodo({ localSeq: 7 })];
+  const inflated = { ...payload(carried), maxSeq: 9999 } as unknown as SyncPayload;
+  assert.equal(cursorAfterPage(inflated, 0), 7, "the cursor advanced past what the page delivered");
+
+  // A tombstone counts as a delivered record too.
+  const withTomb = { ...payload([], [{ uuid: "u", deletedAt: "2026-01-01T00:00:00.000Z", localSeq: 12 }]), maxSeq: 500 } as unknown as SyncPayload;
+  assert.equal(cursorAfterPage(withTomb, 0), 12);
+});
+
+test("an honest peer's conservative maxSeq is never inflated by the clamp", () => {
+  // buildSyncPayload deliberately reports the MIN ceiling of the two streams, which can sit
+  // below the highest record in the page. The clamp must not undo that caution.
+  const store = emptyStore();
+  for (let i = 0; i < 3; i++) createTodo(store, { title: `t${i}`, agent: null, session: null }, "d", "D");
+  const built = buildSyncPayload(store, 0);
+  assert.equal(cursorAfterPage(built, 0), built.maxSeq, "the clamp moved an honest peer's cursor");
+});
+
+test("an empty page is taken at its word, and the cursor never moves backwards", () => {
+  // Nothing to check an empty page against — a peer that can withhold records can always
+  // withhold them, so this is not a hole the client can close.
+  assert.equal(cursorAfterPage({ ...payload([]), maxSeq: 40 } as unknown as SyncPayload, 10), 40);
+  // Backwards would pin this device on one range forever, re-requesting it every tick.
+  assert.equal(cursorAfterPage({ ...payload([]), maxSeq: 3 } as unknown as SyncPayload, 10), 10);
+});
+
+/* ---- timestamps ------------------------------------------------------------------------ */
+
+test("a record with an unparseable updatedAt is refused rather than stored", () => {
+  const store = emptyStore();
+  for (const bad of ["not-a-date", "", "2026-13-45T99:99:99Z", "yesterday", "1788555937712"]) {
+    const before = store.todos.length;
+    mergeHostile(store, [wireTodo({ uuid: `u-${bad}`, updatedAt: bad })]);
+    assert.equal(store.todos.length, before, `updatedAt ${JSON.stringify(bad)} was accepted into the store`);
+  }
+  // createdAt is held to the same standard, for the same reason.
+  mergeHostile(store, [wireTodo({ uuid: "u-created", createdAt: "whenever" })]);
+  assert.equal(store.todos.length, 0);
+});
+
+test("a stored record from a peer can always survive the arithmetic a local edit does to it", async () => {
+  // This is the actual crash the rule above prevents. mutations.ts steps a timestamp forward
+  // with `new Date(Date.parse(updatedAt) + 1).toISOString()` whenever the wall clock has not
+  // moved past it — and Date.parse of garbage is NaN, which makes toISOString throw
+  // RangeError on an ordinary edit, long after the sync that accepted the value.
+  const { applyEdits, tombstoneDelete: del } = await import("./mutations.js");
+  const store = emptyStore();
+  mergeHostile(store, [wireTodo({ uuid: "u-ok", updatedAt: "2099-01-01T00:00:00.000Z" })]);
+  const item = store.todos[0];
+  assert.ok(item, "the well-formed record should have been accepted");
+
+  // Its updatedAt is in the future, so the clamp branch — the one that does the arithmetic —
+  // is the branch taken.
+  assert.doesNotThrow(() => applyEdits(store, item, { title: "edited locally" }, "agent", "device-a", "A"));
+  assert.doesNotThrow(() => del(store, item, "device-a"));
+});
+
+test("per-field timestamps that cannot be parsed are dropped, not stored", () => {
+  const store = emptyStore();
+  mergeHostile(store, [
+    wireTodo({
+      uuid: "u-fts",
+      fieldTimestamps: { title: "2026-01-01T00:00:00.000Z", description: "not-a-date", category: 12345 },
+    }),
+  ]);
+  const stored = store.todos[0];
+  assert.ok(stored);
+  assert.equal(stored.fieldTimestamps?.title, "2026-01-01T00:00:00.000Z", "a valid entry was dropped");
+  assert.equal(stored.fieldTimestamps?.description, undefined, "an unparseable entry was kept");
+  assert.equal(stored.fieldTimestamps?.category, undefined, "a non-string entry was kept");
+});
+
+test("optional timestamps degrade to null instead of poisoning the record", () => {
+  const store = emptyStore();
+  mergeHostile(store, [
+    wireTodo({ uuid: "u-opt", completedAt: "soon", workingSince: "now-ish", workingLeaseExpiresAt: "never" }),
+  ]);
+  const stored = store.todos[0];
+  assert.ok(stored, "the record itself is fine — only these fields were unusable");
+  assert.equal(stored.completedAt, null);
+  assert.equal(stored.workingSince, null);
+  assert.equal(stored.workingLeaseExpiresAt, null);
 });

@@ -8,8 +8,8 @@ const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-seq-invariant-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
 const mutations = await import("./mutations.js");
-const { mergeSyncPayload } = await import("./sync.js");
-import type { SyncPayload } from "./sync.js";
+const { mergeSyncPayload } = await import("./sync/merge.js");
+import type { SyncPayload } from "./sync/payload.js";
 import type { Todo, TodoStore } from "./types.js";
 
 test.after(() => {

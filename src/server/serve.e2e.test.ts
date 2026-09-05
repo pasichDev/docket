@@ -25,7 +25,7 @@ const clientDataDir = await mkdtemp(join(tmpdir(), "docket-serve-e2e-client-"));
 process.env.DOCKET_DATA_DIR = clientDataDir;
 
 const { getDeviceId, getDeviceName, getDevicePublicKey, deriveServerAuthSecret } = await import("../device.js");
-const { pairingSas } = await import("../sync.js");
+const { pairingSas } = await import("../sync/peering.js");
 const { RemoteTodoRepository } = await import("../remote/client.js");
 const { TodoClaimConflictError } = await import("../repository.js");
 
