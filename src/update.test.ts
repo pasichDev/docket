@@ -142,7 +142,19 @@ test("checkForUpdate: a pre-release build follows the channel it was published t
       return new Response(JSON.stringify({ version, dist: { shasum: "x", tarball: "t" } }), { status: 200 });
     }) as unknown as typeof fetch;
 
-  const here = new URL("../package.json", import.meta.url).pathname;
+  /*
+   * A package.json this test owns, rather than the repository's own.
+   *
+   * It used to point at the shipping one, which made the assertions depend on whatever
+   * version the repo happened to be at: the moment 3.0.0-rc.2 was promoted to 3.0.0 the
+   * "current build" stopped being a pre-release and the test failed, having found nothing
+   * wrong. What is under test is the behaviour for a build on the `next` channel, so the
+   * test has to be the one deciding that it is on it.
+   */
+  const scratch = await mkdtemp(join(tmpdir(), "docket-update-channel-"));
+  await writeFile(join(scratch, "package.json"), JSON.stringify({ name: "@pasichdev/docket", version: "3.0.0-rc.1" }));
+  const here = join(scratch, "dist", "index.js");
+
   const rc = await checkForUpdate(here, registry({ latest: "2.3.1", next: "3.0.0-rc.2" }));
   assert.ok(asked.includes("next"), "a pre-release build never asked about the next channel");
   assert.equal(rc.latestVersion, "3.0.0-rc.2", `saw ${rc.latestVersion} instead of the newer RC`);

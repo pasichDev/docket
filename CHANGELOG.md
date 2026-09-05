@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.0
+
+Stable. Behaviourally identical to 3.0.0-rc.2 — the only difference is the
+version string — and promoted to the `latest` dist-tag, so `npm install` and an
+unpinned `npx` now get 3.x.
+
+**If you are coming from 2.x, read "Breaking / migration" further down before
+upgrading.** The store format changes on first write, a copy of the old one is
+kept beside it, and `docket restore --from-v7` puts it back.
+
+Everything under the three headings below is part of this release. They are kept
+apart because that is the order the work actually happened in.
+
 ## 3.0.0-rc.2
 
 Two review passes and a full release-readiness audit. The audit's verdict on the

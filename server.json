@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.pasichDev/docket",
-  "description": "One list every AI tool you use can write to \u2014 scoped per project, local-first, self-hostable.",
+  "description": "One list every AI tool you use can write to — scoped per project, local-first, self-hostable.",
   "repository": {
     "url": "https://github.com/pasichDev/docket",
     "source": "github"
   },
-  "version": "3.0.0-rc.2",
+  "version": "3.0.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@pasichdev/docket",
-      "version": "3.0.0-rc.2",
+      "version": "3.0.0",
       "transport": {
         "type": "stdio"
       }
