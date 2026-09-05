@@ -50,12 +50,12 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc && tsc -p tsconfig.client.json && tsc -p tsconfig.client-test.json",
     "start": "node dist/index.js",
     "web": "node dist/web.js",
     "stats": "node dist/stats.js",
     "dev": "tsc --watch",
-    "test": "npm run build && DOCKET_DATA_DIR=\"${DOCKET_TEST_DATA_DIR:-$(mktemp -d)}\" node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js dist/hooks/*.test.js",
+    "test": "npm run build && DOCKET_DATA_DIR=\"${DOCKET_TEST_DATA_DIR:-$(mktemp -d)}\" node --test dist/*.test.js dist/web/*.test.js dist/web/client/app/*.test.js dist/server/*.test.js dist/remote/*.test.js dist/hooks/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

@@ -11,6 +11,7 @@ import { loadViewers, touchViewer } from "../viewers.js";
 import { handleApiRoute } from "./api.js";
 import { BadRequestError, json, SECURITY_HEADERS, type ApiContext } from "./http.js";
 import { removePeerAndMaybeRevertRole } from "./peer-admin.js";
+import { isClientAssetPath, serveClientAsset } from "./client-assets.js";
 import { GATE_PAGE, PAGE } from "./views.js";
 
 installProcessLogging("web");
@@ -231,6 +232,14 @@ export async function createWebServer(): Promise<Server> {
         }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...SECURITY_HEADERS });
         res.end(GATE_PAGE);
+        return;
+      }
+
+      // The dashboard's own modules. Ahead of the authorization guard on purpose: this is the
+      // page's script, the page itself is already served to an unauthorized browser as the
+      // access gate, and the modules contain no data — only code that would then ask for it.
+      if (isClientAssetPath(url.pathname)) {
+        await serveClientAsset(url.pathname, res, SECURITY_HEADERS);
         return;
       }
 

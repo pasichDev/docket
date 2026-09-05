@@ -49,8 +49,22 @@ test("smoke: GET / serves the dashboard, with the workspace switcher in it", asy
   // yields a shorter body that still returns 200.
   assert.match(body, /class="workspaces"/, "the workspace switcher container is missing from the page");
   assert.match(body, /class="open-list"/);
-  assert.match(body, /renderWorkspaceSwitcher/, "the switcher's script never made it into the page");
-  assert.ok(body.length > 20_000, `page looks truncated (${body.length} bytes)`);
+  // The client is real modules now, loaded rather than inlined — so the anchor is the tag
+  // that loads it, and a separate check that the module is actually served.
+  assert.match(body, /<script type="module" src="\/client\/main\.js"><\/script>/, "the page does not load its client");
+  assert.ok(body.length > 15_000, `page looks truncated (${body.length} bytes)`);
+
+  const mainJs = await fetch(`${base}/client/main.js`);
+  assert.equal(mainJs.status, 200, "the client's entry module is not being served");
+  assert.match(mainJs.headers.get("content-type") ?? "", /javascript/, "the client module is served with the wrong type");
+  const source = await mainJs.text();
+  assert.match(source, /import .* from "\.\/list\.js"/, "main.js does not look like the compiled client");
+
+  // The one thing this route must never do.
+  for (const escape of ["/client/../server.js", "/client/..%2Fserver.js", "/client/sub/dir.js", "/client/Main.js"]) {
+    const res = await fetch(`${base}${escape}`);
+    assert.equal(res.status, 404, `${escape} was served instead of refused`);
+  }
 
   // A NUL in served markup is not inert: an HTML parser rewrites it to U+FFFD, so any value
   // carrying one reads back different from what was written. That is exactly how the

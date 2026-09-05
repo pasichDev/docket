@@ -1,31 +1,20 @@
 import { MARKUP } from "./client/markup.js";
-import { CARDS } from "./client/script/cards.js";
-import { DEVICES } from "./client/script/devices.js";
-import { LIST } from "./client/script/list.js";
-import { MARKDOWN } from "./client/script/markdown.js";
-import { MODALS } from "./client/script/modals.js";
-import { UTIL } from "./client/script/util.js";
 import { STYLES } from "./client/styles.js";
 
 /**
- * The dashboard, assembled.
+ * The dashboard's HTML shell.
  *
- * This was one 2,588-line template literal — the largest module in the project and the only
- * one no tool could see into, which is exactly where the bugs came from: a backtick in a
- * comment closing the string (four times in one sitting), bare `ul`/`li` selectors written
- * for the card list silently restyling the lists inside rendered markdown, a min-height lost
- * to an equal-specificity rule sixty lines further down.
+ * This file was 2,588 lines: one template literal holding the CSS, the markup AND the whole
+ * client, which no compiler could see into. That is where the bugs came from — a backtick in
+ * a comment closing the string (four separate times), bare `ul`/`li` selectors silently
+ * restyling the lists inside rendered markdown, a min-height lost to an equal-specificity
+ * rule sixty lines further down.
  *
- * Splitting it does NOT make the client type-checked — it is still text until a browser
- * parses it. What it buys is smaller blast radius (a stray backtick now breaks one ~200-line
- * file and the compiler points near it), CSS that lives in one place so cascade collisions
- * are visible, and a markdown renderer that can be found without scrolling.
- *
- * The parts are concatenated into ONE <script>, so the client keeps a single lexical scope
- * and every cross-reference between the parts still resolves. Order therefore matters:
- * util and markdown define what the later parts call at load time.
+ * The client is now real TypeScript in client/app, compiled against the DOM lib by
+ * tsconfig.client.json and loaded by the browser as native ES modules — no bundler, no new
+ * dependency. What remains here is text that no compiler could check in any arrangement:
+ * the stylesheet and the markup.
  */
-const CLIENT_SCRIPT = [UTIL, MARKDOWN, CARDS, LIST, DEVICES, MODALS].join("\n");
 
 export const PAGE = `<!doctype html>
 <html lang="en">
@@ -41,9 +30,7 @@ ${STYLES}
 </head>
 <body>
 ${MARKUP}
-<script>
-${CLIENT_SCRIPT}
-</script>
+<script type="module" src="/client/main.js"></script>
 </body>
 </html>
 `;

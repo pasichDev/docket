@@ -1,0 +1,17 @@
+{
+  "//": "Tests FOR the browser half. They drive DOM-typed code but run under node's test runner, so this is the one place both type sets are legitimately in scope. Keeping it separate is what stops `document` leaking into server code (tsconfig.json) or `process` into client code (tsconfig.client.json).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "outDir": "dist/web/client/app",
+    "rootDir": "src/web/client/app",
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmitOnError": true
+  },
+  "include": ["src/web/client/app/**/*.test.ts"]
+}
