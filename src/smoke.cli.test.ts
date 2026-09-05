@@ -49,7 +49,6 @@ for (const args of [
   ["--help"],
   ["export"],
   ["export", "--format", "markdown"],
-  ["check-update"],
 ]) {
   test(`smoke: \`docket ${args.join(" ")}\` exits 0 and prints something`, async () => {
     const { code, stdout, stderr } = await runCli(args);
@@ -57,6 +56,30 @@ for (const args of [
     assert.ok(stdout.trim().length > 0, "produced no output at all");
   });
 }
+
+/**
+ * `check-update` is the one command here that cannot be asserted to exit 0, because it is
+ * the one command that needs the internet. It lived in the loop above and passed for a year
+ * on a developer machine, then failed on a CI runner that could not reach npm — reporting an
+ * unreachable registry, exactly as designed.
+ *
+ * Weakening the command to keep the test green would be the wrong repair: "I could not check
+ * whether you are up to date" is not success, and a script that acts on the answer needs to
+ * be able to tell those apart. So both outcomes are accepted here, and what is actually
+ * checked is the thing that must hold either way — that it says something intelligible and
+ * never crashes.
+ */
+test("smoke: `docket check-update` either answers or says it could not reach the registry", async () => {
+  const { code, stdout, stderr } = await runCli(["check-update"]);
+  if (code === 0) {
+    assert.ok(stdout.trim().length > 0, "reported success without saying anything");
+    assert.match(stdout, /up to date|Update available|npx|git clone/i, `unhelpful output: ${stdout}`);
+    return;
+  }
+  assert.equal(code, 1, `expected a clean answer or a clean failure, got exit ${code}: ${stderr}`);
+  assert.match(stderr, /couldn't reach the npm registry/, `an offline check-update must say why: ${stderr}`);
+  assert.doesNotMatch(stderr, /at .*\.js:\d+/, `a network failure printed a stack trace instead of a sentence: ${stderr}`);
+});
 
 test("smoke: `docket hook doctor` reports rather than crashing when nothing is installed", async () => {
   const { code, stdout, stderr } = await runCli(["hook", "doctor"]);
