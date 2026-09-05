@@ -5,6 +5,7 @@ import { dataPath } from "./data-dir.js";
 import { atomicCreateOrRead, atomicWriteFile } from "./fs-atomic.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
 import { withFileLock, LeaseLostError, type Lease } from "./filelock.js";
+import { assertSameGeneration } from "./generation.js";
 import { flushOverflowHistory, pruneOrphanedHistory } from "./history-store.js";
 import { log } from "./log.js";
 import { shortId, stampSeq } from "./mutations.js";
@@ -236,7 +237,8 @@ function sameStamp(a: StoreStamp, b: StoreStamp): boolean {
   return a === b;
 }
 
-async function saveStore(store: TodoStore, expected: StoreStamp, lease: Lease): Promise<void> {
+/** Returns the stamp of what it just wrote, so a follow-up commit under the same lock needs no re-read. */
+async function saveStore(store: TodoStore, expected: StoreStamp, lease: Lease): Promise<StoreStamp> {
   store.formatVersion = CURRENT_FORMAT_VERSION;
   const encrypted = await encryptToBuffer(JSON.stringify(store, null, 2));
 
@@ -260,7 +262,13 @@ async function saveStore(store: TodoStore, expected: StoreStamp, lease: Lease): 
   if (!sameStamp(await stampOf(), expected)) {
     throw new LeaseLostError(LOCK_PATH);
   }
+  // A third question the other two cannot answer: are these still the same BYTES ON DISK
+  // this process holds a key for? A restore replaces the whole directory, lock and stamp
+  // included, and both checks above would pass against the replacement. Deliberately not
+  // retried — there is no fresh state to retry against, the process itself is stale.
+  await assertSameGeneration();
   await atomicWriteFile(STORE_PATH, encrypted);
+  return createHash("sha256").update(encrypted).digest("hex");
 }
 
 let cachedEpoch: string | null = null;
@@ -346,15 +354,33 @@ export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Pr
 
         const tombstonesBefore = store.deletedUuids.length;
         const result = await fn(store);
-        // Under the same lock as the store, and BEFORE it: see flushOverflowHistory for why
-        // appending has to come first.
-        await flushOverflowHistory(store);
-        await saveStore(store, expected, lease);
-        // ...and pruning has to come after, because saveStore above can still reject this
-        // whole attempt and send it round the retry loop. Gated on the tombstone list having
-        // actually grown — an O(1) check, so a write that deleted nothing never opens the
-        // history file at all.
-        if (store.deletedUuids.length !== tombstonesBefore) await pruneOrphanedHistory(store);
+
+        // The store commits FIRST, carrying its full inline history. Everything after this
+        // line is housekeeping on state that is already durable.
+        //
+        // The sidecar append used to come first, and that was a phantom-event generator: an
+        // attempt that lost the optimistic-concurrency check went round the retry loop and
+        // ran `fn` again, but the entries it had already appended stayed in the audit log.
+        // The result was a permanent record of an edit that never happened — in the one file
+        // whose entire job is to be trustworthy about what happened.
+        const committed = await saveStore(store, expected, lease);
+
+        // Past the commit, nothing may throw into the retry loop: `fn` has taken effect, and
+        // re-running it would apply the mutation twice. History is an audit log, so a failure
+        // to file it is logged and swallowed — the alternative is failing a user's edit
+        // because its audit entry could not be written, which is the wrong trade.
+        try {
+          // Append to the sidecar, then trim the now-redundant inline copies, then commit
+          // that trim. A crash between the append and the trim leaves entries in both
+          // places, which the next flush's dedupe absorbs; the reverse order would drop
+          // exactly the entries that had just been trimmed away.
+          if (await flushOverflowHistory(store)) await saveStore(store, committed, lease);
+          // Pruning is gated on the tombstone list having actually grown — an O(1) check, so
+          // a write that deleted nothing never opens the history file at all.
+          if (store.deletedUuids.length !== tombstonesBefore) await pruneOrphanedHistory(store);
+        } catch (err) {
+          log(`storage: the store was committed but its history housekeeping failed (${(err as Error).message})`);
+        }
         return result;
       });
     } catch (err) {

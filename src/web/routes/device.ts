@@ -8,6 +8,7 @@ import { listSessions } from "../../sessions.js";
 import { CURRENT_FORMAT_VERSION, readStore } from "../../storage.js";
 import { todoService } from "../../todo-service.js";
 import { SECURITY_HEADERS, json } from "../http.js";
+import { getGeneration } from "../../generation.js";
 
 /**
  * Everything that answers "what is this install?" — version, pairing QR, device identity,
@@ -31,6 +32,12 @@ export async function handleDeviceRoutes(
       startedAt: ctx.startedAt,
       pid: process.pid,
       lanUrl: ctx.lanUrl,
+      // Which data directory this process is actually serving. `docket restore` probes this
+      // port to warn about processes still holding the directory it is about to replace —
+      // and a dashboard on the same port serving somebody ELSE's data directory (a second
+      // install, a test run, a container) is not one of them. The port alone cannot tell
+      // those apart; the generation can.
+      generation: await getGeneration(),
     });
     return true;
   }

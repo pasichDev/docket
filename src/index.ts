@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { RootsListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { createBackup, isBackupFile, restoreBackup } from "./backup.js";
+import { createBackup, finishAnyInterruptedRestore, isBackupFile, liveHoldersOfDataDirectory, restoreBackup } from "./backup.js";
 import { askQuestions as cliAskQuestions } from "./cli-prompt.js";
 import { DeploymentConfigError, resolveDeploymentConfig } from "./config.js";
 import { getDeviceId, getDeviceName } from "./device.js";
@@ -549,6 +549,7 @@ Commands:
   import <file>         Import todos from a JSON or Markdown file
   backup <file>         Encrypted full backup: identity, todos, paired peers (password-protected)
   restore <file>        Restore a backup — REPLACES this device's identity/todos/peers
+  restore <file> --force  …even while an MCP host or \`docket serve\` is still running
   restore --from-v7     Undo the v7→v8 migration before downgrading to docket 2.x
   check-update          Check npm for a newer version without installing anything
   update                Check, confirm, install, self-test, and roll back on failure
@@ -796,7 +797,7 @@ async function handleCli(args: string[]): Promise<boolean> {
   }
 
   if (cmd === "restore") {
-    const file = args[1];
+    const file = args.slice(1).find((a) => !a.startsWith("-"));
     if (!file) {
       console.error("Error: Please provide a backup file. Example: docket restore ./docket.backup");
       process.exit(1);
@@ -806,6 +807,25 @@ async function handleCli(args: string[]): Promise<boolean> {
       console.error(`Error: ${file} doesn't look like a docket backup file.`);
       process.exit(1);
     }
+
+    /*
+     * Restore replaces the at-rest key and this device's identity, both of which every
+     * running docket process is holding in memory. Those processes can no longer CORRUPT the
+     * restored data — storage and the registries check the data-directory generation
+     * immediately before every commit — but they will start refusing writes the moment this
+     * finishes, which from the user's side looks like their editor breaking. Better to say
+     * so now, while the machine is still in a state they recognise.
+     */
+    const holders = await liveHoldersOfDataDirectory();
+    if (holders.length > 0 && !args.includes("--force")) {
+      console.error("Error: something is still using this data directory:");
+      for (const holder of holders) console.error(`  - ${holder}`);
+      console.error("");
+      console.error("Close those first (quit the MCP host, stop `docket serve`), then run restore again.");
+      console.error("They cannot corrupt the restored data — they will simply stop writing — so `docket restore --force` is safe if you would rather not stop them, but they must be restarted afterwards.");
+      process.exit(1);
+    }
+
     const [password, proceed] = await cliAskQuestions([
       "Backup password: ",
       "This REPLACES this device's identity, todos, and paired-peer list with the backup's (the current files are renamed aside as .bak, not deleted). Continue? [y/N] ",
@@ -836,6 +856,10 @@ process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 async function main() {
   const args = process.argv.slice(2);
+  // Before anything reads the store: a restore that was interrupted partway through its
+  // commit left a journal naming the files it had yet to move, and finishing it is the only
+  // way this data directory becomes either the old state or the new one rather than a mix.
+  await finishAnyInterruptedRestore();
   if (args.length > 0) {
     const handled = await handleCli(args);
     if (handled) return;

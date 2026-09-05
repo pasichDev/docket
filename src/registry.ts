@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { withFileLock, LeaseLostError, type Lease } from "./filelock.js";
 import { atomicWriteFile } from "./fs-atomic.js";
+import { assertSameGeneration } from "./generation.js";
 import { log } from "./log.js";
 
 /**
@@ -64,6 +65,10 @@ export async function withRegistry<T, R>(options: RegistryOptions<T>, mutate: (v
         if ((await hashOf(options.path)) !== before) {
           throw new LeaseLostError(options.lockPath);
         }
+        // Not retried, unlike the two above: a changed generation means this process is
+        // holding a key and an identity for a data directory that no longer exists, and
+        // retrying would just commit the same stale state a moment later.
+        await assertSameGeneration();
         await atomicWriteFile(options.path, bytes);
         return result;
       });

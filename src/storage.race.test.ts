@@ -188,3 +188,67 @@ test("a same-size write with the mtime restored is still caught, and the mutatio
   assert.equal(final.todos[0].title, "bbbbbbbb", "the interfering write was overwritten");
   assert.equal(final.todos[0].done, true, "the retried mutation was not applied");
 });
+
+/**
+ * B09: the audit log must never record an edit that did not happen.
+ *
+ * History overflow used to be appended to the side file BEFORE the store commit. When the
+ * commit then lost its optimistic-concurrency check, `fn` was re-run against a fresh store
+ * — but the entries the failed attempt had already filed stayed in the log, permanently, in
+ * the one file whose entire job is to be trustworthy about what happened.
+ */
+test("a mutation that loses the write race leaves no trace in the audit log", async () => {
+  const { withStore } = await import("./storage.js");
+  const { decryptFromBuffer, encryptToBuffer } = await import("./crypto.js");
+  const { readHistoryLog } = await import("./history-store.js");
+  const { HISTORY_FLUSH_THRESHOLD } = await import("./history.js");
+  const storePath = join(dataDirectory, "todos.json.enc");
+
+  // One item, already carrying enough inline history that the next edit overflows into the
+  // side file — which is the only path that touches the log at all.
+  let uuid = "";
+  await withStore((store) => {
+    store.todos = [];
+    store.deletedUuids = [];
+  });
+  const { createTodo } = await import("./mutations.js");
+  await withStore((store) => {
+    const todo = createTodo(store, { title: "audited", agent: "seed", session: "s" }, "device-seed", "Seed");
+    uuid = todo.uuid;
+    // Exactly at the threshold, not over it: createTodo already wrote the "created" entry,
+    // so the next edit — the one under test — is what tips this item into the side file.
+    const filler = HISTORY_FLUSH_THRESHOLD - todo.history.length;
+    for (let i = 0; i < filler; i++) {
+      todo.history.push({ at: `2026-01-01T00:00:${String(i).padStart(2, "0")}.000Z`, agent: "seed", deviceName: "Seed", action: "edited", detail: `filler ${i}` });
+    }
+  });
+
+  let attempts = 0;
+  await withStore(async (store) => {
+    attempts += 1;
+    const todo = store.todos.find((t) => t.uuid === uuid)!;
+    if (attempts === 1) {
+      // Someone else commits between this attempt's read and its write, so this attempt is
+      // going to be rejected and replayed. Its history entry must go with it.
+      const other = JSON.parse(await decryptFromBuffer(await readFile(storePath)));
+      other.todos[0].title = "won the race";
+      await writeFile(storePath, await encryptToBuffer(JSON.stringify(other, null, 2)));
+    }
+    todo.history.push({
+      at: "2026-02-02T00:00:00.000Z",
+      agent: "attempt",
+      deviceName: "Attempt",
+      action: "edited",
+      detail: `attempt ${attempts}`,
+    });
+  });
+
+  assert.equal(attempts, 2, "premise broken: the first attempt was supposed to lose the race");
+  const { entries } = await readHistoryLog();
+  const details = (entries[uuid] ?? []).map((e) => e.detail);
+  assert.ok(details.includes("attempt 2"), "the committed edit is missing from the audit log");
+  assert.ok(
+    !details.includes("attempt 1"),
+    "the audit log records an edit that was rolled back — a phantom event nothing can distinguish from a real one",
+  );
+});

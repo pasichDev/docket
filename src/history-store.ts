@@ -51,15 +51,19 @@ async function writeHistoryLog(logData: HistoryLog): Promise<void> {
 
 /**
  * Moves the accumulated inline history into the side file and trims each item back to the
- * preview length.
+ * preview length. Returns true when it trimmed something, i.e. when the caller now holds a
+ * store that differs from the one on disk and has to commit it.
  *
- * Called from inside withStore's lock, BEFORE the store itself is written, and the inline
- * arrays are trimmed only once the side file is safely on disk. Three things follow from
- * that ordering, all deliberate:
+ * Called from inside withStore's lock, AFTER the mutation itself has been committed. That
+ * ordering is the fix for the phantom-event bug: this used to run before the commit, so an
+ * attempt that lost the optimistic-concurrency check left its entries in the audit log and
+ * then re-ran the mutation, permanently recording an edit that never happened.
  *
- *  - A crash between the two writes leaves the side file holding entries the store still
- *    has inline too, which the dedupe on the next flush absorbs. The other order would drop
- *    exactly the entries that had just been trimmed away.
+ * Within this function the order is still append-then-trim, and for the original reason:
+ *
+ *  - A crash between the append and the caller's follow-up commit leaves the side file
+ *    holding entries the store still has inline too, which the dedupe on the next flush
+ *    absorbs. The reverse would drop exactly the entries that had just been trimmed away.
  *  - A failed side-file write leaves the store untrimmed rather than trimmed-and-lost. The
  *    mutation itself still succeeds: history is an audit log, and failing a user's edit
  *    because its audit entry couldn't be filed would be the wrong trade.
@@ -68,12 +72,12 @@ async function writeHistoryLog(logData: HistoryLog): Promise<void> {
  *
  * Either way history can lag the store by one write; docs/security.md §5 says so out loud.
  */
-export async function flushOverflowHistory(store: TodoStore): Promise<void> {
+export async function flushOverflowHistory(store: TodoStore): Promise<boolean> {
   const overflowing = store.todos.filter((t) => (t.history?.length ?? 0) > HISTORY_FLUSH_THRESHOLD);
-  if (overflowing.length === 0) return; // the common case: no file touched, nothing allocated
+  if (overflowing.length === 0) return false; // the common case: no file touched, nothing allocated
 
   const { entries: logData, readable } = await readHistoryLog();
-  if (!readable) return;
+  if (!readable) return false;
 
   for (const todo of overflowing) logData[todo.uuid] = dedupeHistory([...(logData[todo.uuid] ?? []), ...todo.history]);
 
@@ -81,9 +85,10 @@ export async function flushOverflowHistory(store: TodoStore): Promise<void> {
     await writeHistoryLog(logData);
   } catch (err) {
     log(`history: could not write ${HISTORY_PATH} (${(err as Error).message}) — keeping history inline for now`);
-    return; // nothing trimmed, so nothing lost; the next write tries again
+    return false; // nothing trimmed, so nothing lost; the next write tries again
   }
   for (const todo of overflowing) todo.history = todo.history.slice(-HISTORY_INLINE_MAX);
+  return true;
 }
 
 /**
