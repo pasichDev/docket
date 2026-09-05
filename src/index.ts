@@ -1,27 +1,32 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { RootsListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { createBackup, isBackupFile, restoreBackup } from "./backup.js";
+import { createBackup, finishAnyInterruptedRestore, isBackupFile, liveHoldersOfDataDirectory, restoreBackup } from "./backup.js";
 import { askQuestions as cliAskQuestions } from "./cli-prompt.js";
 import { DeploymentConfigError, resolveDeploymentConfig } from "./config.js";
 import { getDeviceId, getDeviceName } from "./device.js";
 import { exportToJson, exportToMarkdown, importFromJson, importFromMarkdown } from "./export.js";
-import { formatHistory } from "./history.js";
+import { formatHistoryEntries } from "./history.js";
 import { installProcessLogging, log } from "./log.js";
-import { formatAgentIdentity, isClaimActive, shortId } from "./mutations.js";
+import { duplicationWarning, emptyScopeNotice, formatIdle, formatResult, formatTodo, renderStatsWidget, routingHint, scopeNotice, sortTodos } from "./format.js";
 import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } from "./remote/client.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
-import type { MutationContext } from "./repository.js";
-import { CURRENT_FORMAT_VERSION, migrateLegacyFields, readStore, withStore } from "./storage.js";
+import { filterTodos, type MutationContext } from "./repository.js";
+import { CURRENT_FORMAT_VERSION, LAST_V7_RELEASE, migrateLegacyFields, readStore, restorePreUpgradeStore, withStore } from "./storage.js";
+import { buildSnapshot } from "./snapshot.js";
 import { TodoService, todoService as localTodoService } from "./todo-service.js";
-import type { Todo, TodoList } from "./types.js";
+import type { Todo, TodoList, TodoStore } from "./types.js";
 import { checkForUpdate, getCurrentVersion, runUpdate } from "./update.js";
+import { endSession, listSessions, registerSession, touchSession } from "./sessions.js";
+import { currentWorkspace, setWorkspaceRoot, slugifyWorkspace, summarizeWorkspaces } from "./workspace.js";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
@@ -93,6 +98,38 @@ function getMcpTodoService(): Promise<TodoService> {
   return mcpTodoServicePromise;
 }
 
+interface RunningWebUi {
+  product?: string;
+  packageVersion?: string;
+  pid?: number;
+}
+
+/** Null when nothing docket-shaped answered — a closed port, a timeout, or a body that is not JSON. */
+async function probeWebUi(port: number): Promise<RunningWebUi | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/version`, { signal: AbortSignal.timeout(800) });
+    if (!res.ok) return null;
+    return (await res.json()) as RunningWebUi;
+  } catch {
+    return null; // ECONNREFUSED / timeout — nothing listening
+  }
+}
+
+/** SIGTERM, then wait for the port to actually go quiet. Returns false if it did not. */
+async function stopWebUi(pid: number | undefined): Promise<boolean> {
+  if (typeof pid !== "number") return false;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return false;
+  }
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if ((await probeWebUi(WEB_PORT)) === null) return true;
+  }
+  return false;
+}
+
 /**
  * Every MCP host spawns its own `node dist/index.js` per session, so this
  * runs on every connection — but the web UI is a single shared HTTP server,
@@ -102,13 +139,43 @@ function getMcpTodoService(): Promise<TodoService> {
  * running instead of double-spawning.
  */
 async function ensureWebUiRunning(): Promise<void> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${WEB_PORT}/api/version`, {
-      signal: AbortSignal.timeout(800),
-    });
-    if (res.ok) return; // already running
-  } catch {
-    // ECONNREFUSED / timeout — nothing listening, fall through to spawn below.
+  // Port 0 means "any free port", which the probe below can never find again: every MCP
+  // session would fail to detect the dashboard it started last time and spawn another
+  // detached one, forever. Nineteen orphans accumulated on one machine before this was
+  // noticed, because each is silent and unref'd. Any value that is not a real port has the
+  // same problem, so auto-start requires a fixed, knowable one.
+  if (!Number.isInteger(WEB_PORT) || WEB_PORT < 1 || WEB_PORT > 65535) {
+    log(`skipping web UI auto-start: DOCKET_WEB_PORT=${process.env.DOCKET_WEB_PORT} is not a fixed port to find it on again`);
+    return;
+  }
+  const running = await probeWebUi(WEB_PORT);
+  if (running) {
+    const mine = await getCurrentVersion(SCRIPT_PATH).catch(() => null);
+    if (running.product !== "docket-web") {
+      // Something else owns this port. Spawning a second dashboard on it would fail anyway,
+      // and killing whatever it is would be indefensible.
+      log(`web UI auto-start: port ${WEB_PORT} is held by something that is not docket (${running.product ?? "no product field"}) — leaving it alone`);
+      return;
+    }
+    if (mine === null || running.packageVersion === mine) return; // the right dashboard is already up
+
+    /*
+     * A dashboard from a different build is still serving this data directory. Accepting it
+     * — which is what "the port answered 200" used to mean — leaves an old process reading
+     * and writing a store whose format the new build has since migrated, and running route
+     * and merge behaviour this version no longer has.
+     *
+     * SIGTERM and replace, rather than fail: the detached dashboard has no supervisor, so
+     * refusing would leave the stale one running for ever with only a log line about it.
+     */
+    log(`web UI auto-start: replacing the dashboard on port ${WEB_PORT} (running ${running.packageVersion ?? "unknown"}, this build is ${mine})`);
+    if (!(await stopWebUi(running.pid))) {
+      console.error(
+        `docket: a docket dashboard from a different version (${running.packageVersion ?? "unknown"}) is running on port ${WEB_PORT} and did not stop. ` +
+          `Stop it manually — it is reading the same data directory as this build.`,
+      );
+      return;
+    }
   }
   try {
     const webEntry = fileURLToPath(new URL("./web.js", import.meta.url));
@@ -140,8 +207,86 @@ function currentAgent(): string | null {
   return server.server.getClientVersion()?.name ?? null;
 }
 
+/**
+ * The project this session is working in. Resolved once (see workspace.ts) and logged at
+ * startup: a mis-resolution has to be VISIBLE, because the symptom otherwise is "my items
+ * aren't showing up" with nothing to point at.
+ */
+let workspace: string | null = null;
+
+async function refreshWorkspace(reason: string): Promise<void> {
+  const resolved = await currentWorkspace();
+  workspace = resolved.workspace;
+  log(`workspace: ${resolved.workspace ?? "(unfiled)"} via ${resolved.source}${resolved.root ? ` at ${resolved.root}` : ""} — ${reason}`);
+}
+
+/** Every field is a module-level value, so the call takes no arguments — and adding a field to LiveSession stays a one-line change instead of a three-call-site hunt. */
+function registerThisSession(): Promise<void> {
+  return registerSession({ session: sessionToken, agent: currentAgent(), workspace, cwd: process.cwd(), pid: process.pid });
+}
+
 function currentContext(): MutationContext {
-  return { agent: currentAgent(), session: sessionToken, deviceId, deviceName };
+  return { agent: currentAgent(), session: sessionToken, deviceId, deviceName, workspace };
+}
+
+/**
+ * Runs once the client has introduced itself.
+ *
+ * Two things are only knowable at this point, and both are recorded at startup with
+ * placeholder values so a session that never finishes initialising is still visible:
+ *
+ *  - The agent's NAME. `clientInfo` arrives with the initialize request, so registering
+ *    before it lands means every session shows up as "unknown" — which makes the whole
+ *    presence panel useless for the one question it exists to answer.
+ *  - The host's ROOTS, when it offers that capability. process.cwd() is usually the project
+ *    directory, but nothing guarantees it; the host's own idea wins where there is one.
+ *    A host that offers no roots capability simply keeps the cwd answer.
+ */
+/** Re-reads the host's roots and re-files this session under whatever project it is now in. */
+async function adoptHostRoots(): Promise<boolean> {
+  try {
+    const { roots } = await server.server.listRoots();
+    const first = roots.find((r) => r.uri.startsWith("file://"));
+    if (!first) return false;
+    setWorkspaceRoot(fileURLToPath(first.uri));
+    return true;
+  } catch (err) {
+    // A host that advertises roots but fails the call is not a reason to fail the session.
+    log(`workspace: host advertised roots but listRoots failed (${(err as Error).message}) — keeping the cwd-derived workspace`);
+    return false;
+  }
+}
+
+async function onClientReady(): Promise<void> {
+  // The `initialized` notification can be DISPATCHED before the `initialize` request's
+  // handler has run: the SDK schedules request handlers on a microtask, and a host that
+  // writes both messages before this process finished starting has them arrive in one
+  // stdin chunk. Reading clientInfo synchronously here therefore sees null, and every
+  // session shows up as "unknown". Yielding once lets that microtask settle first.
+  //
+  // This is an optimisation, not the guarantee — it assumes one macrotask is enough, which
+  // is true of today's SDK and might not be of tomorrow's. What actually guarantees the
+  // record is right is causal rather than temporal: touchSession() re-stamps the agent and
+  // workspace on the first tool call (see withRemoteErrorHandling), which is by definition
+  // after initialize. Losing this yield would cost a session that never calls a tool
+  // showing as "unknown" in the presence panel, not a wrong record.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  if (server.server.getClientCapabilities()?.roots) {
+    if (await adoptHostRoots()) await refreshWorkspace("from MCP roots");
+    // A host whose roots change mid-session has moved the user to another project. Without
+    // re-resolving, every item captured for the rest of that session is filed under the
+    // project the session happened to start in — silently, which is the worst kind.
+    server.server.setNotificationHandler(RootsListChangedNotificationSchema, () => {
+      void (async () => {
+        if (!(await adoptHostRoots())) return;
+        await refreshWorkspace("host reported its roots changed");
+        await registerThisSession();
+      })();
+    });
+  }
+  await registerThisSession();
+  log(`session: client ready — agent=${currentAgent() ?? "unknown"} workspace=${workspace ?? "(unfiled)"}`);
 }
 
 function text(value: string) {
@@ -165,6 +310,10 @@ function withRemoteErrorHandling<Args extends unknown[], R>(
   handler: (...args: Args) => Promise<R>,
 ): (...args: Args) => Promise<R | ReturnType<typeof errorText>> {
   return async (...args: Args) => {
+    // Every tool call is also this session's heartbeat. Hanging it off the wrapper every
+    // handler already shares means no individual tool can forget it — and the write itself
+    // is debounced, so the common case costs nothing (see touchSession).
+    void touchSession(sessionToken, { agent: currentAgent(), workspace });
     try {
       return await handler(...args);
     } catch (err) {
@@ -184,73 +333,12 @@ function clearable<T extends string>(value: T | undefined): Exclude<T, ""> | nul
   return value as Exclude<T, "">;
 }
 
-/** Catches the classic accidental-paste: description repeats the title verbatim at its start. */
-function duplicationWarning(title: string, description: string | null): string {
-  if (description && description.startsWith(title)) {
-    return " ⚠️ description starts with the same text as title — looks like accidental duplication, not a real description.";
-  }
-  return "";
-}
-
-function formatTodo(todo: Todo): string {
-  const box = todo.done ? "[x]" : "[ ]";
-  const cat = todo.category ? ` [${todo.category}]` : "";
-  const pri = todo.priority ? ` !${todo.priority}` : "";
-  const due = todo.dueDate ? ` due:${todo.dueDate}` : "";
-  const working = isClaimActive(todo)
-    ? ` ▶working:${todo.workingAgent}${todo.workingSession ? `[${todo.workingSession}]` : ""}`
-    : "";
-  const via = todo.agent ? ` (via ${formatAgentIdentity(todo.agent, todo.deviceName)})` : "";
-  const suffix = todo.done && todo.completedAt ? ` (done ${todo.completedAt.slice(0, 10)})` : "";
-  const desc = todo.description ? `\n      ${todo.description}` : "";
-  const source = todo.sourceUrl ? `\n      🔗 ${todo.sourceUrl}` : "";
-  return `${box} #${todo.id} (${shortId(todo.uuid)})${cat}${pri}${due}${working} ${todo.title}${via}${suffix}${desc}${source}`;
-}
-
-/** Open items first (oldest first), done items after (most recently completed first). */
-function sortTodos(todos: Todo[]): Todo[] {
-  return [...todos].sort((a, b) => {
-    if (a.done !== b.done) return a.done ? 1 : -1;
-    if (a.done) return (b.completedAt ?? "").localeCompare(a.completedAt ?? "");
-    return a.id - b.id;
-  });
-}
-
-function formatGroup(todos: Todo[], filter: string): string {
-  if (todos.length === 0) return `No ${filter === "all" ? "" : filter + " "}todos.`;
-  return todos.map(formatTodo).join("\n");
-}
-
-/** When both lists are in scope, render them under separate headers so todo vs backlog stays visually distinct. */
-function formatResult(
-  todos: Todo[],
-  filter: string,
-  list: TodoList | "all",
-  pagination?: { limit?: number; offset?: number; total: number },
-): string {
-  let header = "";
-  if (pagination && (pagination.limit !== undefined || pagination.offset !== undefined)) {
-    const offset = pagination.offset ?? 0;
-    const limit = pagination.limit ?? todos.length;
-    const start = pagination.total > 0 ? offset + 1 : 0;
-    const end = Math.min(offset + limit, pagination.total);
-    header = `_Showing ${start}-${end} of ${pagination.total} items (offset: ${offset}, limit: ${limit})_\n\n`;
-  }
-
-  if (list !== "all") {
-    return `${header}${formatGroup(todos, filter)}`;
-  }
-  const todoItems = todos.filter((t) => t.list === "todo");
-  const backlogItems = todos.filter((t) => t.list === "backlog");
-  return `${header}## Todo\n${formatGroup(todoItems, filter)}\n\n## Backlog\n${formatGroup(backlogItems, filter)}`;
-}
-
 server.registerTool(
   "todo_add",
   {
     title: "Add todo",
     description:
-      "Add a new item to the shared global TODO list. Use list=\"backlog\" for things to park and not hold in context (deferred findings, low-priority follow-ups); list=\"todo\" (default) for near-term actionable items.",
+      "Capture work the moment it comes up, from any tool or project, without the ceremony of a ticket. Automatically filed under the current project — you never need to say which. Add sourceUrl when it maps to something in Notion/GitLab/Obsidian/GitHub so it can be picked back up there. Use list=\"backlog\" to park something without holding it in context; list=\"todo\" (default) for near-term work.",
     inputSchema: {
       title: z.string().min(1).describe("Short one-line title/summary"),
       description: z.string().optional().describe("Optional longer body text — details, context, links"),
@@ -270,12 +358,22 @@ server.registerTool(
         .describe(
           "Strongly recommended when this item comes from somewhere with a URL: a GitHub issue/PR, a Notion page, an Obsidian note (if it has a share/publish link), a Slack thread, a doc, etc. Lets a human jump straight back to the source instead of re-finding it.",
         ),
+      workspace: z
+        .string()
+        .optional()
+        .describe("Override which project this is filed under. Almost never needed — the current project is filled in automatically."),
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
-  withRemoteErrorHandling(async ({ title, description, list, category, priority, dueDate, sourceUrl }) => {
-    const todo = await (await getMcpTodoService()).create({ title, description, list, category, priority, dueDate, sourceUrl }, currentContext());
-    return text(`Added [${todo.list}] ${formatTodo(todo)}${duplicationWarning(todo.title, todo.description)}`);
+  withRemoteErrorHandling(async ({ title, description, list, category, priority, dueDate, sourceUrl, workspace: explicit }) => {
+    const todo = await (await getMcpTodoService()).create(
+      { title, description, list, category, priority, dueDate, sourceUrl, workspace: explicit ? (slugifyWorkspace(explicit) ?? undefined) : undefined },
+      currentContext(),
+    );
+    // Only worth reading the session registry when there is a project to point at — see
+    // routingHint, which returns "" immediately for an unfiled item.
+    const hint = todo.workspace ? routingHint(await listSessions().catch(() => []), todo.workspace, sessionToken) : "";
+    return text(`Added [${todo.list}] ${formatTodo(todo, workspace)}${duplicationWarning(todo.title, todo.description)}${hint}`);
   }),
 );
 
@@ -309,7 +407,7 @@ server.registerTool(
     };
     const todo = await (await getMcpTodoService()).edit(id, patch, currentContext());
     if (!todo) return text(`No todo with id #${id}`);
-    return text(`Updated ${formatTodo(todo)}${duplicationWarning(todo.title, todo.description)}`);
+    return text(`Updated ${formatTodo(todo, workspace)}${duplicationWarning(todo.title, todo.description)}`);
   }),
 );
 
@@ -328,7 +426,7 @@ server.registerTool(
     if (!claimed) return text(`No todo with id #${id}`);
     const { todo, previousAgent } = claimed;
     const warning = previousAgent && previousAgent !== context.agent ? ` (note: was already claimed by ${previousAgent} — taking over)` : "";
-    return text(`Claimed ${formatTodo(todo)}${warning}`);
+    return text(`Claimed ${formatTodo(todo, workspace)}${warning}`);
   }),
 );
 
@@ -343,7 +441,7 @@ server.registerTool(
   withRemoteErrorHandling(async ({ id }) => {
     const todo = await (await getMcpTodoService()).release(id, currentContext());
     if (!todo) return text(`No todo with id #${id}`);
-    return text(`Released ${formatTodo(todo)}`);
+    return text(`Released ${formatTodo(todo, workspace)}`);
   }),
 );
 
@@ -351,7 +449,8 @@ server.registerTool(
   "todo_list",
   {
     title: "List todos",
-    description: "List items from the shared global TODO list, formatted as a checklist with optional pagination.",
+    description:
+      "What's open here. Scoped to the current project (plus unfiled items) unless you ask otherwise, and compact by default — one line per item. Pass workspace:\"*\" to see every project, or verbose:true for full records.",
     inputSchema: {
       filter: z
         .enum(["open", "done", "all"])
@@ -367,17 +466,36 @@ server.registerTool(
       inProgress: z.boolean().optional().describe("If true, restrict to items currently claimed via todo_claim (see the '▶working' suffix)"),
       limit: z.number().int().min(1).max(500).optional().describe("Max number of items to return (for token efficiency / pagination)"),
       offset: z.number().int().min(0).optional().describe("Number of items to skip (for pagination)"),
+      workspace: z
+        .string()
+        .optional()
+        .describe("Defaults to the current project (plus unfiled items). Pass \"*\" for every project, or a project name for that one."),
+      verbose: z
+        .boolean()
+        .default(false)
+        .describe("Full records (description, source link, provenance) instead of one compact line per item."),
     },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
-  withRemoteErrorHandling(async ({ filter, list, category, agent, session, inProgress, limit, offset }) => {
-    const matched = await (await getMcpTodoService()).list({ filter, list, category, agent, session, inProgress });
+  withRemoteErrorHandling(async ({ filter, list, category, agent, session, inProgress, limit, offset, workspace: scope, verbose }) => {
+    // The default is the session's own project, NOT everything. One flat list fed by several
+    // projects × several agents × many terminals is the failure mode this feature exists to
+    // prevent, and it is also the single largest context saving here: an agent in project A
+    // stops pulling project B's items into its window on every call.
+    const requested = scope === undefined ? (workspace ?? "*") : (slugifyWorkspace(scope) ?? "*");
+    const matched = await (await getMcpTodoService()).list({ filter, list, category, agent, session, inProgress, workspace: requested });
     const sorted = sortTodos(matched);
     const total = sorted.length;
     const start = offset ?? 0;
     const paginated = limit !== undefined || offset !== undefined ? sorted.slice(start, limit !== undefined ? start + limit : undefined) : sorted;
 
-    return text(formatResult(paginated, filter, list, { limit, offset, total }));
+    // A scoped list that came back empty must say what it is NOT showing. The second read
+    // only happens in that case, so the common path still costs one.
+    const notice =
+      total === 0 && requested !== "*"
+        ? emptyScopeNotice(requested, await (await getMcpTodoService()).list({ workspace: "*" }))
+        : scopeNotice(requested);
+    return text(formatResult(paginated, filter, list, { limit, offset, total }, verbose, workspace) + notice);
   }),
 );
 
@@ -392,7 +510,7 @@ server.registerTool(
   withRemoteErrorHandling(async ({ id }) => {
     const todo = await (await getMcpTodoService()).complete(id, currentContext());
     if (!todo) return text(`No todo with id #${id}`);
-    return text(`Completed ${formatTodo(todo)}`);
+    return text(`Completed ${formatTodo(todo, workspace)}`);
   }),
 );
 
@@ -405,9 +523,11 @@ server.registerTool(
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
   withRemoteErrorHandling(async ({ id }) => {
-    const item = await (await getMcpTodoService()).get(id);
-    if (!item) return text(`No todo with id #${id}`);
-    return text(formatHistory(item));
+    // Goes through history() rather than reading the item's inline preview: since v3.0 the
+    // full log lives in history.json.enc, and this is one of only two callers that opens it.
+    const entries = await (await getMcpTodoService()).history(id);
+    if (!entries) return text(`No todo with id #${id}`);
+    return text(formatHistoryEntries(entries, id));
   }),
 );
 
@@ -466,20 +586,25 @@ server.registerTool(
 
 function printHelp() {
   console.log(`
-docket - Shared TODO/backlog MCP server & task manager
+docket - one list every AI tool you use can write to, across every project
 
 Usage:
   docket [command] [options]
 
 Commands:
   (no args)             Start MCP server over stdio (when spawned by AI host)
-  list [filter]         List todos (filter: open | done | all, default: open)
+  list [filter]         List todos in the current project (filter: open | done | all, default: open)
+  workspaces            List projects with open/total counts and last activity
+  sessions              List agent sessions open right now (agent, project, idle time)
+  hook <sub>            Claude Code SessionStart integration (install, uninstall, doctor)
   stats                 Display terminal statistics widget with active claims
   web                   Ensure web UI dashboard is running and print its URL
   export [options]      Export todos to stdout or a file (--format json|markdown)
   import <file>         Import todos from a JSON or Markdown file
   backup <file>         Encrypted full backup: identity, todos, paired peers (password-protected)
   restore <file>        Restore a backup — REPLACES this device's identity/todos/peers
+  restore <file> --force  …even while an MCP host or \`docket serve\` is still running
+  restore --from-v7     Undo the v7→v8 migration before downgrading to docket 2.x
   check-update          Check npm for a newer version without installing anything
   update                Check, confirm, install, self-test, and roll back on failure
   help, --help, -h      Show this help message
@@ -487,9 +612,13 @@ Commands:
   serve                 Run an authoritative docket server for remote/self-hosted mode (see \`docket serve --help\`-equivalent docs)
   devices <sub>         Manage devices paired with a \`docket serve\` running on THIS machine (pair, pending, approve, deny, list, revoke, restore)
   pair <serverUrl>      Pair THIS device with a remote docket server (RFC "Local and Self-Hosted Backend Modes" §13)
-  status                Show deployment mode, and connection/store health (local: store+web+peers; remote: server+latency+device authorization)
+  status                Show deployment mode, resolved project, live sessions, and store/connection health
   backend use <url>     Switch this device to a self-hosted server, migrating local data to it if the server is empty
   backend localize      Download the current remote server's workspace and switch back to local mode
+
+List options:
+  -w, --workspace <n>   Scope to one project instead of the current directory's
+  --all                 Every project, unscoped
 
 Export options:
   --format, -f <fmt>    Export format: "json" (default) or "markdown" / "md"
@@ -497,6 +626,8 @@ Export options:
 
 Environment variables:
   DOCKET_WEB_PORT           Port for the local web UI (default: 8787)
+  DOCKET_WORKSPACE          Override the project this session files items under (see docs/workspaces.md)
+  DOCKET_HOOKS              Set to "off" to disable the SessionStart hook without editing any config
   DOCKET_MODE               "local" (default) or "remote" — see \`docket pair\` and ~/.config/docket/config.json
   DOCKET_SERVER_URL         Server URL to use when DOCKET_MODE=remote
   DOCKET_ALLOW_INSECURE_REMOTE  Set to "1" to allow a non-HTTPS remote server URL (trusted LAN dev only)
@@ -521,8 +652,34 @@ Examples:
 `);
 }
 
+/**
+ * The store the CLI's read-only commands should be looking at — which in remote mode is the
+ * SERVER's, not this device's leftover local file.
+ *
+ * `docket list`, `stats`, `workspaces` and `export` all read local storage directly. In
+ * local mode that is the authoritative store and everything is fine. In remote mode it is a
+ * file nothing has written since the switch, so the CLI in one terminal reported an empty
+ * or months-old list while the MCP tools in the editor showed the real one — a split brain
+ * the user could see, with no error anywhere to explain it.
+ *
+ * The renderers all take a TodoStore, so remote mode gets one built from the authoritative
+ * list rather than each command growing its own remote branch. The fields a store has and a
+ * list does not (nextId, seqCounter) are local coordinates that none of these commands read.
+ */
+async function readStoreForReading(): Promise<TodoStore> {
+  const deployment = await getDeployment();
+  if (deployment.mode !== "remote") return readStore();
+  const todos = await (await getMcpTodoService()).list({ filter: "all", list: "all" });
+  return { formatVersion: CURRENT_FORMAT_VERSION, nextId: todos.length + 1, todos, deletedUuids: [], seqCounter: 0 };
+}
+
 async function handleCli(args: string[]): Promise<boolean> {
   const cmd = args[0]?.toLowerCase();
+
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    console.log(await getCurrentVersion(SCRIPT_PATH));
+    return true;
+  }
 
   if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     printHelp();
@@ -530,38 +687,59 @@ async function handleCli(args: string[]): Promise<boolean> {
   }
 
   if (cmd === "stats") {
-    const store = await readStore();
-    const todo = store.todos.filter((t) => t.list === "todo");
-    const backlog = store.todos.filter((t) => t.list === "backlog");
-    const todoOpen = todo.filter((t) => !t.done).length;
-    const backlogOpen = backlog.filter((t) => !t.done).length;
-    const GREEN = "\x1b[38;2;52;211;153m";
-    const VIOLET = "\x1b[38;2;167;139;250m";
-    const AMBER = "\x1b[38;2;245;158;11m";
-    const DIM = "\x1b[2m";
-    const RESET = "\x1b[0m";
-
-    let out = `${GREEN}Todo ${todoOpen}${RESET}`;
-    if (backlogOpen > 0) out += `   ${VIOLET}Backlog ${backlogOpen}${RESET}`;
-    const working = store.todos.filter((t) => t.workingAgent && !t.done && isClaimActive(t));
-    if (working.length > 0) {
-      const label = (t: (typeof working)[number]) => t.category ?? (t.title.length > 30 ? `${t.title.slice(0, 30)}…` : t.title);
-      const items = working.map((t) => `${AMBER}▶ ${label(t)}${RESET} ${DIM}(${t.workingAgent})${RESET}`).join(", ");
-      out += `\n${items}`;
-    }
-    console.log(out);
+    console.log(renderStatsWidget(await readStoreForReading()));
     return true;
   }
 
   if (cmd === "list" || cmd === "ls") {
-    const filter = (args[1]?.toLowerCase() as "open" | "done" | "all") || "open";
-    const store = await readStore();
-    const todos = store.todos.filter((t) => {
-      if (filter === "open") return !t.done;
-      if (filter === "done") return t.done;
+    const flagIndex = args.findIndex((a) => a === "-w" || a === "--workspace");
+    const positional = args[1] && !args[1].startsWith("-") ? args[1].toLowerCase() : "";
+    const filter = (positional as "open" | "done" | "all") || "open";
+    // No flags scopes to the cwd's project, exactly like the MCP default — the CLI and the
+    // agents have to agree about what "the list" means or the tool teaches two different
+    // mental models.
+    const scope = args.includes("--all")
+      ? "*"
+      : flagIndex !== -1
+        ? (slugifyWorkspace(args[flagIndex + 1] ?? "") ?? "*")
+        : ((await currentWorkspace()).workspace ?? "*");
+    const store = await readStoreForReading();
+    const todos = filterTodos(store.todos, { filter, workspace: scope });
+    const notice =
+      todos.length === 0 && scope !== "*"
+        ? emptyScopeNotice(scope, store.todos, "--all for every project")
+        : scopeNotice(scope, "--all for every project");
+    console.log(formatResult(todos, filter, "all", undefined, true, scope === "*" ? null : scope) + notice);
+    return true;
+  }
+
+  if (cmd === "sessions") {
+    const sessions = await listSessions();
+    if (sessions.length === 0) {
+      console.log("No agent sessions open right now.");
       return true;
-    });
-    console.log(formatResult(todos, filter, "all"));
+    }
+    const width = Math.max(...sessions.map((s) => (s.agent ?? "unknown").length));
+    for (const s of sessions) {
+      console.log(`${(s.agent ?? "unknown").padEnd(width)}  ${(s.workspace ?? "(unfiled)").padEnd(24)} ${formatIdle(s.lastSeenAt).padEnd(9)} pid ${s.pid}  ${s.cwd}`);
+    }
+    return true;
+  }
+
+  if (cmd === "workspaces" || cmd === "ws") {
+    const summary = summarizeWorkspaces((await readStoreForReading()).todos);
+    if (summary.length === 0) {
+      console.log("No items yet — nothing to group into projects.");
+      return true;
+    }
+    const current = (await currentWorkspace()).workspace;
+    const width = Math.max(...summary.map((w) => w.name.length));
+    for (const { name, open, total, lastActivity } of summary) {
+      const here = name === current ? "  ← here" : "";
+      console.log(
+        `${name.padEnd(width)}  ${String(open).padStart(4)} open / ${String(total).padStart(4)} total   last ${lastActivity.slice(0, 16).replace("T", " ")}${here}`,
+      );
+    }
     return true;
   }
 
@@ -610,11 +788,11 @@ async function handleCli(args: string[]): Promise<boolean> {
     const format = (formatIdx !== -1 ? args[formatIdx + 1]?.toLowerCase() : "json") ?? "json";
     const outFile = outIdx !== -1 ? args[outIdx + 1] : null;
 
-    const store = await readStore();
+    const store = await readStoreForReading();
     const content = format === "markdown" || format === "md" ? exportToMarkdown(store) : exportToJson(store);
 
     if (outFile) {
-      await writeFile(outFile, content, "utf8");
+      await atomicWriteFile(outFile, content, 0o644);
       console.log(`Exported ${store.todos.length} items to ${outFile}`);
     } else {
       process.stdout.write(content + "\n");
@@ -630,12 +808,24 @@ async function handleCli(args: string[]): Promise<boolean> {
     }
     const raw = await readFile(file, "utf8");
     const isJson = file.endsWith(".json") || raw.trim().startsWith("{") || raw.trim().startsWith("[");
-    const result = await withStore((store) => {
-      if (isJson) {
-        return importFromJson(store, raw, deviceId, deviceName);
-      }
-      return importFromMarkdown(store, raw, deviceId, deviceName);
-    });
+    const parse = (store: TodoStore): { added: number } =>
+      isJson ? importFromJson(store, raw, deviceId, deviceName) : importFromMarkdown(store, raw, deviceId, deviceName);
+
+    const deployment = await getDeployment();
+    if (deployment.mode === "remote") {
+      // Parse into a scratch store, then send the result to the authoritative one. Writing
+      // to the local file here was a silent data-loss path: the import reported success and
+      // the items existed nowhere the user could reach them.
+      const scratch: TodoStore = { formatVersion: CURRENT_FORMAT_VERSION, nextId: 1, todos: [], deletedUuids: [], seqCounter: 0 };
+      const parsed = parse(scratch);
+      const service = await getMcpTodoService();
+      const result = await service.importSnapshot(buildSnapshot(scratch, {}, deviceId));
+      console.log(`Imported ${result.imported} of ${parsed.added} item(s) into ${deployment.serverUrl}.`);
+      if (result.alreadyPresent > 0) console.log(`${result.alreadyPresent} were already there.`);
+      return true;
+    }
+
+    const result = await withStore(parse);
     console.log(`Successfully imported ${result.added} items into todo store.`);
     return true;
   }
@@ -672,13 +862,34 @@ async function handleCli(args: string[]): Promise<boolean> {
       process.exit(1);
     }
     const bundle = await createBackup(password);
-    await writeFile(file, bundle);
+    // The one write where "it printed success" and "it is on the disk" must not be able to
+    // disagree: a truncated backup is discovered on the day it is needed. 0600 because the
+    // bundle carries this device's private sync identity, encrypted or not.
+    await atomicWriteFile(file, bundle);
     console.log(`Backup written to ${file} (${bundle.length} bytes, encrypted). Restore it with \`docket restore ${file}\` — on this or any other machine.`);
     return true;
   }
 
+  if (cmd === "restore" && args.includes("--from-v7")) {
+    // The downgrade escape hatch. Deliberately its own branch rather than a flag threaded
+    // through the password flow below: this restores a plain pre-migration copy of the
+    // store, not an encrypted backup bundle, so there is nothing to decrypt and no password
+    // to ask for.
+    const restored = await restorePreUpgradeStore();
+    if (!restored) {
+      console.error("No pre-upgrade store found. This install either never migrated from v7, or was migrated by a build older than 3.0.0.");
+      process.exit(1);
+    }
+    console.log(`Restored the pre-upgrade (v7) store from ${restored.restoredFrom}.`);
+    console.log(`Your v8 store was moved aside to ${restored.movedAside} — nothing was deleted.`);
+    console.log("");
+    console.log(`Now reinstall a docket release that reads v7:\n\n  npm install -g @pasichdev/docket@${LAST_V7_RELEASE}\n`);
+    console.log("Restart any running MCP host afterwards.");
+    return true;
+  }
+
   if (cmd === "restore") {
-    const file = args[1];
+    const file = args.slice(1).find((a) => !a.startsWith("-"));
     if (!file) {
       console.error("Error: Please provide a backup file. Example: docket restore ./docket.backup");
       process.exit(1);
@@ -688,6 +899,25 @@ async function handleCli(args: string[]): Promise<boolean> {
       console.error(`Error: ${file} doesn't look like a docket backup file.`);
       process.exit(1);
     }
+
+    /*
+     * Restore replaces the at-rest key and this device's identity, both of which every
+     * running docket process is holding in memory. Those processes can no longer CORRUPT the
+     * restored data — storage and the registries check the data-directory generation
+     * immediately before every commit — but they will start refusing writes the moment this
+     * finishes, which from the user's side looks like their editor breaking. Better to say
+     * so now, while the machine is still in a state they recognise.
+     */
+    const holders = await liveHoldersOfDataDirectory();
+    if (holders.length > 0 && !args.includes("--force")) {
+      console.error("Error: something is still using this data directory:");
+      for (const holder of holders) console.error(`  - ${holder}`);
+      console.error("");
+      console.error("Close those first (quit the MCP host, stop `docket serve`), then run restore again.");
+      console.error("They cannot corrupt the restored data — they will simply stop writing — so `docket restore --force` is safe if you would rather not stop them, but they must be restarted afterwards.");
+      process.exit(1);
+    }
+
     const [password, proceed] = await cliAskQuestions([
       "Backup password: ",
       "This REPLACES this device's identity, todos, and paired-peer list with the backup's (the current files are renamed aside as .bak, not deleted). Continue? [y/N] ",
@@ -705,17 +935,23 @@ async function handleCli(args: string[]): Promise<boolean> {
 }
 
 // Graceful shutdown handlers
-process.on("SIGINT", () => {
-  log("mcp process received SIGINT, exiting cleanly");
+// Deregister before exiting so a closed terminal disappears from `docket sessions`
+// immediately, instead of lingering until its TTL. The pid check is the backstop for the
+// cases this never runs for (SIGKILL, a host that just closes the pipe).
+async function shutdown(signal: string): Promise<never> {
+  log(`mcp process received ${signal}, exiting cleanly`);
+  await endSession(sessionToken).catch(() => {});
   process.exit(0);
-});
-process.on("SIGTERM", () => {
-  log("mcp process received SIGTERM, exiting cleanly");
-  process.exit(0);
-});
+}
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 async function main() {
   const args = process.argv.slice(2);
+  // Before anything reads the store: a restore that was interrupted partway through its
+  // commit left a journal naming the files it had yet to move, and finishing it is the only
+  // way this data directory becomes either the old state or the new one rather than a mix.
+  await finishAnyInterruptedRestore();
   if (args.length > 0) {
     const handled = await handleCli(args);
     if (handled) return;
@@ -741,6 +977,18 @@ async function main() {
   const deployment = await getDeployment();
   if (deployment.mode === "remote") await getMcpTodoService();
 
+  await refreshWorkspace("resolved at startup");
+  // Not awaited: nothing reads this placeholder registration, and onClientReady replaces it
+  // with the real agent name the moment the host introduces itself. Blocking the transport
+  // on a file-lock round trip would spend the most latency-sensitive moment of a session on
+  // a value that is about to be overwritten.
+  void registerThisSession();
+
+  // Fires after initialize, which is when the client's name and capabilities are first
+  // known. Not awaited anywhere: a host slow to answer listRoots must not delay the
+  // session, and the cwd-derived workspace is already in place and usable.
+  server.server.oninitialized = () => void onClientReady();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Both of these touch/create LOCAL on-disk state (todos.json.enc's legacy-field
@@ -754,8 +1002,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  log(`mcp failed to start: ${err.stack ?? err.message}`);
-  console.error("docket failed to start:", err);
+main().catch((err: Error) => {
+  // The stack goes to the log file, where someone debugging can find it. What reaches the
+  // terminal is the message alone: a person who typed a filename that doesn't exist is not
+  // helped by a stack trace, and "failed to start" is the wrong sentence for a command that
+  // started fine and then hit a bad argument.
+  log(`docket failed: ${err.stack ?? err.message}`);
+  const ranACommand = process.argv.length > 2;
+  console.error(ranACommand ? `docket: ${err.message}` : `docket failed to start: ${err.message}`);
   process.exit(1);
 });

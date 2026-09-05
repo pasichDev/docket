@@ -84,3 +84,34 @@ test("restoreBackup: a path-traversal filename in the bundle's own files map is 
   const tmpEntries = await fs.readdir(tmpdir());
   assert.ok(!tmpEntries.includes("PWNED"), "the traversal entry must not have escaped the data directory");
 });
+
+test("a server backup carries the device registry, or restoring it locks every client out", async () => {
+  /*
+   * docs/headless.md tells operators to take exactly this backup before a server upgrade and
+   * to restore it if the upgrade goes wrong. `docket serve` keeps its list of authorised
+   * devices in devices.json.enc — and that file was not in the bundle.
+   *
+   * So the documented disaster-recovery path produced a server with the right todos and the
+   * right identity, and no memory of which clients were allowed to talk to it: every paired
+   * device silently stops authenticating, at the exact moment the operator is already having
+   * a bad day. The store survived; the trust state did not.
+   */
+  await writeFile(join(dataDirectory, "device.json"), '{"id":"server-1"}');
+  await writeFile(join(dataDirectory, "key"), "server-key");
+  await writeFile(join(dataDirectory, "todos.json.enc"), "todo-bytes");
+  await writeFile(join(dataDirectory, "devices.json.enc"), "authorised-devices");
+
+  const bundle = await createBackup("pw");
+
+  // A fresh machine: nothing but the bundle.
+  for (const name of ["device.json", "key", "todos.json.enc", "devices.json.enc"]) {
+    await rm(join(dataDirectory, name), { force: true });
+  }
+  const { restoredFiles } = await restoreBackup(bundle, "pw");
+
+  assert.ok(restoredFiles.includes("devices.json.enc"), `devices.json.enc was not restored — got ${restoredFiles.join(", ")}`);
+  assert.equal(await readFile(join(dataDirectory, "devices.json.enc"), "utf8"), "authorised-devices");
+  // ...alongside the things that already worked, so this is an addition and not a swap.
+  assert.equal(await readFile(join(dataDirectory, "todos.json.enc"), "utf8"), "todo-bytes");
+  assert.equal(await readFile(join(dataDirectory, "device.json"), "utf8"), '{"id":"server-1"}');
+});

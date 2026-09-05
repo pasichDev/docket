@@ -1,38 +1,204 @@
-import { open, rm, stat } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import { link, open, readFile, rename, rm, stat, utimes } from "node:fs/promises";
+import { hostname } from "node:os";
+import { log } from "./log.js";
 
-const LOCK_STALE_MS = 10_000;
+/** A lock whose mtime hasn't moved in this long is treated as abandoned by a crashed holder. */
+export const LOCK_STALE_MS = 10_000;
+/** How often a live holder refreshes its lock's mtime. A third of the staleness window, so two consecutive missed beats still don't make a live lock look dead. */
+export const LOCK_HEARTBEAT_MS = Math.floor(LOCK_STALE_MS / 3);
 const LOCK_RETRY_MS = 30;
+const HOSTNAME = hostname(); // resolved once; it cannot change under a running process
 const LOCK_TIMEOUT_MS = 5_000;
 
-async function acquireLock(lockPath: string): Promise<void> {
+/**
+ * Written into the lock file itself. Costs one small write per acquisition and answers the
+ * only question that matters the first time someone reports "docket hung": which process,
+ * on which machine, since when.
+ */
+interface LockHolder {
+  /** Distinguishes two acquisitions by the same pid — see reapStaleLock's compare-and-swap. */
+  id: string;
+  pid: number;
+  host: string;
+  startedAt: string;
+}
+
+/**
+ * Which locks the CURRENT async context already holds, and where it took them. Scoped per
+ * call chain rather than per process: two independent requests holding two different locks
+ * is normal, while one call chain re-entering its own lock is a deadlock waiting to happen.
+ *
+ * The value is an unformatted Error, not a string. Constructing one is cheap; `.stack`
+ * is what forces V8 to materialise and format the trace, and that only happens on the
+ * failure path — which by design never runs.
+ */
+const heldLocks = new AsyncLocalStorage<ReadonlyMap<string, Error>>();
+
+/** The first stack frame outside this file — i.e. whoever asked for the lock. Matched on this module's own URL rather than a filename fragment, so a caller that happens to live in a file with a similar name isn't mistaken for internal machinery. */
+function callSite(marker: Error): string {
+  const frames = (marker.stack ?? "").split("\n").slice(1);
+  const frame = frames.find((f) => f.includes("at ") && !f.includes(import.meta.url));
+  return frame?.trim().replace(/^at\s+/, "") ?? "unknown call site";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Clears a lock whose holder appears to have died, atomically.
+ *
+ * The obvious implementation — `rm()` then retry the create — is the bug this replaces: two
+ * processes both judge the lock stale, both remove it, and the second one removes the FIRST
+ * one's brand-new lock. Both then create their own and both believe they hold it, which
+ * costs one of two concurrent read-modify-writes with no error anywhere.
+ *
+ * `rename` is atomic, so exactly one contender can win it. That alone is not quite enough:
+ * between judging the lock stale and renaming it, another process may have reaped it and
+ * taken a fresh one, and we would then be renaming a LIVE lock away. So the reap is a
+ * compare-and-swap on the holder record — if what we took isn't what we judged, we put it
+ * back with `link` (which, unlike rename, refuses to clobber an existing target) and let the
+ * caller retry.
+ */
+async function reapStaleLock(lockPath: string, judged: string | null): Promise<void> {
+  const claimPath = `${lockPath}.reap.${randomUUID()}`;
+  try {
+    await rename(lockPath, claimPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    return; // lost the race — someone else reaped it; the acquire loop just tries again
+  }
+
+  // Two ways the file we just took can turn out not to be the one we condemned: someone
+  // reaped it and took a fresh lock (different holder record), or the original holder woke
+  // up and started heartbeating again (same record, fresh mtime). The second is why an
+  // identity check alone isn't enough — a suspended laptop resuming looks identical.
+  const claimed = await readFile(claimPath, "utf8").catch(() => null);
+  const claimedMtime = await stat(claimPath).then((s) => s.mtimeMs).catch(() => 0);
+  if (claimed !== judged || Date.now() - claimedMtime <= LOCK_STALE_MS) {
+    // Put it back. `link` refuses to clobber, unlike rename, so a third process that has
+    // already taken the slot keeps it and we drop ours instead of overwriting theirs.
+    await link(claimPath, lockPath).catch(() => {});
+    await rm(claimPath, { force: true });
+    return;
+  }
+  await rm(claimPath, { force: true });
+  log(`filelock: reaped stale lock ${lockPath} — previous holder ${claimed ?? "unknown (empty lock file)"}`);
+}
+
+async function acquireLock(lockPath: string): Promise<string> {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const identity: LockHolder = { id: randomUUID(), pid: process.pid, host: HOSTNAME, startedAt: new Date().toISOString() };
+  const serialized = JSON.stringify(identity);
   for (;;) {
     try {
       const handle = await open(lockPath, "wx", 0o600);
-      await handle.close();
-      return;
+      try {
+        await handle.writeFile(serialized);
+      } finally {
+        await handle.close();
+      }
+      return serialized;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      // Another process's lock — reap it if it's stale (crashed holder).
+      // Another process's lock — reap it if its holder looks like it crashed.
+      let info;
+      let judged: string | null = null;
       try {
-        const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
-          await rm(lockPath, { force: true });
-          continue;
-        }
+        judged = await readFile(lockPath, "utf8");
+        info = await stat(lockPath);
       } catch {
-        continue; // lock disappeared between EEXIST and stat — retry immediately
+        continue; // lock disappeared between EEXIST and the read — retry immediately
+      }
+      if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
+        await reapStaleLock(lockPath, judged);
+        continue;
       }
       if (Date.now() > deadline) {
-        throw new Error(`docket: timed out waiting for lock at ${lockPath}`);
+        throw new Error(`docket: timed out waiting for lock at ${lockPath} (held by ${judged || "unknown"})`);
       }
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+      await sleep(LOCK_RETRY_MS);
     }
   }
 }
 
-async function releaseLock(lockPath: string): Promise<void> {
-  await rm(lockPath, { force: true });
+/**
+ * Removes the lock ONLY if it is still ours.
+ *
+ * Without the check, a holder whose lock was reaped out from under it (see the residual
+ * window in withFileLock's note) would go on to delete whichever process now legitimately
+ * holds it — turning one bad reap into an unbounded chain of them. Comparing the holder
+ * record makes a stolen lock a local problem for the process that lost it, rather than
+ * something it inflicts on everyone after.
+ */
+async function releaseLock(lockPath: string, identity: string): Promise<void> {
+  /*
+   * Claim it by RENAME before deciding, rather than read-then-unlink.
+   *
+   * The obvious version — read the holder record, compare, unlink — has a window between the
+   * two: a process suspended after the read can wake to find its lock reaped and a new
+   * holder in place, and then unlink THAT holder's lock. One bad reap becomes a chain of
+   * them. Rename is atomic and single-winner, so whatever this call moves aside is the file
+   * this call is entitled to judge; nobody else can be looking at it any more.
+   */
+  const claimed = `${lockPath}.releasing.${randomUUID()}`;
+  try {
+    await rename(lockPath, claimed);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // already reaped; nothing owed
+    throw err;
+  }
+
+  const current = await readFile(claimed, "utf8").catch(() => null);
+  if (current === null || current === identity) {
+    await rm(claimed, { force: true });
+    return;
+  }
+
+  /*
+   * Not ours: this process was reaped while it believed it held the lock, and the file it
+   * just moved aside belongs to whoever took over.
+   *
+   * Putting it back with `rename` is what the previous version did, and it is wrong for a
+   * reason that only shows up with three processes. Between this releaser's rename-away and
+   * its rename-back there is a gap in which the lock path is FREE, so a third process can
+   * legitimately acquire it — and rename() on POSIX silently replaces an existing file, so
+   * the restore would delete the third process's brand-new lock and install a stale record
+   * in its place. Restoring a lock is therefore only safe if it cannot clobber.
+   *
+   * `link()` is that operation: it fails with EEXIST rather than overwriting. If the path is
+   * free the rightful holder gets its record back; if someone else has already taken it,
+   * they keep it and this process quietly drops what it was holding. Either outcome leaves
+   * exactly one holder, which is the whole invariant.
+   */
+  log(`filelock: not releasing ${lockPath} — it is now held by someone else (this process's lock was reaped while held)`);
+  await restoreLockRecord(claimed, lockPath);
+  await rm(claimed, { force: true });
+}
+
+/**
+ * Puts a claimed lock record back at `lockPath` without ever overwriting what may already
+ * be there.
+ *
+ * Its own function because the distinction it encodes is invisible at the call site and
+ * only observable with three processes: `link` fails with EEXIST where `rename` silently
+ * replaces, and the difference between them is whether a third process's brand-new lock
+ * survives this restore. That is not something a two-process test can reach, so it is
+ * tested here directly.
+ *
+ * "superseded" is a perfectly good outcome — someone else legitimately holds the path and
+ * keeps it. Any other failure leaves the path free, which is the same state the reap that
+ * started this would have produced.
+ */
+export async function restoreLockRecord(claimedPath: string, lockPath: string): Promise<"restored" | "superseded"> {
+  try {
+    await link(claimedPath, lockPath);
+    return "restored";
+  } catch {
+    return "superseded";
+  }
 }
 
 /**
@@ -41,12 +207,99 @@ async function releaseLock(lockPath: string): Promise<void> {
  * one docket instance per MCP host session, or a sync tick racing a human
  * clicking Approve — can't interleave a read-modify-write and silently drop
  * each other's changes.
+ *
+ * While held, the lock's mtime is refreshed on a timer: without that, anything slower than
+ * LOCK_STALE_MS (a laptop suspended mid-hold, a network filesystem, a debugger sitting on a
+ * breakpoint) has its still-valid lock reaped by the next contender. The timer is unref'd so
+ * a held lock can never by itself keep a process alive.
+ *
+ * What this is NOT: a distributed lock with a proof of exclusion. The reap is a
+ * compare-and-swap on the holder record plus a re-check of its age, which closes the window
+ * that actually bites (two contenders both judging one abandoned lock stale, and the second
+ * deleting the first's fresh one). A narrow window remains: a process suspended past
+ * LOCK_STALE_MS — a laptop sleeping, a SIGSTOP — cannot heartbeat, has its lock legitimately
+ * reaped, and wakes still inside its own critical section. No check here can help, because
+ * it is already in.
+ *
+ * So the lost race is not prevented, it is DETECTED, one layer up: storage.ts stamps the
+ * store file when it reads it and compares that stamp immediately before committing, so a
+ * write that lost the lock aborts and retries instead of clobbering. Ordinary optimistic
+ * concurrency. This is an advisory lock between cooperating processes on one machine, and a
+ * lost race is caught before the write rather than assumed away.
+ *
+ * Re-entering a lock this call chain already holds throws immediately instead of waiting out
+ * the acquire timeout. It cannot succeed either way — the process would be waiting on itself
+ * — but a fast, specific failure names the architecture mistake instead of surfacing five
+ * seconds later as a mysterious timeout.
  */
-export async function withFileLock<T>(lockPath: string, fn: () => T | Promise<T>): Promise<T> {
-  await acquireLock(lockPath);
+/**
+ * Proof, checkable at any moment, that the lock this callback was given is still the one on
+ * disk.
+ *
+ * The advisory lock cannot prevent a suspended holder from being reaped — nothing on one
+ * machine can, short of a kernel lease — so the design detects the loss instead. storage.ts
+ * always had that detection through its own content stamp; the peer, device, viewer and
+ * identity registries had nothing, and a writer that woke after a reap would overwrite a
+ * newer registry with its stale copy. Handing every locked callback a lease makes the check
+ * available to all of them for one line at the point of commit.
+ */
+export interface Lease {
+  /** Throws LeaseLostError if the lock is gone or now held by someone else. */
+  assertOwned(): Promise<void>;
+  /** Non-throwing form, for callers that want to decide for themselves. */
+  isOwned(): Promise<boolean>;
+}
+
+export class LeaseLostError extends Error {
+  constructor(lockPath: string) {
+    super(
+      `docket: the lock at ${lockPath} was taken over while this operation held it — ` +
+        `its work has been abandoned rather than written over the newer state`,
+    );
+    this.name = "LeaseLostError";
+  }
+}
+
+export async function withFileLock<T>(lockPath: string, fn: (lease: Lease) => T | Promise<T>): Promise<T> {
+  const held = heldLocks.getStore();
+  const heldAt = held?.get(lockPath);
+  const marker = new Error();
+  if (heldAt !== undefined) {
+    throw new Error(
+      `docket: lock ${lockPath} is already held by this call chain (taken at ${callSite(heldAt)}, re-entered at ${callSite(marker)}). ` +
+        `A nested read-modify-write can never complete — do the inner work inside the outer callback, which already holds the lock.`,
+    );
+  }
+  const nested = new Map(held ?? []);
+  nested.set(lockPath, marker);
+
+  const identity = await acquireLock(lockPath);
+  const beat = setInterval(() => {
+    // Refresh only while the lock is still ours. Beating on a lock someone else now holds
+    // would keep THEIR lock alive past its own holder's death, which is the opposite of
+    // what a heartbeat is for.
+    void readFile(lockPath, "utf8")
+      .then((current) => {
+        if (current !== identity) return;
+        const now = new Date();
+        return utimes(lockPath, now, now);
+      })
+      .catch(() => {});
+  }, LOCK_HEARTBEAT_MS);
+  beat.unref();
+  const lease: Lease = {
+    async isOwned() {
+      return (await readFile(lockPath, "utf8").catch(() => null)) === identity;
+    },
+    async assertOwned() {
+      if (!(await this.isOwned())) throw new LeaseLostError(lockPath);
+    },
+  };
+
   try {
-    return await fn();
+    return await heldLocks.run(nested, async () => fn(lease));
   } finally {
-    await releaseLock(lockPath);
+    clearInterval(beat);
+    await releaseLock(lockPath, identity);
   }
 }

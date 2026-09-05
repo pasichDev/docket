@@ -4,13 +4,13 @@
     "name": "pasichDev",
     "url": "https://github.com/pasichDev"
   },
-  "description": "Marketplace for the docket claim/release workflow skill.",
+  "description": "Marketplace for the docket skill.",
   "plugins": [
     {
-      "name": "docket-claim",
+      "name": "docket",
       "source": "./",
-      "description": "Claim/release workflow skill for the docket MCP server's shared backlog.",
-      "version": "1.0.0"
+      "description": "Field and tool reference for docket, the shared list every AI tool and project writes to.",
+      "version": "2.0.0"
     }
   ]
 }

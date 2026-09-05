@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
-import { withFileLock } from "./filelock.js";
+import { withRegistry } from "./registry.js";
 import type { Peer } from "./types.js";
 
 const PEERS_PATH = await dataPath("peers.json.enc");
@@ -24,27 +24,26 @@ export async function loadPeers(): Promise<Peer[]> {
   }
 }
 
-async function savePeers(peers: Peer[]): Promise<void> {
-  const tmpPath = `${PEERS_PATH}.${randomUUID()}.tmp`;
-  const encrypted = await encryptToBuffer(JSON.stringify(peers, null, 2));
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  await rename(tmpPath, PEERS_PATH);
-}
-
 /**
- * Locked read-modify-write — several peers can finish syncing around the same
- * moment (syncAllPeers runs them concurrently via Promise.allSettled), and
- * without this two `markPeerSynced` calls landing close together would race:
- * both load(), both mutate their own peer, and whichever save()s last wins,
- * silently discarding the other's update.
+ * Locked read-modify-write with lease + content fencing — see registry.ts.
+ *
+ * Several peers can finish syncing around the same moment (syncAllPeers runs them
+ * concurrently), so two markPeerSynced calls landing together must not have the later
+ * save() discard the earlier one's update. And a process whose lock was reaped while it
+ * slept must abort rather than write its stale copy of the peer list over a newer one —
+ * which, for this file, means silently unpairing a device that was just added.
  */
 async function withPeers<T>(fn: (peers: Peer[]) => T | Promise<T>): Promise<T> {
-  return withFileLock(LOCK_PATH, async () => {
-    const peers = await loadPeers();
-    const result = await fn(peers);
-    await savePeers(peers);
-    return result;
-  });
+  return withRegistry(
+    {
+      path: PEERS_PATH,
+      lockPath: LOCK_PATH,
+      name: "the peer list",
+      load: loadPeers,
+      serialize: (peers) => encryptToBuffer(JSON.stringify(peers, null, 2)),
+    },
+    fn,
+  );
 }
 
 export async function addPeer(peer: Peer): Promise<void> {
@@ -119,22 +118,59 @@ export function peerFingerprint(publicKeyX: string): string {
 }
 
 /**
- * `cursor` should be the PEER's own clock (the `serverTime` it reported in the
- * sync response), not ours — using our local clock here would silently miss
- * updates whenever the two machines' clocks disagree (see sync.ts).
+ * `lastSeq` is the delivery cursor: a point in the PEER's own localSeq space, advanced only
+ * as far as what was actually merged (see pullFromPeer). `cursor` is the peer's reported
+ * clock, kept only so the UI can say "synced 4m ago" — it stopped being a cursor in v8,
+ * because a wall-clock cursor is what let a third device's edits vanish.
+ *
+ * `error` is honoured even when `ok` is true: a sync can genuinely succeed and still be
+ * degraded (a peer stuck on sync protocol v1). Recording that as a failure would be a lie;
+ * dropping it silently is the exact habit v3.0 exists to break.
  */
 export async function markPeerSynced(
   id: string,
   ok: boolean,
-  details: { cursor?: string; error?: string; protocolVersion?: number; clockSkewMs?: number } = {},
+  details: { cursor?: string; lastSeq?: number; epoch?: string; error?: string; protocolVersion?: number; clockSkewMs?: number } = {},
 ): Promise<void> {
   await withPeers((peers) => {
     const peer = peers.find((p) => p.id === id);
     if (!peer) return;
     if (ok && details.cursor) peer.lastSyncAt = details.cursor;
+    // Not gated on `ok`, unlike the rest. lastSeq records what actually MERGED, which is a
+    // fact about this store and not about whether the tick finished: a pull that merged four
+    // pages and then lost the connection has still merged four pages. Discarding that credit
+    // made the next tick re-fetch and re-merge them, so a peer that fails late every time
+    // would re-do the same work forever and never converge.
+    if (details.lastSeq !== undefined) peer.lastSeq = details.lastSeq;
+    if (ok && details.epoch !== undefined) peer.epoch = details.epoch;
     peer.lastSyncOk = ok;
-    peer.lastError = ok ? null : (details.error ?? "unknown error");
+    peer.lastError = details.error ?? (ok ? null : "unknown error");
     if (details.protocolVersion !== undefined) peer.protocolVersion = details.protocolVersion;
     if (details.clockSkewMs !== undefined) peer.clockSkewMs = details.clockSkewMs;
+  });
+}
+
+/**
+ * Forgets what this device believes it has already received from every peer.
+ *
+ * Called after a bulk replacement of the local store (`docket backend localize`, a snapshot
+ * import). A cursor says "I already have everything up to N of yours" — which was true of a
+ * store that no longer exists. Left in place, the peer never re-sends the records the
+ * replacement discarded, and both sides report a healthy sync for ever while one of them is
+ * missing work the other has.
+ *
+ * The recorded epoch goes too: it belongs to the same claim.
+ */
+export async function resetPeerCursors(): Promise<number> {
+  return withPeers((peers) => {
+    let reset = 0;
+    for (const peer of peers) {
+      if (peer.lastSeq === undefined && !peer.lastSyncAt && peer.epoch === undefined) continue;
+      delete peer.lastSeq;
+      delete peer.epoch;
+      peer.lastSyncAt = null;
+      reset += 1;
+    }
+    return reset;
   });
 }

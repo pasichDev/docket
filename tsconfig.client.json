@@ -1,0 +1,22 @@
+{
+  "//": "The browser half. Separate from tsconfig.json because it needs the DOM lib and must NOT see node types — a client module that reaches for `process` or `fs` should fail here, not at runtime in someone's tab.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "outDir": "dist/web/client/app",
+    "rootDir": "src/web/client/app",
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmitOnError": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/web/client/app"],
+  "exclude": ["src/web/client/app/**/*.test.ts"]
+}

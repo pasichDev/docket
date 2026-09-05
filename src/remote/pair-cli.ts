@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import { beginServerPairing, finishServerPairing, PairingError } from "./pairing.js";
+import { beginServerPairing, finishServerPairing, PairingError } from "./enrolment.js";
 
 /** `docket pair <serverUrl>` (RFC "Local and Self-Hosted Backend Modes" §11's setup flow, driven directly rather than through the full interactive `docket setup` wizard — that's Phase 4). */
 export async function runPairCommand(args: string[]): Promise<void> {

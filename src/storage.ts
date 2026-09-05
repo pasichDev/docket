@@ -1,10 +1,15 @@
-import { randomUUID } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { copyFile, readFile, rename, rm, stat } from "node:fs/promises";
 import { dataPath } from "./data-dir.js";
+import { atomicCreateOrRead, atomicWriteFile } from "./fs-atomic.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
-import { withFileLock } from "./filelock.js";
+import { withFileLock, LeaseLostError, type Lease } from "./filelock.js";
+import { assertSameGeneration } from "./generation.js";
+import { flushOverflowHistory, pruneOrphanedHistory, replaceHistoryLog } from "./history-store.js";
 import { log } from "./log.js";
-import { shortId } from "./mutations.js";
+import { shortId, stampSeq } from "./mutations.js";
+import { applySnapshot, type SnapshotApplyResult, type WorkspaceSnapshot } from "./snapshot.js";
 import type { Todo, TodoStore } from "./types.js";
 import { uuidv7 } from "./uuid7.js";
 
@@ -12,11 +17,44 @@ const STORE_PATH = await dataPath("todos.json.enc");
 /** Pre-encryption path. Only read once, to migrate; never written again after that. */
 const LEGACY_PLAINTEXT_PATH = await dataPath("todos.json");
 const LOCK_PATH = `${STORE_PATH}.lock`;
+/**
+ * Which incarnation of this store peers are looking at. A random id, in plaintext beside
+ * the store, minted on first use and re-minted whenever the store is bulk-replaced.
+ *
+ * `localSeq` is only meaningful within one incarnation: a peer's cursor is a number in this
+ * store's counter space, and `docket restore` puts an older store — with a lower counter —
+ * back in place. Every peer then sits above the new high-water mark and hears nothing from
+ * this device again. The epoch is what lets the peer notice, because the peer is the side
+ * that actually owns the cursor and the only side that can be wrong about it.
+ *
+ * Deliberately NOT inside the encrypted store, and deliberately NOT in a backup:
+ *  - Outside the store, so `restore` can re-mint it by writing one small file, without
+ *    decrypting anything or touching a key it would then hold stale (see backup.ts).
+ *  - Outside the backup, so restoring onto NEW hardware also mints a fresh one — that case
+ *    brings `peers.json.enc` back with it, so remote peers still hold cursors into the dead
+ *    machine's sequence space, and a value carried along in the backup would match them.
+ */
+const STORE_EPOCH_PATH = await dataPath("store-epoch");
+/**
+ * A byte-for-byte copy of the store as it was immediately before the v7 → v8 migration.
+ *
+ * This exists because of what 2.x does, not what 3.0 does. v2.3.1's `saveStore` serialises
+ * the store from its own v7 type shape: it has never heard of `localSeq`, `workspace` or
+ * `seqCounter`, so if a user upgrades, migrates, then reinstalls 2.x — the natural reaction
+ * to anything feeling off — its very first write STRIPS those fields from every item. A
+ * later re-upgrade then hands out fresh sequence numbers, and every paired peer's cursor
+ * means something different than it did. We cannot patch a released 2.3.1, so the only
+ * defence is to keep the pre-migration bytes where a human can put them back.
+ */
+const PRE_UPGRADE_STORE_PATH = await dataPath("todos.v7-pre-upgrade.enc");
+
+/** The last published release that reads format v7 — what `restore --from-v7` tells the user to reinstall. */
+export const LAST_V7_RELEASE = "2.3.1";
 
 /** Bump this whenever the Todo/TodoStore shape changes in a way old code would misread. */
-export const CURRENT_FORMAT_VERSION = 7; // v7: added workingDeviceId (v6: revision, for optimistic-concurrency If-Match checks) — the claiming device's authenticated identity, so a remote server can gate claim takeovers on context.deviceId instead of the self-reported agent name
+export const CURRENT_FORMAT_VERSION = 8; // v8: localSeq/seqCounter (a per-device delivery cursor separate from updatedAt, so a record merged in from a peer — which lands stamped with the AUTHOR's older updatedAt — can still be handed on to a third device) and `workspace` (v7: workingDeviceId; v6: revision)
 
-const EMPTY_STORE: TodoStore = { formatVersion: CURRENT_FORMAT_VERSION, nextId: 1, todos: [], deletedUuids: [] };
+const EMPTY_STORE: TodoStore = { formatVersion: CURRENT_FORMAT_VERSION, nextId: 1, todos: [], deletedUuids: [], seqCounter: 0 };
 
 /**
  * Reads the raw JSON text of the store, transparently migrating a pre-encryption
@@ -41,10 +79,7 @@ async function readRawStoreJson(): Promise<string | null> {
     throw err;
   }
   log(`storage: migrating legacy plaintext todos.json -> encrypted todos.json.enc`);
-  const tmpPath = `${STORE_PATH}.${randomUUID()}.tmp`;
-  const encrypted = await encryptToBuffer(plaintext);
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  await rename(tmpPath, STORE_PATH);
+  await atomicWriteFile(STORE_PATH, await encryptToBuffer(plaintext));
   try {
     await rename(LEGACY_PLAINTEXT_PATH, `${LEGACY_PLAINTEXT_PATH}.bak`);
   } catch (err) {
@@ -55,8 +90,13 @@ async function readRawStoreJson(): Promise<string | null> {
 }
 
 async function loadStore(): Promise<TodoStore> {
+  return (await loadStoreWithVersion()).store;
+}
+
+/** `fileVersion` is what was actually ON DISK, before migration rewrote it — 0 for a store that predates versioning, and absent entirely for a store that doesn't exist yet. */
+async function loadStoreWithVersion(): Promise<{ store: TodoStore; fileVersion: number | null }> {
   const raw = await readRawStoreJson();
-  if (raw === null) return { ...EMPTY_STORE };
+  if (raw === null) return { store: { ...EMPTY_STORE }, fileVersion: null };
   const parsed = JSON.parse(raw) as TodoStore;
   const fileVersion = parsed.formatVersion ?? 0;
 
@@ -100,19 +140,249 @@ async function loadStore(): Promise<TodoStore> {
       deviceId: todo.deviceId ?? null,
       deviceName: todo.deviceName ?? null,
       history: (todo.history ?? []).map((h) => ({ ...h, deviceName: h.deviceName ?? null })),
+      localSeq: todo.localSeq ?? 0, // 0 = "not yet assigned"; backfilled below
+      // Deliberately NOT guessed for legacy items. There is no honest way to know which
+      // project a v7 item came from, and a wrong workspace hides an item somewhere its
+      // author will never look — strictly worse than an "Unfiled" bucket they can see.
+      workspace: todo.workspace ?? null,
     };
   });
-  parsed.deletedUuids = parsed.deletedUuids ?? [];
+  parsed.deletedUuids = (parsed.deletedUuids ?? []).map((t) => ({ ...t, localSeq: t.localSeq ?? 0 }));
+  backfillLocalSeq(parsed);
   parsed.formatVersion = CURRENT_FORMAT_VERSION;
-  return parsed;
+  return { store: parsed, fileVersion };
 }
 
-async function saveStore(store: TodoStore): Promise<void> {
+/**
+ * Copies the pre-migration store aside, once, before the first write that would persist a
+ * newer format. `COPYFILE_EXCL` is the whole mechanism: if the file is already there the
+ * migration already happened, and overwriting it would replace the last v7 bytes with
+ * post-migration ones — destroying the one thing it exists to protect.
+ *
+ * The at-rest key is deliberately NOT copied: it is a single unversioned `key` file that
+ * 2.x and 3.0 read identically, so the backup decrypts with whatever key is present.
+ */
+async function backUpBeforeUpgrade(fileVersion: number): Promise<void> {
+  try {
+    await copyFile(STORE_PATH, PRE_UPGRADE_STORE_PATH, constants.COPYFILE_EXCL);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") return; // already taken; never overwrite
+    // Not fatal: failing the user's first write because a safety copy couldn't be made
+    // would be worse than proceeding. Loud, though — this is the one line that tells them
+    // the net exists.
+    log(`storage: could not write the pre-upgrade backup at ${PRE_UPGRADE_STORE_PATH}: ${(err as Error).message}`);
+    return;
+  }
+  const message =
+    `docket: migrating this store from data format v${fileVersion} to v${CURRENT_FORMAT_VERSION}. ` +
+    `A copy of the v${fileVersion} store was saved to ${PRE_UPGRADE_STORE_PATH} — if you need to go back to ` +
+    `docket ${LAST_V7_RELEASE}, run \`docket restore --from-v7\` FIRST. Downgrading without it silently ` +
+    `strips the new fields from every item.`;
+  log(message);
+  process.stderr.write(`${message}\n`);
+}
+
+/**
+ * v7 → v8: hand every pre-existing record a delivery sequence number.
+ *
+ * The order has to be STABLE, not merely valid, because this runs on every READ and
+ * readStore() is lock-free: between an upgrade and the first locked write, the MCP process
+ * and the web server can each backfill the same v7 store in memory, and if they disagreed
+ * about which item got which number, whichever wrote first would decide — while the other
+ * had already answered a sync request using the other numbering. Sorting by creation time
+ * with `uuid` as the tiebreak makes every process reach the same answer without
+ * coordinating. Records that already have a number keep it, so a number a peer may already
+ * have used as a cursor is never reassigned underneath it.
+ */
+function backfillLocalSeq(store: TodoStore): void {
+  let counter = store.seqCounter ?? 0;
+  for (const t of store.todos) counter = Math.max(counter, t.localSeq ?? 0);
+  for (const t of store.deletedUuids) counter = Math.max(counter, t.localSeq ?? 0);
+  store.seqCounter = counter;
+
+  const byCreation = store.todos
+    .filter((t) => !t.localSeq)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.uuid.localeCompare(b.uuid));
+  const byDeletion = store.deletedUuids
+    .filter((t) => !t.localSeq)
+    .sort((a, b) => a.deletedAt.localeCompare(b.deletedAt) || a.uuid.localeCompare(b.uuid));
+  for (const rec of [...byCreation, ...byDeletion]) stampSeq(store, rec);
+}
+
+/**
+ * Identity of the store file as we read it — a hash of its actual bytes.
+ *
+ * This used to be (mtime, size), which is cheap and almost always right, and "almost" is
+ * the problem: the guard exists precisely for the case where a suspended writer wakes up
+ * after its lock was reaped, which is a rare path where being almost right is being wrong.
+ * Two ciphertexts of the same store differ in content but very often not in LENGTH — the
+ * plaintext is JSON whose size barely moves for a field edit, and AES-GCM adds a fixed
+ * overhead — and mtime granularity is one second on some filesystems and coarser on others.
+ * A stale writer could satisfy both and overwrite a newer store.
+ *
+ * Hashing the ciphertext costs one read of a file this process is about to rewrite anyway,
+ * and cannot collide by accident.
+ */
+type StoreStamp = string | null;
+
+async function stampOf(): Promise<StoreStamp> {
+  try {
+    return createHash("sha256").update(await readFile(STORE_PATH)).digest("hex");
+  } catch {
+    return null; // no store yet — "unchanged" then means "still absent"
+  }
+}
+
+function sameStamp(a: StoreStamp, b: StoreStamp): boolean {
+  return a === b;
+}
+
+/** Returns the stamp of what it just wrote, so a follow-up commit under the same lock needs no re-read. */
+async function saveStore(store: TodoStore, expected: StoreStamp, lease: Lease): Promise<StoreStamp> {
   store.formatVersion = CURRENT_FORMAT_VERSION;
-  const tmpPath = `${STORE_PATH}.${randomUUID()}.tmp`;
   const encrypted = await encryptToBuffer(JSON.stringify(store, null, 2));
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  await rename(tmpPath, STORE_PATH);
+
+  // Two independent checks, because they catch different things.
+  //
+  // The lease says "this process still holds the lock it took" — it catches a reap that has
+  // already happened, cheaply and by identity.
+  //
+  // The stamp says "the bytes are the ones this operation read" — it catches a lost update
+  // whatever its cause, including one that left the lock looking untouched. A process
+  // suspended past the staleness threshold (laptop sleep, SIGSTOP) cannot heartbeat, gets
+  // its lock reaped, and wakes still inside its own critical section; ownership checks on
+  // the NEXT acquisition are too late for that one.
+  //
+  // Both raise the same LeaseLostError, and deliberately so: to withStore they mean one
+  // thing — "the state you read is no longer the current state, run the mutation again."
+  // Two exception types for one recovery would only invite a retry loop that handles one
+  // and lets the other escape, which is exactly the bug that shipped when the lease check
+  // was added to a loop that only knew about the stamp.
+  await lease.assertOwned();
+  if (!sameStamp(await stampOf(), expected)) {
+    throw new LeaseLostError(LOCK_PATH);
+  }
+  // A third question the other two cannot answer: are these still the same BYTES ON DISK
+  // this process holds a key for? A restore replaces the whole directory, lock and stamp
+  // included, and both checks above would pass against the replacement. Deliberately not
+  // retried — there is no fresh state to retry against, the process itself is stale.
+  await assertSameGeneration();
+  await atomicWriteFile(STORE_PATH, encrypted);
+  return createHash("sha256").update(encrypted).digest("hex");
+}
+
+let cachedEpoch: string | null = null;
+
+/** This store's incarnation id, minted on first use. Cached — it changes only via resetStoreEpoch, which is out-of-process by nature (see backup.ts) and already requires a restart. */
+export async function getStoreEpoch(): Promise<string> {
+  if (cachedEpoch) return cachedEpoch;
+  // Exclusive-create for the same reason as the at-rest key: two fresh processes racing here
+  // would each cache a different epoch, and an epoch is what tells every paired device
+  // whether its cursor into this store still means anything.
+  const contents = await atomicCreateOrRead(
+    STORE_EPOCH_PATH,
+    () => Buffer.from(randomUUID()),
+    (buf) => UUID_RE.test(buf.toString("utf8").trim()),
+  );
+  cachedEpoch = contents.toString("utf8").trim();
+  return cachedEpoch;
+}
+
+/**
+ * Puts the pre-migration (v7) store back, so a downgrade to 2.x has something to read that
+ * it won't corrupt. Renames the current v8 store aside rather than deleting it, exactly as
+ * `docket restore` does — a one-way restore would be its own trap.
+ *
+ * Returns null when there is no pre-upgrade backup: either this install was never migrated,
+ * or it was migrated by a build that predates the backup.
+ */
+export async function restorePreUpgradeStore(): Promise<{ restoredFrom: string; movedAside: string } | null> {
+  try {
+    await stat(PRE_UPGRADE_STORE_PATH);
+  } catch {
+    return null;
+  }
+  const movedAside = `${STORE_PATH}.v8-${new Date().toISOString().replace(/[:.]/g, "-")}.bak`;
+  try {
+    await rename(STORE_PATH, movedAside);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  await copyFile(PRE_UPGRADE_STORE_PATH, STORE_PATH);
+  // The v8 side files mean nothing to 2.x and would be read back as authoritative on a
+  // later re-upgrade, describing a store that no longer exists. Move them aside too.
+  for (const path of [STORE_EPOCH_PATH, await dataPath("history.json.enc")]) {
+    await rename(path, `${path}.v8.bak`).catch(() => {});
+  }
+  cachedEpoch = null;
+  log(`storage: restored the pre-upgrade store from ${PRE_UPGRADE_STORE_PATH}; the v8 store is at ${movedAside}`);
+  return { restoredFrom: PRE_UPGRADE_STORE_PATH, movedAside };
+}
+
+/**
+ * Declares that this store is a different incarnation from the one peers last saw, so their
+ * cursors into it are void. Called after any bulk replacement of the store — today only
+ * `docket restore`. Peers re-download once, which is the correct outcome for what a bulk
+ * replacement actually is.
+ */
+export async function resetStoreEpoch(): Promise<void> {
+  cachedEpoch = randomUUID();
+  await atomicWriteFile(STORE_EPOCH_PATH, cachedEpoch);
+  log(`storage: store epoch reset to ${cachedEpoch} — paired devices will re-sync from scratch`);
+}
+
+/**
+ * Replaces this device's whole store with a snapshot, and resets everything that was only
+ * true of the store being replaced.
+ *
+ * This exists because "bulk replace the todos" is never just that, and the version it
+ * replaces did only that — `backend localize` renamed todos.json.enc aside and re-created
+ * items through the normal mutation path, leaving three things pointing at a store that no
+ * longer existed:
+ *
+ *  - the history sidecar, keyed by uuid, now describing edits the new store does not
+ *    contain, attached to items that may not exist;
+ *  - the store epoch, unchanged, so every paired device believed its cursor into this store
+ *    was still valid — while the sequence space underneath had been rebuilt from 1. A peer
+ *    holding a cursor above the new high-water mark hears nothing from this device again,
+ *    for ever, while reporting successful syncs;
+ *  - this device's own cursors INTO its peers, which still claimed "I have everything up to
+ *    N" for records that had just been discarded, so the peers never re-sent them.
+ *
+ * Each of those is silent, and each survives a restart. Doing all of it in one function is
+ * the only way the next bulk-replacement caller gets them right by default.
+ */
+export async function replaceStoreSnapshot(snapshot: WorkspaceSnapshot): Promise<SnapshotApplyResult> {
+  const stamp = `pre-localize-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  return withFileLock(LOCK_PATH, async (lease) => {
+    const expected = await stampOf();
+    // Keep the outgoing store beside the new one rather than deleting it: a migration that
+    // turns out to have been a mistake has to be recoverable, and this is the only copy.
+    await copyFile(STORE_PATH, `${STORE_PATH}.${stamp}.bak`).catch(() => {});
+
+    const replacement: TodoStore = {
+      formatVersion: CURRENT_FORMAT_VERSION,
+      nextId: 1,
+      todos: [],
+      deletedUuids: [],
+      seqCounter: 0,
+    };
+    const result = applySnapshot(replacement, snapshot);
+    await saveStore(replacement, expected, lease);
+    await replaceHistoryLog(result.history, stamp);
+    return result;
+  }).then(async (result) => {
+    // Both of these are about OTHER devices' view of this one, so they happen after the
+    // store is durable and outside its lock — neither touches todos.json.enc.
+    await resetStoreEpoch();
+    // Imported here rather than at the top: peers.ts is a leaf that nothing else in the
+    // write path needs, and a static import would pull the whole sync stack into every
+    // process that only wanted to read a todo.
+    const { resetPeerCursors } = await import("./peers.js");
+    await resetPeerCursors();
+    return result;
+  });
 }
 
 /**
@@ -120,13 +390,66 @@ async function saveStore(store: TodoStore): Promise<void> {
  * for the whole read-modify-write so concurrent MCP server instances (one
  * per Claude Code session) can't race and silently drop each other's writes.
  */
+/**
+ * How many times a read-modify-write is retried after losing a race. Two contenders resolve
+ * in one retry; more than this means something is wrong that retrying won't fix.
+ */
+const MAX_WRITE_ATTEMPTS = 3;
+
 export async function withStore<T>(fn: (store: TodoStore) => T | Promise<T>): Promise<T> {
-  return withFileLock(LOCK_PATH, async () => {
-    const store = await loadStore();
-    const result = await fn(store);
-    await saveStore(store);
-    return result;
-  });
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await withFileLock(LOCK_PATH, async (lease) => {
+        const expected = await stampOf();
+        const { store, fileVersion } = await loadStoreWithVersion();
+        // Before the first write that would persist a newer format — this is the only
+        // moment the pre-migration bytes still exist.
+        if (fileVersion !== null && fileVersion < CURRENT_FORMAT_VERSION) await backUpBeforeUpgrade(fileVersion);
+
+        const tombstonesBefore = store.deletedUuids.length;
+        const result = await fn(store);
+
+        // The store commits FIRST, carrying its full inline history. Everything after this
+        // line is housekeeping on state that is already durable.
+        //
+        // The sidecar append used to come first, and that was a phantom-event generator: an
+        // attempt that lost the optimistic-concurrency check went round the retry loop and
+        // ran `fn` again, but the entries it had already appended stayed in the audit log.
+        // The result was a permanent record of an edit that never happened — in the one file
+        // whose entire job is to be trustworthy about what happened.
+        const committed = await saveStore(store, expected, lease);
+
+        // Past the commit, nothing may throw into the retry loop: `fn` has taken effect, and
+        // re-running it would apply the mutation twice. History is an audit log, so a failure
+        // to file it is logged and swallowed — the alternative is failing a user's edit
+        // because its audit entry could not be written, which is the wrong trade.
+        try {
+          // Append to the sidecar, then trim the now-redundant inline copies, then commit
+          // that trim. A crash between the append and the trim leaves entries in both
+          // places, which the next flush's dedupe absorbs; the reverse order would drop
+          // exactly the entries that had just been trimmed away.
+          if (await flushOverflowHistory(store)) await saveStore(store, committed, lease);
+          // Pruning is gated on the tombstone list having actually grown — an O(1) check, so
+          // a write that deleted nothing never opens the history file at all.
+          if (store.deletedUuids.length !== tombstonesBefore) await pruneOrphanedHistory(store);
+        } catch (err) {
+          log(`storage: the store was committed but its history housekeeping failed (${(err as Error).message})`);
+        }
+        return result;
+      });
+    } catch (err) {
+      // `fn` is re-run against a freshly loaded store. Every caller in this codebase is a
+      // pure mutation of the store it is handed, which is what makes that safe; a callback
+      // with outside side effects would need to be idempotent.
+      if (!(err instanceof LeaseLostError) || attempt >= MAX_WRITE_ATTEMPTS) {
+        if (err instanceof LeaseLostError) {
+          throw new Error(`docket: the store kept changing underneath this write (${MAX_WRITE_ATTEMPTS} attempts) — is another docket process stuck?`);
+        }
+        throw err;
+      }
+      log(`storage: lost a write race on attempt ${attempt}, retrying against the current store`);
+    }
+  }
 }
 
 /** True local-numeric-id-shaped input — anything else is tried as a short id (case-insensitive, "T-" optional). */
@@ -135,6 +458,31 @@ function isNumericId(id: number | string): id is number {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Two live items whose uuids happen to hash to the same short id.
+ *
+ * The short id is a 6-character hash over a 31-character alphabet, so a collision is not a
+ * theoretical concern at the scale a shared, long-lived, synced list reaches — and the
+ * previous behaviour was to return the FIRST match. Not "an error"; not "the wrong item
+ * reported": `todo_complete T-7K2F9A` would silently complete somebody else's task, and the
+ * only trace would be an audit entry on an item nobody touched.
+ *
+ * Refusing, and naming both candidates by uuid, is the only safe answer — there is no way to
+ * guess which one was meant.
+ */
+export class AmbiguousTodoIdError extends Error {
+  constructor(
+    readonly id: string,
+    readonly candidates: Todo[],
+  ) {
+    super(
+      `docket: "${id}" matches ${candidates.length} items on this device — short ids are a hash, and these two collided. ` +
+        `Use the full uuid instead: ${candidates.map((t) => `${t.uuid} (${t.title})`).join(", ")}`,
+    );
+    this.name = "AmbiguousTodoIdError";
+  }
+}
 
 export function findTodoByAnyId(store: TodoStore, id: number | string): Todo | undefined {
   if (isNumericId(id)) {
@@ -155,7 +503,11 @@ export function findTodoByAnyId(store: TodoStore, id: number | string): Todo | u
   }
   const normalized = String(id).trim().toUpperCase();
   const withPrefix = normalized.startsWith("T-") ? normalized : `T-${normalized}`;
-  return store.todos.find((t) => shortId(t.uuid) === withPrefix);
+  // Every match, not the first: see AmbiguousTodoIdError. The cost is one full scan instead
+  // of an early exit, on a list small enough that the difference is unmeasurable.
+  const matches = store.todos.filter((t) => shortId(t.uuid) === withPrefix);
+  if (matches.length > 1) throw new AmbiguousTodoIdError(withPrefix, matches);
+  return matches[0];
 }
 
 /**

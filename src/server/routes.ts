@@ -10,9 +10,10 @@ import {
   type TodoQuery,
 } from "../repository.js";
 import { CURRENT_FORMAT_VERSION } from "../storage.js";
+import { assertUsableSnapshot, SnapshotFormatError } from "../snapshot.js";
 import { todoService } from "../todo-service.js";
 import type { Todo } from "../types.js";
-import { checkPairingRateLimit } from "../sync.js";
+import { checkPairingRateLimit } from "../sync/peering.js";
 import {
   isDate,
   isPriority,
@@ -24,7 +25,8 @@ import {
   readRawBody,
   SECURITY_HEADERS,
   textOrNull,
-} from "../web/api.js";
+} from "../web/http.js";
+import { isAuthorizedAdminRequest } from "./admin-token.js";
 import { checkDeviceAuth } from "./auth.js";
 import {
   approvePairingRequest,
@@ -50,6 +52,9 @@ export const MIN_CLIENT_PROTOCOL = 1;
 export interface ServeApiContext {
   serverVersion: string;
   startedAt: string;
+  /** The secret from <dataDir>/admin-token. See server/admin-token.ts for why a source
+   *  address is not an identity once a reverse proxy is in the picture. */
+  adminToken: string;
 }
 
 /** RFC §19: the local numeric id MUST NOT be part of the remote protocol. Every wire Todo uses the short human-facing id (see shortId() in mutations.ts) in `id`, plus the canonical `uuid`. */
@@ -78,6 +83,10 @@ function remoteContext(req: IncomingMessage, deviceId: string, deviceName: strin
     session: header("x-docket-session"),
     deviceId,
     deviceName,
+    // Which project the calling session is in, so items file themselves there rather than
+    // landing unfiled. Self-reported like agent/session — the server has no view of the
+    // client's filesystem — and descriptive rather than a security boundary.
+    workspace: header("x-docket-workspace"),
   };
 }
 
@@ -109,6 +118,7 @@ interface TodoRequestBody {
   priority?: unknown;
   dueDate?: unknown;
   sourceUrl?: unknown;
+  workspace?: unknown;
 }
 
 function parseJsonBody(res: ServerResponse, raw: string): unknown | null {
@@ -120,7 +130,12 @@ function parseJsonBody(res: ServerResponse, raw: string): unknown | null {
   }
 }
 
-/** Strictly 127.0.0.1/::1 — NOT the machine's LAN IP, even though `docket serve` might be bound to 0.0.0.0. Admin device-management is meant to be reachable only from the box itself (SSH, a local terminal), never from anywhere the API port is also reachable from — matching RFC §13's `docket devices pair` being a command run ON the server. */
+/**
+ * Strictly 127.0.0.1/::1. Retained as defence in depth, NOT as the authorization boundary:
+ * a reverse proxy — which the docs recommend for HTTPS — makes every forwarded request look
+ * loopback, so this alone would let anyone on the internet reach the admin routes. The
+ * credential check in isAuthorizedAdminRequest is what actually decides.
+ */
 function isLoopbackRequest(req: IncomingMessage): boolean {
   const addr = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
   return addr === "127.0.0.1" || addr === "::1";
@@ -204,14 +219,20 @@ export async function handleServeApiRoute(
     return true;
   }
 
-  // 4. Admin device management — loopback-only (see isLoopbackRequest above), backing
-  // `docket devices pair|list|revoke` (RFC §24 headless requirement). Deliberately NOT
-  // gated by device-signature auth: the operator running these on the server machine
-  // itself IS the trust boundary, same model web.ts already uses for its own
-  // pairing-approval routes (ctx.hasUiSession — "this browser is running on this device").
+  // 4. Admin device management, backing `docket devices pair|list|revoke` (RFC §24).
+  // Authorised by a local secret rather than by device signature: the operator on the
+  // server machine has no paired device of their own yet — approving the first one is the
+  // whole point — so the credential has to be something only a local process can read.
   if (url.pathname.startsWith("/api/v1/admin/devices")) {
-    if (!isLoopbackRequest(req)) {
-      json(res, 403, { error: "admin device routes are only reachable from the server machine itself (127.0.0.1)" });
+    // Both, and the token is the one that matters. A request forwarded by a reverse proxy
+    // satisfies the loopback check and cannot satisfy this one: the secret lives in a 0600
+    // file on the server, and being proxied does not obtain it.
+    if (!isLoopbackRequest(req) || !isAuthorizedAdminRequest(req, ctx.adminToken)) {
+      json(res, 403, {
+        error:
+          "admin device routes require the local admin token — run `docket devices …` on the server machine itself, " +
+          "as the user that runs `docket serve`",
+      });
       return true;
     }
     if (req.method === "POST" && url.pathname === "/api/v1/admin/devices/pairing-code") {
@@ -295,6 +316,48 @@ export async function handleServeApiRoute(
     return true;
   }
 
+  /*
+   * 5b. Workspace snapshots — RFC §28/§29's migration path, as one operation rather than a
+   * loop of creates.
+   *
+   * These carry the whole logical workspace: canonical uuids, project structure, chronology,
+   * completion, revision, provenance, full history and tombstones. The thing they replace
+   * re-created every item through POST /todos, which produced new uuids and today's
+   * timestamps and no history — a migration that silently discarded most of what made the
+   * workspace that workspace.
+   *
+   * Authenticated as any other device call: a paired device may move its own workspace here
+   * or take it away, which is exactly what pairing is for. Not admin-gated, deliberately —
+   * requiring the admin token would mean a user could not migrate onto their own server
+   * without shell access to it.
+   */
+  if (req.method === "GET" && url.pathname === "/api/v1/snapshot") {
+    const migrationId = url.searchParams.get("migrationId") ?? undefined;
+    const snapshot = await todoService.exportSnapshot(migrationId);
+    json(res, 200, { snapshot });
+    return true;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/v1/snapshot") {
+    const body = parseJsonBody(res, rawBody);
+    if (body === null) return true;
+    try {
+      const snapshot = (body as { snapshot?: unknown }).snapshot;
+      assertUsableSnapshot(snapshot);
+      const result = await todoService.importSnapshot(snapshot);
+      // 200 rather than 201 for a repeat: the caller asked for a state, and the state is
+      // already there. A retry after a dead connection is a success, not a conflict.
+      json(res, result.alreadyApplied ? 200 : 201, result);
+    } catch (err) {
+      if (err instanceof SnapshotFormatError) {
+        json(res, 400, { error: err.message });
+        return true;
+      }
+      throw err;
+    }
+    return true;
+  }
+
   // 6. Todos — List
   if (req.method === "GET" && url.pathname === "/api/v1/todos") {
     const filterParam = url.searchParams.get("filter");
@@ -308,6 +371,7 @@ export async function handleServeApiRoute(
       agent: url.searchParams.get("agent") ?? undefined,
       session: url.searchParams.get("session") ?? undefined,
       inProgress: url.searchParams.get("inProgress") === "true" ? true : undefined,
+      workspace: url.searchParams.get("workspace") || undefined,
     };
     const todos = await todoService.list(query);
     json(res, 200, { todos: todos.map(toWireTodo) });
@@ -333,6 +397,10 @@ export async function handleServeApiRoute(
         priority: isPriority(b.priority) ? b.priority : null,
         dueDate: isDate(b.dueDate) ? b.dueDate : null,
         sourceUrl: typeof b.sourceUrl === "string" && isSafeUrl(b.sourceUrl) ? b.sourceUrl : null,
+        // Only when the caller named one explicitly. Left undefined, create() falls back to
+        // the calling session's own project from X-Docket-Workspace, which is what makes
+        // filing automatic rather than something an agent has to remember.
+        workspace: typeof b.workspace === "string" ? textOrNull(b.workspace) : undefined,
       },
       context,
     );

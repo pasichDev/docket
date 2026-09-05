@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 /**
  * DeploymentMode config system (RFC "Local and Self-Hosted Backend Modes" §10). Read once
@@ -21,6 +22,17 @@ export interface ConfigFile {
   version: number;
   deployment: ConfigFileDeployment;
   allowInsecureRemote?: boolean;
+  /**
+   * Where this user's docket data lives, when it is not the default.
+   *
+   * Previously this existed only as DOCKET_DATA_DIR in each MCP host's config and in a
+   * shell rc — which meant `docket backup` typed in a terminal that had never sourced that
+   * rc backed up an empty ~/.docket and reported success, while the real store sat
+   * somewhere else. One place that every entry point reads is the only way "the same
+   * directory everywhere" can be true; the environment variable still wins over it, for
+   * a single command or a container, and `docket status` says which one is in force.
+   */
+  dataDir?: string;
 }
 
 export interface DeploymentConfig {
@@ -32,6 +44,15 @@ export interface DeploymentConfig {
   source: "cli" | "env" | "config" | "default";
 }
 
+/**
+ * A deployment that cannot be resolved into something safe to run: "remote" mode with no
+ * server URL, a malformed URL, or a plaintext http:// server without the explicit
+ * allow-insecure opt-in.
+ *
+ * Always fatal at startup, never recoverable at runtime, and deliberately so — the
+ * alternative to failing here is silently falling back to local storage while the operator
+ * believes their data is going to a server.
+ */
 export class DeploymentConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -162,20 +183,56 @@ export async function resolveDeploymentConfig(options: ResolveDeploymentConfigOp
  * before writing, same as `docket pair`'s existing flow already does.
  */
 export async function writeDeploymentConfig(deployment: ConfigFileDeployment, options: ResolveDeploymentConfigOptions = {}): Promise<string> {
+  return updateConfigFile((existing) => ({ ...existing, deployment }), options);
+}
+
+/** Records where docket's data lives, so every entry point resolves the same directory without an environment variable. */
+export async function writeDataDirectoryConfig(dataDir: string, options: ResolveDeploymentConfigOptions = {}): Promise<string> {
+  return updateConfigFile((existing) => ({ ...existing, dataDir }), options);
+}
+
+/**
+ * Read-modify-write of the whole config file, preserving every field this build does not
+ * know about.
+ *
+ * The version this replaces rebuilt the object from a fixed list of keys, so a config
+ * written by a NEWER docket lost whatever it had added the moment an older one switched
+ * modes — a silent downgrade of the user's settings, performed by a command that had
+ * nothing to do with them.
+ */
+async function updateConfigFile(
+  mutate: (existing: Partial<ConfigFile>) => Partial<ConfigFile>,
+  options: ResolveDeploymentConfigOptions = {},
+): Promise<string> {
   const path = configFilePath(options);
   let existing: Partial<ConfigFile> = {};
   try {
     existing = JSON.parse(await readFile(path, "utf8")) as Partial<ConfigFile>;
   } catch {
     // No config file yet, or an unreadable one — start fresh rather than fail a mode switch
-    // over a field (allowInsecureRemote) this function doesn't even require.
+    // over a field this function doesn't even require.
   }
-  const next: ConfigFile = {
-    version: 1,
-    deployment,
-    ...(existing.allowInsecureRemote !== undefined ? { allowInsecureRemote: existing.allowInsecureRemote } : {}),
-  };
+  const next = { ...mutate(existing), version: 1 } as ConfigFile;
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  await atomicWriteFile(path, `${JSON.stringify(next, null, 2)}\n`);
   return path;
+}
+
+/**
+ * The configured data directory, if any, and nothing else — deliberately separate from
+ * resolveDeploymentConfig so data-dir.ts can ask this question without pulling deployment
+ * resolution (and its "remote mode with no URL is fatal" behaviour) into every process that
+ * only wants to know where to put a file.
+ */
+export async function readConfiguredDataDirectory(options: ResolveDeploymentConfigOptions = {}): Promise<string | null> {
+  try {
+    const raw = await readFile(configFilePath(options), "utf8");
+    const parsed = JSON.parse(raw) as Partial<ConfigFile>;
+    return typeof parsed.dataDir === "string" && parsed.dataDir.trim() ? parsed.dataDir : null;
+  } catch {
+    // Absent, unreadable or malformed: the data directory falls back to its defaults, which
+    // is the same answer every install without a config file already gets. A broken config
+    // must not stop docket from finding the store it has always used.
+    return null;
+  }
 }

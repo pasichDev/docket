@@ -1,8 +1,9 @@
 import { createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomUUID } from "node:crypto";
-import { chmod, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, readFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dataPath } from "./data-dir.js";
-import { withFileLock } from "./filelock.js";
+import { withFileLock, type Lease } from "./filelock.js";
+import { atomicWriteFile } from "./fs-atomic.js";
 
 const DEVICE_PATH = await dataPath("device.json");
 const DEVICE_LOCK_PATH = `${DEVICE_PATH}.lock`;
@@ -42,18 +43,22 @@ interface DeviceIdentity {
 
 let cached: DeviceIdentity | null = null;
 
-/** device.json holds the X25519 private key — exactly as sensitive as the peers/todos encryption keys, so it gets the same owner-only permissions (writeFile's mode is masked by umask on some platforms; the explicit chmod re-asserts it). */
-async function writeIdentity(identity: DeviceIdentity): Promise<void> {
-  const temporaryPath = `${DEVICE_PATH}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporaryPath, JSON.stringify(identity, null, 2), { mode: 0o600 });
-    await chmod(temporaryPath, 0o600);
-    await rename(temporaryPath, DEVICE_PATH);
-    await chmod(DEVICE_PATH, 0o600);
-  } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => {});
-    throw error;
-  }
+/**
+ * device.json holds the X25519 private key — exactly as sensitive as the peers/todos
+ * encryption keys, so it gets the same owner-only permissions (the temp file is created
+ * with the mode directly, and rename carries it over, so there is no window where the key
+ * sits on disk world-readable).
+ *
+ * The lease is not decoration. This file IS this machine's identity: losing a write here
+ * does not lose a todo, it swaps the keypair every already-paired peer authenticates
+ * against. A process suspended inside its critical section — a closed laptop lid is enough
+ * — wakes with the lock long since reaped and taken over, and would otherwise overwrite a
+ * newer identity with the one it read minutes ago. Proving the lock is still ours
+ * immediately before the write is the whole guard.
+ */
+async function writeIdentity(identity: DeviceIdentity, lease: Lease): Promise<void> {
+  await lease.assertOwned();
+  await atomicWriteFile(DEVICE_PATH, JSON.stringify(identity, null, 2));
 }
 
 type StoredIdentity = Partial<DeviceIdentity> & { id: string; name: string };
@@ -78,7 +83,7 @@ async function readIdentityFile(): Promise<StoredIdentity | null> {
  */
 async function getOrCreateIdentity(): Promise<DeviceIdentity> {
   if (cached) return cached;
-  return withFileLock(DEVICE_LOCK_PATH, async () => {
+  return withFileLock(DEVICE_LOCK_PATH, async (lease) => {
     // Another process can create the identity while this process waits for the
     // lock. Recheck inside the critical section before generating any keypair.
     if (cached) return cached;
@@ -103,7 +108,7 @@ async function getOrCreateIdentity(): Promise<DeviceIdentity> {
       role: stored?.role ?? "host",
       ...keys,
     };
-    await writeIdentity(identity);
+    await writeIdentity(identity, lease);
     cached = identity;
     return identity;
   });
@@ -135,10 +140,21 @@ export async function getDeviceRole(): Promise<DeviceRole> {
 
 /** Called once, the moment this device successfully joins another device's group via "I have a code" — permanent until manually reset by unpairing from everyone. */
 export async function setDeviceRole(role: DeviceRole): Promise<void> {
-  const identity = await getOrCreateIdentity();
-  if (identity.role === role) return;
-  identity.role = role;
-  await writeIdentity(identity);
+  // Ensure the identity exists BEFORE taking the lock — getOrCreateIdentity takes the same
+  // one, and this is a read-modify-write of the whole file, not a field update.
+  await getOrCreateIdentity();
+  await withFileLock(DEVICE_LOCK_PATH, async (lease) => {
+    // Re-read inside the critical section: the cached copy was loaded at some earlier
+    // point, and writing it back would undo anything another process has changed since.
+    const stored = await readIdentityFile();
+    const current: DeviceIdentity =
+      stored?.publicKeyX && stored.privateKeyJwk && stored.role ? (stored as DeviceIdentity) : cached!;
+    cached = current;
+    if (current.role === role) return;
+    const updated: DeviceIdentity = { ...current, role };
+    await writeIdentity(updated, lease);
+    cached = updated;
+  });
 }
 
 /**

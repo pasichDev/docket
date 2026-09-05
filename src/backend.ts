@@ -1,13 +1,12 @@
-import { rename } from "node:fs/promises";
 import { assertSecureRemoteUrl, writeDeploymentConfig } from "./config.js";
 import { createLineReader, type LineReader } from "./cli-prompt.js";
-import { dataPath, getDataDirectory } from "./data-dir.js";
+import { getDataDirectory } from "./data-dir.js";
 import { getDeviceId, getDeviceName } from "./device.js";
-import { beginServerPairing, finishServerPairing, PairingError } from "./remote/pairing.js";
+import { beginServerPairing, finishServerPairing, PairingError } from "./remote/enrolment.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } from "./remote/client.js";
-import { LocalTodoRepository, type MutationContext, type TodoRepository } from "./repository.js";
-import { readStore } from "./storage.js";
+import { LocalTodoRepository, type SnapshotImportResult, type TodoRepository } from "./repository.js";
+import { readStore, replaceStoreSnapshot } from "./storage.js";
 import type { Todo } from "./types.js";
 
 /**
@@ -23,38 +22,29 @@ function insecureRemoteAllowed(): boolean {
   return process.env.DOCKET_ALLOW_INSECURE_REMOTE === "1" || process.env.DOCKET_ALLOW_INSECURE_REMOTE === "true";
 }
 
-async function migrationContext(): Promise<MutationContext> {
-  return { agent: "docket-migration", session: null, deviceId: await getDeviceId(), deviceName: await getDeviceName() };
-}
-
 /**
- * Re-creates every item from `source` in `target` via the ordinary TodoRepository
- * create()/complete() calls — the SAME mutation rules every other caller goes through
- * (RFC §8), not a raw store copy. This intentionally does NOT preserve uuid, history,
- * original timestamps, or claim state: a migrated item is a fresh item on the
- * destination side, faithful in user-visible content (title/description/category/
- * priority/dueDate/sourceUrl/list/done) but not a byte-identical replica. Good enough for
- * "move my workspace to a new home"; explicitly not a backup/restore substitute (see
- * `docket backup`/`restore` for that).
+ * Moves a whole workspace from `source` to `target`, as one snapshot.
+ *
+ * This replaces a per-item loop of create()/complete() calls that was described, honestly
+ * enough, as "faithful in user-visible content but not a byte-identical replica". What it
+ * actually produced on the far side was a set of NEW items — new uuids, so every paired
+ * device saw the whole workspace vanish and a different one appear; today's timestamps, so
+ * the chronology went; no history; and, once v3 made project structure the centre of the
+ * product, no workspace either, so everything landed in Unfiled. None of that was reported.
+ *
+ * It also could not be retried. Halfway through, a dropped connection left both sides
+ * populated, and the next attempt refused to continue and told the user to repair it by
+ * hand. A snapshot carries a migration id, so the destination can recognise a repeat and
+ * report what already landed instead of copying it twice — which makes "run it again" the
+ * correct advice at every point of failure.
  */
-export async function copyTodos(source: TodoRepository, target: TodoRepository, context: MutationContext): Promise<number> {
-  const todos = await source.list({ filter: "all", list: "all" });
-  for (const todo of todos) {
-    const created = await target.create(
-      {
-        title: todo.title,
-        description: todo.description,
-        list: todo.list,
-        category: todo.category,
-        priority: todo.priority,
-        dueDate: todo.dueDate,
-        sourceUrl: todo.sourceUrl,
-      },
-      context,
-    );
-    if (todo.done) await target.complete(created.id, context);
-  }
-  return todos.length;
+export async function transferWorkspace(
+  source: TodoRepository,
+  target: TodoRepository,
+  migrationId?: string,
+): Promise<SnapshotImportResult> {
+  const snapshot = await source.exportSnapshot(migrationId);
+  return target.importSnapshot(snapshot);
 }
 
 async function askChoice(reader: LineReader, question: string, options: string[]): Promise<number> {
@@ -187,10 +177,29 @@ async function runBackendUse(args: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      const uploaded = await copyTodos(new LocalTodoRepository(), remoteRepo, await migrationContext());
-      console.log(`Uploaded ${uploaded} todo(s) to ${serverUrl}.`);
+      let result: SnapshotImportResult;
+      try {
+        result = await transferWorkspace(new LocalTodoRepository(), remoteRepo);
+      } catch (err) {
+        // Nothing has been committed at this point except whatever the server accepted, and
+        // the server records the migration id — so the honest instruction is to run the same
+        // command again, not to repair anything by hand.
+        console.error(`Migration failed: ${(err as Error).message}`);
+        console.error("Nothing was switched over. Run `docket backend use` again — the transfer resumes rather than duplicating what already arrived.");
+        process.exitCode = 1;
+        return;
+      }
+      console.log(
+        `Uploaded ${result.imported} todo(s) to ${serverUrl}` +
+          `${result.alreadyPresent > 0 ? ` (${result.alreadyPresent} were already there)` : ""}` +
+          `${result.tombstones > 0 ? `, plus ${result.tombstones} deletion(s)` : ""}.`,
+      );
+      console.log("Project structure, history, timestamps and item identities were carried over unchanged.");
     }
 
+    // Only now: the mode switch is the last thing, so a failed transfer never leaves this
+    // device pointed at a server that does not have its data.
+    await stopLocalDaemon();
     await writeDeploymentConfig({ mode: "remote", serverUrl });
     console.log(`Deployment mode set to remote (${serverUrl}).`);
     if (choice === 1) console.log(`Local workspace left untouched at ${await getDataDirectory()}.`);
@@ -229,30 +238,41 @@ async function runBackendLocalize(): Promise<void> {
     }
 
     const localStore = await readStore();
+    let replace = localStore.todos.length === 0;
     if (localStore.todos.length > 0) {
       console.log(`Warning: the local store at ${await getDataDirectory()} already has ${localStore.todos.length} local todo(s).`);
-      const overwrite = await reader.askYesNo(
+      replace = await reader.askYesNo(
         "Overwrite them with the downloaded snapshot? The current local store is renamed aside as a .bak file, not deleted.",
         false,
       );
-      if (!overwrite) {
+      if (!replace) {
         console.log("Cancelled.");
         return;
       }
-      const storePath = await dataPath("todos.json.enc");
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      try {
-        await rename(storePath, `${storePath}.pre-localize-${stamp}.bak`);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      }
     }
 
-    const downloaded = await copyTodos(remoteRepo, new LocalTodoRepository(), await migrationContext());
+    let snapshot;
+    try {
+      snapshot = await remoteRepo.exportSnapshot();
+    } catch (err) {
+      console.error(`Download failed: ${(err as Error).message}`);
+      console.error("Nothing was changed locally. Run `docket backend localize` again when the server is reachable.");
+      process.exitCode = 1;
+      return;
+    }
+
+    // One function owns every piece of state a bulk replacement invalidates — the history
+    // sidecar, the store epoch, and this device's cursors into its peers. Doing it here,
+    // inline, is how the previous version left a paired device permanently deaf.
+    const result = await replaceStoreSnapshot(snapshot);
+
     // Remote credentials are deliberately NOT cleared (RFC §29: "Remote credentials remain
     // stored but inactive so reconnecting later is possible") — only deployment.mode flips.
     await writeDeploymentConfig({ mode: "local" });
-    console.log(`Downloaded ${downloaded} todo(s) from ${creds.serverUrl} into the local store.`);
+    console.log(
+      `Downloaded ${result.imported} todo(s)${result.tombstones > 0 ? ` and ${result.tombstones} deletion(s)` : ""} from ${creds.serverUrl} into the local store.`,
+    );
+    console.log("Paired devices will re-sync this workspace from scratch — their cursors into the replaced store no longer mean anything.");
     console.log(`Deployment mode set to local. Reconnect any time with: docket backend use ${creds.serverUrl}`);
   } finally {
     reader.close();
@@ -276,4 +296,57 @@ export async function runBackendCommand(args: string[]): Promise<void> {
   if (sub === "use") return runBackendUse(args.slice(1));
   if (sub === "localize") return runBackendLocalize();
   printHelp();
+}
+
+/**
+ * Stops the detached local web/P2P process before this device switches to remote mode.
+ *
+ * The dashboard is spawned detached and unref'd by every MCP session (see
+ * ensureWebUiRunning in index.ts) and runs a sync tick on a timer. Switching the MCP side to
+ * remote does nothing to it: it keeps serving, keeps pulling from paired peers, and keeps
+ * writing to a local store that is no longer the source of truth — so work typed into that
+ * dashboard, or arriving from a peer, lands somewhere the user can no longer see.
+ *
+ * Best-effort by nature — there is no supervisor here, only a port and a pid — so it reports
+ * what it could not do rather than pretending. What it must never do is claim success it
+ * cannot verify.
+ */
+export async function stopLocalDaemon(): Promise<void> {
+  const port = Number(process.env.DOCKET_WEB_PORT ?? 8787);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+
+  let pid: number | null = null;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/version`, { signal: AbortSignal.timeout(800) });
+    if (!res.ok) return;
+    const body = (await res.json()) as { pid?: unknown };
+    pid = typeof body.pid === "number" ? body.pid : null;
+  } catch {
+    return; // nothing running, which is the state we want
+  }
+  if (pid === null) {
+    console.warn(`Warning: a docket dashboard is running on 127.0.0.1:${port} but did not report its pid — stop it manually before using this device in remote mode.`);
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (err) {
+    console.warn(`Warning: could not stop the local dashboard (pid ${pid}): ${(err as Error).message}. Stop it manually — it is still syncing with paired devices into the local store.`);
+    return;
+  }
+
+  // Verify, rather than assume. A daemon that ignored SIGTERM is exactly the case this
+  // exists for, and reporting "stopped" for a process that is still running would be worse
+  // than not trying.
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      process.kill(pid, 0);
+    } catch {
+      console.log("Stopped the local dashboard and its peer-sync loop.");
+      return;
+    }
+  }
+  console.warn(`Warning: the local dashboard (pid ${pid}) did not exit. Stop it manually — until then it keeps syncing paired devices into the local store this device no longer reads.`);
 }

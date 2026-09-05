@@ -25,7 +25,7 @@ each uses a specific, named primitive, documented below and in the
   run and commit that built it, verifiable via `npm audit signatures`.
   `docket update` also self-tests the freshly installed version before
   keeping it, and rolls back automatically if that fails. See the
-  [README's Updating section](../README.md#updating).
+  [README's Updating section](../README.md#backup--updating).
 
 ## 2. P2P sync (Local Mode)
 
@@ -144,3 +144,79 @@ Full pairing/crypto/merge mechanics are documented in
 See [`self-hosting.md`](self-hosting.md) for setup, and the
 [README's Deployment modes](../README.md#deployment-modes) for how this
 compares to Local Mode and P2P sync.
+
+## 5. The audit log's write ordering
+
+Since v3.0 an item's history lives in `history.json.enc`, beside the store rather than
+inside it — every mutation used to re-serialise and re-encrypt every item's full history
+along with the store it was attached to, so an item worked on all week made every later
+write to any *other* item more expensive.
+
+Both files are written under the same lock, in a fixed order: **history first, then the
+store**, and an item's inline entries are trimmed only once the side file is safely on
+disk. Three consequences, all deliberate:
+
+- A crash between the two writes leaves the side file holding entries the store still has
+  inline too. The deduplication on the next flush absorbs that. The other order would drop
+  exactly the entries that had just been trimmed away.
+- A crash *after* a flush that pruned a deleted item's log, but before the store write,
+  loses that item's history while the item itself comes back. The item is recoverable; its
+  audit trail is not.
+- A side file that exists but cannot be decrypted is never overwritten, only skipped — a
+  transient failure (a wrong key mid-restore, say) must not turn into permanent loss.
+
+The consequence to be explicit about: **history can lag the store by one write, and in the
+pruning case can lose an entry outright.** That is accepted rather than worked around.
+History is an audit log — a diagnostic for "who changed this and when" — not the source of
+truth for any item's state, and a two-phase commit across two encrypted files would buy
+consistency for a record nothing reads to make a decision.
+
+`history.json.enc` carries the same at-rest protection as `todos.json.enc` (AES-256-GCM
+under the same locally generated key), is included in `docket backup`, and an item's log is
+deleted along with the item.
+
+Three related limits worth stating plainly:
+
+- **Only recent entries cross the wire during P2P sync.** What a peer sends is the tail of
+  its inline history, not its whole log. A device's history is therefore a complete record
+  of what *it* did, plus whatever recent activity reached it from peers — not a full record
+  of everything every other device did.
+- **A claim renewal writes no history entry.** A renewal is the absence of an event — same
+  agent, same session, same item — and at one heartbeat every few minutes per active item
+  it was the main driver of history growth. Who holds a claim and until when is still
+  recorded on the item itself.
+- **The split moves the cost off the common write, it does not remove it.** Flushing
+  rewrites the whole audit log, so it is batched: an item accumulates entries inline and
+  pays for one rewrite roughly every `HISTORY_FLUSH_THRESHOLD` writes, instead of on every
+  write. Reads of the todo list never touch the file at all.
+
+## 6. The live session registry
+
+`sessions.json` records which agent sessions are open right now: the agent name the host
+reported, the resolved project, the process id, and **the absolute path of the working
+directory**. It is written on MCP startup and touched on tool calls; entries are removed on
+clean shutdown and reaped by TTL or a dead pid otherwise.
+
+Three properties, each chosen rather than defaulted into:
+
+- **It is not encrypted.** It holds no user content — no titles, no descriptions, nothing an
+  item ever said. What it does hold is process metadata, and the most sensitive thing in it
+  is a directory path, which is already visible to anything on this machine that can run
+  `ps` or read `/proc`. Encrypting it would mean touching the at-rest key on every
+  heartbeat, on a path deliberately kept off the store's lock, to protect something the
+  operating system already discloses to the same audience.
+- **It is not synced, and never leaves the device.** A session open on another machine tells
+  you nothing you can act on — you cannot switch to a terminal that isn't in front of you —
+  so shipping paths from one machine to another would add exposure and buy nothing. It is
+  also excluded from `docket backup` for the same reason: a restored backup should not
+  resurrect a list of sessions that ended.
+- **Its paths are readable by anything running as this user.** Same boundary as the rest of
+  `~/.docket`: the at-rest encryption there protects against a stray `git add -A`, a backup
+  tool that ignores permissions, or another account on a shared machine — not against code
+  already running as you. If a project's *path* is itself sensitive on a shared machine,
+  note that the file is `chmod 600` like everything else in the data directory, and that
+  `docket sessions` is the only thing that reads it.
+
+The web UI serves this list at `/api/sessions`, behind the same Viewer Gate as every other
+browser-facing route (§3) — so a LAN device that has not been explicitly approved cannot
+read your directory paths.

@@ -3,6 +3,7 @@ import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dataPath } from "../data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "../crypto.js";
 import { withFileLock } from "../filelock.js";
+import { atomicWriteFile } from "../fs-atomic.js";
 
 /**
  * This device's credentials for the ONE remote server it's paired with (RFC "Local and
@@ -39,17 +40,20 @@ export async function loadRemoteCredentials(): Promise<RemoteServerCredentials |
 }
 
 export async function saveRemoteCredentials(creds: RemoteServerCredentials): Promise<void> {
-  await withFileLock(LOCK_PATH, async () => {
-    const tmpPath = `${CREDENTIALS_PATH}.${randomUUID()}.tmp`;
+  await withFileLock(LOCK_PATH, async (lease) => {
     const encrypted = await encryptToBuffer(JSON.stringify(creds, null, 2));
-    await writeFile(tmpPath, encrypted, { mode: 0o600 });
-    await rename(tmpPath, CREDENTIALS_PATH);
+    // A whole-record replacement rather than a read-modify-write, so there is nothing to
+    // merge — but a process that lost its lease must still not resurrect credentials for a
+    // server this device has since been re-paired away from.
+    await lease.assertOwned();
+    await atomicWriteFile(CREDENTIALS_PATH, encrypted);
   });
 }
 
 /** Used by a future `docket backend localize` (RFC §29) — not called by anything in this phase, kept alongside save/load since it's the obvious counterpart and trivial to get right here. */
 export async function clearRemoteCredentials(): Promise<void> {
-  await withFileLock(LOCK_PATH, async () => {
+  await withFileLock(LOCK_PATH, async (lease) => {
+    await lease.assertOwned();
     await rm(CREDENTIALS_PATH, { force: true });
   });
 }

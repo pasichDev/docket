@@ -6,10 +6,11 @@ import type { TodoStore } from "./types.js";
 
 function makeStore(): TodoStore {
   return {
-    formatVersion: 5,
+    formatVersion: 8,
     nextId: 1,
     todos: [],
     deletedUuids: [],
+    seqCounter: 0,
   };
 }
 

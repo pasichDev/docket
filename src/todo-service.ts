@@ -8,10 +8,12 @@ import {
   type EditTodoInput,
   type MutationContext,
   type RepositoryHealth,
+  type SnapshotImportResult,
   type TodoId,
   type TodoQuery,
   type TodoRepository,
 } from "./repository.js";
+import type { WorkspaceSnapshot } from "./snapshot.js";
 import type { Todo } from "./types.js";
 
 /**
@@ -69,6 +71,14 @@ export class TodoService {
 
   health(): Promise<RepositoryHealth> {
     return this.repository.health();
+  }
+
+  exportSnapshot(migrationId?: string): Promise<WorkspaceSnapshot> {
+    return this.repository.exportSnapshot(migrationId);
+  }
+
+  importSnapshot(snapshot: WorkspaceSnapshot): Promise<SnapshotImportResult> {
+    return this.repository.importSnapshot(snapshot);
   }
 
   private async notFoundToNull<T>(promise: Promise<T>): Promise<T | null> {

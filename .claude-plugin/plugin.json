@@ -1,7 +1,7 @@
 {
-  "name": "docket-claim",
-  "description": "Claim/release workflow skill for the docket MCP server's shared backlog.",
-  "version": "1.0.0",
+  "name": "docket",
+  "description": "Field and tool reference for docket, the shared list every AI tool and project writes to.",
+  "version": "2.0.0",
   "author": {
     "name": "pasichDev",
     "url": "https://github.com/pasichDev"

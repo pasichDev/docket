@@ -5,34 +5,151 @@ on:
     tags: ["v*"] # e.g. git tag v1.0.0 && git push origin v1.0.0
 
 jobs:
-  publish:
+  # Nothing reaches npm before this passes. The previous version of this workflow built the
+  # package and published it: a tag pointing at any commit on any branch — a fork's, an
+  # abandoned experiment's, one whose tests had never run — became a published release, and
+  # the only gate was that `tsc` succeeded.
+  verify:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      dist_tag: ${{ steps.version.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the ancestry check below needs history, not a shallow tip
+
+      - name: The tag must point at a commit that is on main
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not an ancestor of origin/main."
+            echo "Releases are cut from reviewed main. Merge first, then tag the merged commit."
+            exit 1
+          fi
+          echo "${GITHUB_SHA} is on main."
+
+      - name: The tag must match the version it claims to publish
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version."
+            exit 1
+          fi
+          # A prerelease MUST NOT become `latest`. npm's default dist-tag is latest, so
+          # publishing 3.0.0-rc.1 from this workflow used to make every `npm install
+          # @pasichdev/docket` and every unpinned `npx` in the world resolve to a release
+          # candidate — including the update checker, which would then offer it to stable
+          # users as an upgrade.
+          if [[ "$version" == *-* ]]; then dist_tag=next; else dist_tag=latest; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$dist_tag" >> "$GITHUB_OUTPUT"
+          echo "publishing $version to the '$dist_tag' dist-tag"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+      - run: npm ci
+
+      # The full gate, re-run on the exact tagged tree rather than trusted from whatever CI
+      # ran on the branch.
+      - run: npm run build
+      - run: npm test
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: The packed artifact must work in an isolated HOME
+        run: |
+          set -euo pipefail
+          # Captured and matched in memory rather than piped into `grep -q`, which exits on
+          # its first match and SIGPIPEs the still-writing `docket` — exit 141 under pipefail.
+          tarball="$(npm pack --silent | tail -1)"
+          scratch="$(mktemp -d)"
+          export HOME="$scratch"
+          export DOCKET_DATA_DIR="$scratch/data"
+          npm install -g "$PWD/$tarball"
+          installed="$(docket --version)"
+          if [ "$installed" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::the packed artifact reports $installed, not ${{ steps.version.outputs.version }}."
+            exit 1
+          fi
+          docket import /dev/stdin <<'EOF'
+          # Docket
+          - [ ] release gate smoke test
+          EOF
+          listed="$(docket list --all)"
+          grep -q "release gate smoke test" <<< "$listed"
+          status="$(docket status)"
+          grep -q "^Mode: local" <<< "$status"
+
+      - name: The published server metadata must match this version
+        run: |
+          set -euo pipefail
+          if [ -f server.json ]; then
+            metadata_version="$(node -p "require('./server.json').version ?? ''")"
+            if [ -n "$metadata_version" ] && [ "$metadata_version" != "${{ steps.version.outputs.version }}" ]; then
+              echo "::error::server.json says $metadata_version but package.json says ${{ steps.version.outputs.version }}."
+              exit 1
+            fi
+          fi
+
+      - name: The image must build and answer on the exact tagged tree
+        run: |
+          set -euo pipefail
+          docker build -t docket:release .
+          docker run -d --name docket-release -v docket-release-data:/data docket:release
+          for i in $(seq 1 30); do
+            if docker exec docket-release wget -q --spider http://127.0.0.1:8788/api/v1/health; then break; fi
+            sleep 1
+          done
+          health="$(docker exec docket-release wget -qO- http://127.0.0.1:8788/api/v1/health)"
+          grep -q '"ok":true' <<< "$health"
+          pairing="$(docker exec docket-release docket devices pair)"
+          grep -qE '^[A-Z0-9]{6}$' <<< "$(head -1 <<< "$pairing")"
+          docker rm -f docket-release
+          docker volume rm docket-release-data
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    # A protected environment: the release credentials are only reachable from a job that
+    # required an approval, so a pushed tag alone cannot spend them.
+    environment: release
     permissions:
       contents: read
       id-token: write # required for `npm publish --provenance` (Sigstore-backed attestation)
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      # --- Publish the npm package ---
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
           registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm run build
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build package
-        run: npm run build
-
-      - name: Publish package to npm
-        run: npm publish --provenance
+      - name: Publish to npm
+        run: npm publish --provenance --tag "${{ needs.verify.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Confirm the dist-tags landed where they were meant to
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          for attempt in $(seq 1 10); do
+            latest="$(npm view @pasichdev/docket dist-tags.latest 2>/dev/null || echo '')"
+            if [ -n "$latest" ]; then break; fi
+            sleep 5
+          done
+          echo "latest is now $latest"
+          if [[ "$version" == *-* ]] && [ "$latest" = "$version" ]; then
+            echo "::error::prerelease $version became the 'latest' dist-tag. Fix with: npm dist-tag add @pasichdev/docket@<previous stable> latest"
+            exit 1
+          fi
 
       # --- Publish server metadata to the official MCP Registry ---
       # Requires a server.json in the repo root (generate once locally with

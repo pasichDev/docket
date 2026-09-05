@@ -7,7 +7,38 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  # The engines field claims ">=18". Until this matrix existed, that claim was evidenced by
+  # exactly one moving `lts/*` on Ubuntu — so a syntax or API that only exists in a newer
+  # Node would ship green, and the first person to hear about it would be a user on 18.
+  test:
+    name: test (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: ["18", "20", "22", "24"]
+        include:
+          # macOS is the other platform this is actually used on daily. One version is
+          # enough: what differs there is the filesystem and process behaviour the lock,
+          # the atomic writes and the daemon probes depend on — not the language level.
+          - os: macos-latest
+            node: "20"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm run build
+      # `npm test`, not a copy of its glob. The duplicate silently stopped running the
+      # browser-client tests the moment they moved into dist/web/client/app, and CI stayed
+      # green while a whole directory went unexecuted.
+      - run: npm test
+
+  # What a user actually installs, rather than what the repository happens to contain: the
+  # packed tarball, unpacked into an isolated HOME, exercised through its published bins.
+  pack-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -16,4 +47,58 @@ jobs:
           node-version: "lts/*"
       - run: npm ci
       - run: npm run build
-      - run: node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js
+      - name: Install the packed artifact into an isolated HOME
+        run: |
+          set -euo pipefail
+          # Output is captured and matched in memory, never piped into `grep -q` or `head`.
+          # Those exit as soon as they have what they need, which closes the pipe under a
+          # `docket` that is still writing — SIGPIPE, exit 141, and with `pipefail` that is
+          # a failed step reporting nothing about what actually went wrong.
+          tarball="$(npm pack --silent | tail -1)"
+          scratch="$(mktemp -d)"
+          export HOME="$scratch"
+          export DOCKET_DATA_DIR="$scratch/data"
+          npm install -g "$PWD/$tarball"
+          docket help > /dev/null
+          docket import /dev/stdin <<'EOF'
+          # Docket
+          - [ ] packed artifact smoke test
+          EOF
+          listed="$(docket list --all)"
+          grep -q "packed artifact smoke test" <<< "$listed"
+          exported="$(docket export --format json)"
+          grep -q "packed artifact smoke test" <<< "$exported"
+          status="$(docket status)"
+          grep -q "^Mode: local" <<< "$status"
+          echo "packed artifact works end to end"
+
+  # The documented build path — `npm run build` inside the image — was never executed by CI,
+  # which is how the Dockerfile came to copy one of the three tsconfigs it needs.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the image
+        run: docker build -t docket:ci .
+      - name: The documented commands must work inside it
+        run: |
+          set -euo pipefail
+          docker run -d --name docket-ci -v docket-ci-data:/data docket:ci
+          for i in $(seq 1 30); do
+            if docker exec docket-ci wget -q --spider http://127.0.0.1:8788/api/v1/health; then break; fi
+            sleep 1
+          done
+          health="$(docker exec docket-ci wget -qO- http://127.0.0.1:8788/api/v1/health)"
+          grep -q '"ok":true' <<< "$health"
+          # docs/headless.md's first instruction to a new self-hoster. It needs `docket` on
+          # PATH inside the runtime image, which the image did not have.
+          #
+          # Captured whole, then matched: `… | head -1` closes the pipe after the first of
+          # this command's four lines, and the SIGPIPE that kills the writer is exit 141.
+          pairing="$(docker exec docket-ci docket devices pair)"
+          grep -qE '^[A-Z0-9]{6}$' <<< "$(head -1 <<< "$pairing")"
+          # Non-root, on the volume the compose file actually uses.
+          whoami_out="$(docker exec docket-ci id)"
+          grep -q 'uid=100(docket)' <<< "$whoami_out"
+          docker rm -f docket-ci
+          docker volume rm docket-ci-data

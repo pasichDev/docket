@@ -1,16 +1,21 @@
 import { deriveServerAuthSecret, getDeviceId, getDeviceName, getDevicePublicKey } from "../device.js";
-import { pairingSas } from "../sync.js";
+import { pairingSas } from "../sync/peering.js";
 import { assertSecureRemoteUrl } from "../config.js";
 import { saveRemoteCredentials } from "./credentials.js";
 import { CLIENT_PROTOCOL_VERSION, MIN_COMPATIBLE_SERVER_PROTOCOL } from "./protocol.js";
 
 /**
- * Client-side half of RFC "Local and Self-Hosted Backend Modes" §13 (Pairing) — the
- * `docket pair <serverUrl>` flow. Reuses the same X25519 ECDH + SAS building blocks the
- * existing P2P pairing UX already relies on (device.ts, sync.ts's pairingSas), adapted for
- * "pair with a server" instead of "pair with a peer": the server publishes its own
- * identity via the public GET /api/v1/info (RFC §23) rather than an out-of-band QR/code
- * carrying it, since a headless server has no screen to show one on.
+ * ENROLMENT: attaching this device to a central docket server. Client-side half of RFC
+ * "Local and Self-Hosted Backend Modes" §13, reached as `docket pair <serverUrl>`.
+ *
+ * Named apart from sync/peering.ts on purpose. That one is device-to-device between
+ * equals; this is device-to-authority. They share the X25519 ECDH + SAS building blocks
+ * (device.ts, sync/peering.ts's pairingSas) and the code alphabet (short-code.ts), and
+ * nothing else — different trust models, different failure modes, and for a long time
+ * the same word, which meant a reader grepping "pairing" got both and no way to tell.
+ *
+ * The user-facing command stays `docket pair`: "enrol" is precise for us and jargon for
+ * the person typing it.
  */
 
 export interface ServerInfo {
@@ -22,6 +27,16 @@ export interface ServerInfo {
   devicePublicKeyX: string;
 }
 
+/**
+ * Any failure while attaching this device to a docket SERVER — the deployment in config.ts's
+ * "remote" mode, not the device-to-device peering in sync/peering.ts.
+ *
+ * One error type on purpose: every step here (fetch the server's info, check protocol
+ * compatibility, redeem the code, persist the credential) fails the same way from the
+ * caller's side — the device is not paired and the message says which step refused — and
+ * splitting that into a hierarchy would give `docket pair` several catch arms that all
+ * print the message and exit 1.
+ */
 export class PairingError extends Error {}
 
 async function fetchServerInfo(serverUrl: string): Promise<ServerInfo> {

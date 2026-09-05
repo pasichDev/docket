@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { dataPath } from "./data-dir.js";
 import { decryptFromBuffer, encryptToBuffer } from "./crypto.js";
-import { withFileLock } from "./filelock.js";
+import { withRegistry } from "./registry.js";
 
 /**
  * A browser that was explicitly approved (by the host clicking Approve on an
@@ -33,20 +33,17 @@ export async function loadViewers(): Promise<Viewer[]> {
   }
 }
 
-async function saveViewers(viewers: Viewer[]): Promise<void> {
-  const tmpPath = `${VIEWERS_PATH}.${randomUUID()}.tmp`;
-  const encrypted = await encryptToBuffer(JSON.stringify(viewers, null, 2));
-  await writeFile(tmpPath, encrypted, { mode: 0o600 });
-  await rename(tmpPath, VIEWERS_PATH);
-}
-
 async function withViewers<T>(fn: (viewers: Viewer[]) => T | Promise<T>): Promise<T> {
-  return withFileLock(LOCK_PATH, async () => {
-    const viewers = await loadViewers();
-    const result = await fn(viewers);
-    await saveViewers(viewers);
-    return result;
-  });
+  return withRegistry(
+    {
+      path: VIEWERS_PATH,
+      lockPath: LOCK_PATH,
+      name: "the viewer list",
+      load: loadViewers,
+      serialize: (viewers) => encryptToBuffer(JSON.stringify(viewers, null, 2)),
+    },
+    fn,
+  );
 }
 
 export async function addViewer(viewer: Viewer): Promise<void> {

@@ -1,7 +1,7 @@
 {
   "name": "@pasichdev/docket",
-  "version": "2.3.1",
-  "description": "One shared workspace for your AI coding agents. Local-first and self-hostable.",
+  "version": "3.0.0-rc.2",
+  "description": "One list every AI tool you use can write to — across every project, before the work is worth a ticket. Local-first, self-hostable.",
   "license": "MIT",
   "author": "pasichDev",
   "homepage": "https://github.com/pasichDev/docket#readme",
@@ -17,15 +17,17 @@
     "mcp",
     "model-context-protocol",
     "mcp-server",
+    "local-first",
     "todo",
-    "todo-list",
-    "task-manager",
     "backlog",
+    "multi-agent",
+    "agent-workspace",
     "claude",
     "claude-code",
-    "claude-desktop",
+    "codex",
+    "cursor",
     "ai-agent",
-    "productivity",
+    "developer-tools",
     "typescript"
   ],
   "type": "module",
@@ -37,7 +39,8 @@
   "files": [
     "dist",
     "!dist/**/*.test.js",
-    "skills"
+    "skills",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "access": "public"
@@ -47,12 +50,12 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc && tsc -p tsconfig.client.json && tsc -p tsconfig.client-test.json",
     "start": "node dist/index.js",
     "web": "node dist/web.js",
     "stats": "node dist/stats.js",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test dist/*.test.js dist/web/*.test.js dist/server/*.test.js dist/remote/*.test.js",
+    "test": "npm run build && DOCKET_DATA_DIR=\"${DOCKET_TEST_DATA_DIR:-$(mktemp -d)}\" node --test dist/*.test.js dist/web/*.test.js dist/web/client/app/*.test.js dist/server/*.test.js dist/remote/*.test.js dist/hooks/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
@@ -64,5 +67,9 @@
     "@types/node": "^24.0.0",
     "@types/qrcode": "^1.5.6",
     "typescript": "^5.7.0"
-  }
+  },
+  "overrides": {
+    "qs": "^6.16.0"
+  },
+  "//overrides": "qs 6.14.2-6.15.3 has a moderate array-limit bypass. It reaches us only through @modelcontextprotocol/sdk -> express, which Docket never loads (stdio transport only), so it is not reachable here — but shipping a package whose audit is red trains people to ignore the audit. 6.16.0 is the upstream fix."
 }

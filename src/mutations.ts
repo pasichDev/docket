@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { diffDetail, pushHistory } from "./history.js";
-import type { Todo, TodoList, TodoPriority, TodoStore } from "./types.js";
+import type { Todo, TodoList, TodoPriority, TodoStore, Tombstone } from "./types.js";
 import { uuidv7 } from "./uuid7.js";
 
 // No 0/O, 1/I/L — same unambiguous charset as the pairing short codes.
@@ -41,6 +41,8 @@ export interface NewTodoInput {
   sourceUrl?: string | null;
   agent: string | null;
   session: string | null;
+  /** Resolved from the caller's project context, never typed by an agent — see src/workspace.ts. */
+  workspace?: string | null;
 }
 
 /**
@@ -73,6 +75,9 @@ export const FIELD_KEYS = [
   "workingSession",
   "workingLeaseExpiresAt",
   "workingDeviceId",
+  // Merges per-field like any other content field: moving an item between workspaces on
+  // one device must survive a concurrent unrelated edit on another.
+  "workspace",
 ] as const satisfies readonly (keyof Todo)[];
 export type FieldKey = (typeof FIELD_KEYS)[number];
 
@@ -102,6 +107,7 @@ export function createTodo(store: TodoStore, input: NewTodoInput, deviceId: stri
     sourceUrl: input.sourceUrl && isSafeUrl(input.sourceUrl) ? input.sourceUrl : null,
     agent: input.agent,
     session: input.session,
+    workspace: input.workspace ?? null,
     workingAgent: null,
     workingSince: null,
     workingSession: null,
@@ -115,11 +121,26 @@ export function createTodo(store: TodoStore, input: NewTodoInput, deviceId: stri
     deviceId,
     deviceName,
     history: [],
+    localSeq: 0, // replaced immediately by stampSeq below; never left at 0 in a saved store
   };
+  stampSeq(store, todo);
   pushHistory(todo, input.agent, "created", `title: "${input.title}"`, deviceName);
   store.nextId += 1;
   store.todos.push(todo);
   return todo;
+}
+
+/**
+ * Assigns this store's next delivery sequence number to a record. Called on every local
+ * write — including accepting a peer's change during merge, which IS a local write even
+ * though the content came from elsewhere. `store` is threaded through every mutation
+ * helper rather than kept in a module-level counter precisely so this can't be forgotten:
+ * a mutation path that doesn't have the store won't compile, instead of silently
+ * producing a record no peer will ever be told about.
+ */
+export function stampSeq(store: TodoStore, rec: { localSeq: number }): void {
+  store.seqCounter = (store.seqCounter ?? 0) + 1;
+  rec.localSeq = store.seqCounter;
 }
 
 /**
@@ -128,14 +149,31 @@ export function createTodo(store: TodoStore, input: NewTodoInput, deviceId: stri
  * fields you actually changed, not the whole FIELD_KEYS list, or two
  * independent edits to different fields will falsely look like a conflict.
  */
-export function touch(item: Todo, deviceId: string, deviceName: string, changedFields: readonly FieldKey[] = []): void {
-  const now = new Date().toISOString();
+export function touch(store: TodoStore, item: Todo, deviceId: string, deviceName: string, changedFields: readonly FieldKey[] = []): void {
+  // A write is BY DEFINITION later than the version it overwrites, and taking the wall clock
+  // literally breaks that on a device whose clock lags. Such a device stamps its edit EARLIER
+  // than the record it just changed; every peer then compares the two, judges its own copy
+  // newer, and discards the edit — so the editing device is the only one in the mesh that
+  // ever sees its own change, silently. If it then deletes the item, that is ignored too, and
+  // the item is gone locally but alive everywhere else, permanently.
+  //
+  // Clamping forward costs nothing when the clock is fine. It is NOT a general answer to
+  // clock skew — two devices editing different records still race on wall-clock order, which
+  // is what remoteWinsTie makes at least deterministic. It enforces the narrower thing that
+  // must hold regardless: one record's own history moves in one direction.
+  const floor = changedFields.reduce((max, field) => {
+    const at = item.fieldTimestamps?.[field];
+    return at && at > max ? at : max;
+  }, item.updatedAt ?? "");
+  const wallClock = new Date().toISOString();
+  const now = wallClock > floor ? wallClock : new Date(Date.parse(floor) + 1).toISOString();
   item.updatedAt = now;
   item.revision = (item.revision ?? 1) + 1;
   item.deviceId = deviceId;
   item.deviceName = deviceName;
   item.fieldTimestamps = item.fieldTimestamps ?? {};
   for (const field of changedFields) item.fieldTimestamps[field] = now;
+  stampSeq(store, item);
 }
 
 /**
@@ -164,6 +202,7 @@ const PATCH_FIELDS = ["title", "description", "category", "priority", "dueDate",
  * identical history and merge metadata. Returns whether anything changed.
  */
 export function applyEdits(
+  store: TodoStore,
   item: Todo,
   patch: TodoPatch,
   agent: string | null,
@@ -182,7 +221,7 @@ export function applyEdits(
   const changed = Object.keys(changes);
   if (changed.length === 0) return false;
   pushHistory(item, agent, "edited", diffDetail(changes), deviceName);
-  touch(item, deviceId, deviceName, changed as FieldKey[]);
+  touch(store, item, deviceId, deviceName, changed as FieldKey[]);
   return true;
 }
 
@@ -203,6 +242,7 @@ function clearClaim(item: Todo): void {
  * so "claimed since" still reflects when the work actually started, not the last heartbeat.
  */
 export function claimTodo(
+  store: TodoStore,
   item: Todo,
   agent: string | null,
   session: string | null,
@@ -216,32 +256,53 @@ export function claimTodo(
   item.workingSession = session;
   item.workingLeaseExpiresAt = leaseExpiry();
   item.workingDeviceId = deviceId;
-  const detail = isRenewal ? "lease renewed" : previousAgent && previousAgent !== agent ? `took over from ${previousAgent}` : "claimed";
-  pushHistory(item, agent, "claimed", detail, deviceName);
-  touch(item, deviceId, deviceName, CLAIM_FIELDS);
+  // A renewal writes no history on purpose. It is the ABSENCE of an event — the same agent,
+  // in the same session, still on the same item — and at one heartbeat every few minutes per
+  // active item it was the single biggest source of history growth, which the write path
+  // pays for on every unrelated mutation. The claim's own fields still record who holds it
+  // and until when, so nothing observable is lost.
+  if (!isRenewal) {
+    pushHistory(item, agent, "claimed", previousAgent && previousAgent !== agent ? `took over from ${previousAgent}` : "claimed", deviceName);
+  }
+  touch(store, item, deviceId, deviceName, CLAIM_FIELDS);
   return previousAgent;
 }
 
 /** Drops the claim without completing the item. */
-export function releaseTodo(item: Todo, agent: string | null, deviceId: string, deviceName: string): void {
+export function releaseTodo(store: TodoStore, item: Todo, agent: string | null, deviceId: string, deviceName: string): void {
   clearClaim(item);
   pushHistory(item, agent, "released", "released", deviceName);
-  touch(item, deviceId, deviceName, CLAIM_FIELDS);
+  touch(store, item, deviceId, deviceName, CLAIM_FIELDS);
 }
 
 /** Marks done and drops any claim — shared by the MCP tool and the web API so both stamp the same fields. */
-export function completeTodo(item: Todo, agent: string | null, deviceId: string, deviceName: string): void {
+export function completeTodo(store: TodoStore, item: Todo, agent: string | null, deviceId: string, deviceName: string): void {
   item.done = true;
   item.completedAt = new Date().toISOString();
   clearClaim(item);
   pushHistory(item, agent, "completed", "marked done", deviceName);
-  touch(item, deviceId, deviceName, ["done", "completedAt", ...CLAIM_FIELDS]);
+  touch(store, item, deviceId, deviceName, ["done", "completedAt", ...CLAIM_FIELDS]);
 }
 
 /** Removes the item and records why it disappeared, so a paired device doesn't resurrect it on next sync. */
 export function tombstoneDelete(store: TodoStore, item: Todo, deviceId: string | null): void {
   store.deletedUuids = store.deletedUuids ?? [];
-  store.deletedUuids.push({ uuid: item.uuid, deletedAt: new Date().toISOString(), deviceId });
+  // A deletion is BY DEFINITION later than the version it deletes, and taking the wall
+  // clock literally breaks that on a device whose clock lags. Such a device writes a
+  // tombstone stamped before the item's own `updatedAt`; every other device then compares
+  // the two, judges the item newer than the deletion, and keeps it — so the delete is
+  // silently ignored across the whole mesh while the deleting device, which removed it
+  // locally, is the only one that loses it. It never gets it back either, because the
+  // peers' copies sit below its delivery cursor by then.
+  //
+  // Ordering the tombstone after the record it supersedes costs nothing when the clock is
+  // fine and is the entire fix when it isn't. It does not affect edit-after-delete: an edit
+  // genuinely later than the deletion still wins and resurrects the item.
+  const now = new Date().toISOString();
+  const deletedAt = now > item.updatedAt ? now : new Date(Date.parse(item.updatedAt) + 1).toISOString();
+  const tombstone: Tombstone = { uuid: item.uuid, deletedAt, deviceId, localSeq: 0 };
+  stampSeq(store, tombstone);
+  store.deletedUuids.push(tombstone);
   store.todos = store.todos.filter((t) => t.uuid !== item.uuid);
 }
 

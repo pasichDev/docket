@@ -49,9 +49,13 @@ export async function runServeCommand(args: string[]): Promise<void> {
 
   const { installProcessLogging, log } = await import("../log.js");
   const { getCurrentVersion } = await import("../update.js");
+  const { finishAnyInterruptedRestore } = await import("../backup.js");
   const { startServeServer } = await import("./server.js");
 
   installProcessLogging("serve");
+  // Before the first read of the store: a restore interrupted partway through its commit
+  // leaves this directory half old and half new, and serving it would publish the mixture.
+  await finishAnyInterruptedRestore();
   const serverVersion = await getCurrentVersion(fileURLToPath(import.meta.url)).catch(() => "0.0.0-unknown");
 
   let running: Awaited<ReturnType<typeof startServeServer>>;

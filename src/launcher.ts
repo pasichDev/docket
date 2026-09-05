@@ -1,10 +1,30 @@
 #!/usr/bin/env node
 
+// A CLI's stdout is routinely a pipe that closes early — `docket list | head`, a shell
+// prompt widget that stops reading, a hook whose host exited. Node surfaces that as an
+// unhandled 'error' on the stream, which kills the process with a stack trace where every
+// other Unix tool exits quietly. Installed here, before any command is dispatched, so no
+// entry point has to remember it. For the stdio MCP server the same event means the host
+// closed the connection, where exiting is also the right answer.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE") process.exit(0);
+    throw err;
+  });
+}
+
+
 // Keep the setup path free of the MCP server's persistence imports. This is
 // important for `npx ... setup` in restricted agent sandboxes.
 if (process.argv[2]?.toLowerCase() === "setup") {
   const { runInteractiveSetup } = await import("./setup.js");
   await runInteractiveSetup(process.argv.slice(3));
+} else if (process.argv[2]?.toLowerCase() === "hook") {
+  // Dispatched before index.js so the SessionStart hook never loads the MCP server, the
+  // device identity or the encrypted store. It runs before every Claude Code session with a
+  // 20ms budget; importing any of that would spend the whole budget before doing any work.
+  const { runHookCommand } = await import("./hooks/cli.js");
+  await runHookCommand(process.argv.slice(3));
 } else if (process.argv[2]?.toLowerCase() === "serve") {
   // Dispatched before index.js's stdio MCP server (or anything it imports) ever loads —
   // `docket serve` is a completely different process shape (an HTTP server, no stdio

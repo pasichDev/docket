@@ -59,21 +59,49 @@ todo.home.example {
 }
 ```
 
+Note what a proxy does to source addresses: every request it forwards reaches docket from
+`127.0.0.1`. Device management is therefore **not** gated on the request looking local — it
+requires a secret that `docket serve` writes to `admin-token` in the data directory, mode
+0600, which `docket devices …` reads because it runs as the same user on the same machine.
+A proxied request cannot obtain it. Do not forward `/api/v1/admin/` through the proxy, and
+do not add the token to a proxy configuration.
+
 For trusted-LAN-only development, plain HTTP is allowed but requires an explicit opt-in on
 every client — see [`security.md`](security.md#4-self-hosted-clientserver-traffic).
 
 ## Option B: Docker / docker-compose
 
 ```sh
-mkdir -p data
 docker compose up -d
+```
+
+That is the whole quickstart — there is no directory to create first. The compose file uses
+a **named volume** (`docket-data`) rather than a bind mount, and the reason matters if you
+change it: the image runs as an unprivileged `docket` user and owns `/data` at build time. A
+bind mount covers that with a host directory, which `mkdir -p data` creates owned by *you*
+at 0755, so the container user cannot write to it and docket exits at startup saying it has
+no writable data directory. A named volume inherits the image's ownership.
+
+To keep the data somewhere you can browse it, bind-mount **and** hand it to the container's
+user first:
+
+```sh
+mkdir -p data && sudo chown -R 100:101 data   # the image's docket:docket
+# then in docker-compose.yml:  volumes: ["./data:/data"]
+```
+
+Already running something on 8788 (a `docket serve` outside Docker, say)? The published host
+port is overridable:
+
+```sh
+DOCKET_HOST_PORT=18788 docker compose up -d
 ```
 
 This builds the image locally from this checkout (`build: .` in
 [`docker-compose.yml`](../docker-compose.yml)) — no image is published yet, so there's
-nothing to pull. The compose file maps port 8788 and a `./data` volume, and includes a
-container healthcheck against `/api/v1/health`. The `Dockerfile` (repo root) is a
-multi-stage build targeting `linux/amd64` and `linux/arm64`.
+nothing to pull. The compose file also includes a container healthcheck against
+`/api/v1/health`. The `Dockerfile` (repo root) is a multi-stage build targeting
+`linux/amd64` and `linux/arm64`.
 
 If you'd rather publish an image once and pull it on multiple machines instead of building
 locally on each one:
@@ -133,6 +161,8 @@ init/tini layer needed to forward the signal.
 3. **Upgrade and restart:**
    - systemd: `sudo npm install -g @pasichdev/docket@latest && sudo systemctl restart docket`
    - Docker (local build): `git pull && docker compose up -d --build`
+     (the named volume survives a rebuild — `docker compose down` alone never touches it;
+     only `down -v` removes it)
    - Docker (published image): `docker compose pull && docker compose up -d`
 4. **Verify** with `docket status` (exit code 0, `Status: connected`/local health all
    green) before considering the upgrade done. If something looks wrong, `docket restore
