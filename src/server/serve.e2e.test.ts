@@ -484,7 +484,9 @@ test("docket serve: a loopback request without the admin token cannot manage dev
     const authorised = await adminFetch(running.dataDir, `${baseUrl}/api/v1/admin/devices`, { method: "GET" });
     assert.equal(authorised.status, 200, "the admin token no longer opens the admin routes");
   } finally {
-    running?.child.kill();
-    await rm(serverDataDir, { recursive: true, force: true });
+    // cleanup(), not a bare kill: the server writes admin-token at startup, and removing the
+    // directory while the process is still on its way out is an ENOTEMPTY waiting for a
+    // slower machine. CI found it on the first run that actually executed this test.
+    await cleanup(running, serverDataDir);
   }
 });
