@@ -226,6 +226,23 @@ export function mergeSyncPayload(
       removedUuids.add(remoteTomb.uuid);
       localByUuid.delete(remoteTomb.uuid);
       deleted += 1;
+    } else if (local) {
+      /*
+       * Our copy is NEWER than the deletion we just accepted, so the item survives — and the
+       * peer that deleted it has no idea.
+       *
+       * This is the same rule the todo loop above applies when it refuses a stale edit, and
+       * leaving it out here is a permanent split: the deleting peer's cursor has long since
+       * moved past our record's sequence number, so it will never ask for it again, and our
+       * copy sits at that old number for ever. One device shows the item, another shows it
+       * deleted, both report a healthy sync, and no amount of further syncing fixes it —
+       * because there is nothing left to send.
+       *
+       * Re-stamping the survivor is what puts it back above their cursor. It settles rather
+       * than ping-pongs: once they have this version, their tombstone stops being newer than
+       * anything, and this branch stops firing.
+       */
+      stampSeq(store, local);
     }
   }
   if (removedUuids.size > 0) store.todos = store.todos.filter((t) => !removedUuids.has(t.uuid));

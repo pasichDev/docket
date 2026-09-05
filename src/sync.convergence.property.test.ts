@@ -7,12 +7,58 @@ import { test } from "node:test";
 const originalDataDirectory = process.env.DOCKET_DATA_DIR;
 const dataDirectory = await mkdtemp(join(tmpdir(), "docket-convergence-test-"));
 process.env.DOCKET_DATA_DIR = dataDirectory;
+
+/* ==========================================================================================
+ * A clock the seed controls
+ *
+ * The point of a seeded property test is that a failure reproduces. This one did not: the
+ * seed drove the topology, the operations and the skews, but `mutations.ts` reads the real
+ * clock, so whether two operations landed in the same millisecond depended on how fast the
+ * machine was. A seed that failed on a CI runner passed everywhere else — which is the worst
+ * possible outcome, because it makes a genuine convergence failure indistinguishable from
+ * noise and trains everyone to re-run the job.
+ *
+ * The clock is now part of the seed. It is installed before mutations.js is imported, since
+ * that module captures nothing but does call `new Date()` on every mutation.
+ * ========================================================================================== */
+const RealDate = Date;
+const EPOCH = RealDate.parse("2026-03-01T12:00:00.000Z");
+let virtualNow = EPOCH;
+
+/**
+ * How far the clock may jump between operations, and how many seeds to sweep.
+ *
+ * The defaults keep the suite fast. Both are overridable because the interesting question
+ * after a failure is "does this survive a deeper search?", and answering it should not
+ * require editing the test:
+ *
+ *   DOCKET_CONVERGENCE_SEEDS=20000 DOCKET_CONVERGENCE_CLOCK_STEP=1 npm test
+ *
+ * A step of 1 means `Math.floor(random() * 1)` — always zero — so every operation in a run
+ * shares one millisecond and every comparison falls through to the tie-break. That is the
+ * hardest case for last-write-wins and the cheapest one to search.
+ */
+const CLOCK_STEP_MS = Number(process.env.DOCKET_CONVERGENCE_CLOCK_STEP ?? 3);
+const SEED_COUNT = Number(process.env.DOCKET_CONVERGENCE_SEEDS ?? 500);
+
+class VirtualDate extends RealDate {
+  constructor(...args: ConstructorParameters<typeof Date> | []) {
+    if (args.length === 0) super(virtualNow);
+    else super(...(args as ConstructorParameters<typeof Date>));
+  }
+  static now(): number {
+    return virtualNow;
+  }
+}
+globalThis.Date = VirtualDate as unknown as DateConstructor;
+
 const { applyEdits, createTodo, tombstoneDelete } = await import("./mutations.js");
-const { buildSyncPayload } = await import("./sync/payload.js");
+const { buildSyncPayload, cursorAfterPage } = await import("./sync/payload.js");
 const { mergeSyncPayload } = await import("./sync/merge.js");
 import type { Todo, TodoStore } from "./types.js";
 
 test.after(() => {
+  globalThis.Date = RealDate;
   if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;
   else process.env.DOCKET_DATA_DIR = originalDataDirectory;
   return rm(dataDirectory, { recursive: true, force: true });
@@ -107,12 +153,27 @@ function withSkew(device: Device, floor: string | null, mutate: () => Todo | nul
   for (const [field, at] of Object.entries(item.fieldTimestamps ?? {})) {
     if (at === stamped) item.fieldTimestamps[field] = shifted;
   }
+  // EVERY timestamp this mutation just wrote moves onto the device's clock, `createdAt`
+  // included. Shifting only `updatedAt` modelled a machine whose creation time came from a
+  // correct clock and whose edit time came from a skewed one — which does not exist, and
+  // which puts `createdAt` up to a minute and a half AHEAD of the record's own `updatedAt`.
+  //
+  // That is not a harmless inaccuracy. A field with no per-field timestamp falls back to
+  // `createdAt`, so a creation time in the future made an untouched field unbeatable: a
+  // genuinely newer edit from another device lost every comparison, for ever, and the test
+  // reported a convergence failure the code could not produce. The comment above about
+  // getting the order wrong applies to which timestamps move, not just to when.
+  if (item.createdAt === stamped) item.createdAt = shifted;
   item.updatedAt = shifted;
 }
 
 type OpLog = string[];
 
 function randomOperation(devices: Device[], random: () => number, log: OpLog): void {
+  // Zero is deliberately in range: two operations inside one millisecond is the case that
+  // used to depend on how fast the machine was, and it is the case last-write-wins finds
+  // hardest — equal timestamps fall through to the tie-break.
+  virtualNow += Math.floor(random() * CLOCK_STEP_MS);
   const index = Math.floor(random() * devices.length);
   const device = devices[index];
   const { store } = device;
@@ -148,8 +209,16 @@ function pull(devices: Device[], cursors: Map<string, number>, edge: Edge): void
   const key = `${edge.to}<-${edge.from}`;
   const cursor = cursors.get(key) ?? 0;
   const payload = buildSyncPayload(devices[edge.from].store, cursor);
-  mergeSyncPayload(devices[edge.to].store, payload, devices[edge.from].id);
-  cursors.set(key, payload.maxSeq ?? cursor);
+  const merged = mergeSyncPayload(devices[edge.to].store, payload, devices[edge.from].id);
+  // The cursor advances the way the real client advances it, through the same function.
+  //
+  // It used to jump straight to `payload.maxSeq`, which is the rule the client stopped using
+  // in 3.0: a page carries at most PAGE_SIZE records, so `maxSeq` — the peer's high-water
+  // mark — can sit well above the last record actually delivered. Modelling the old rule
+  // made this test report non-convergence for a gap the client cannot open, and, worse, made
+  // it silent about whether the real rule converges. It is the client's rule that has to be
+  // under test here; nothing else in this file exercises it.
+  cursors.set(key, cursorAfterPage(payload, cursor, merged.rejectedBelow));
 }
 
 /** The live set as every device should agree on it: which items exist, and what they say. */
@@ -162,6 +231,7 @@ function liveSet(store: TodoStore): string {
 }
 
 function runSeed(seed: number): { converged: boolean; report: string } {
+  virtualNow = EPOCH;
   const random = rng(seed);
   const count = 3 + Math.floor(random() * 3); // 3–5 devices
   const devices = makeDevices(count, random);
@@ -214,7 +284,7 @@ function runSeed(seed: number): { converged: boolean; report: string } {
  */
 test("sync: every reachable device converges on the same live set (500 random seeds)", () => {
   const failures: string[] = [];
-  for (let seed = 1; seed <= 500; seed++) {
+  for (let seed = 1; seed <= SEED_COUNT; seed++) {
     const { converged, report } = runSeed(seed);
     if (!converged) {
       failures.push(`SEED ${seed} DID NOT CONVERGE${report}`);
@@ -229,7 +299,8 @@ test("sync: convergence holds when devices are only ever connected in a chain", 
   // propagation bug lived in, and a random sweep that happened to stop generating chains
   // would go quiet about it.
   const failures: string[] = [];
-  for (let seed = 10_000; seed < 10_120; seed++) {
+  for (let seed = 10_000; seed < 10_000 + Math.max(120, Math.floor(SEED_COUNT / 4)); seed++) {
+    virtualNow = EPOCH;
     const random = rng(seed);
     const devices = makeDevices(4, random);
     const edges: Edge[] = [];

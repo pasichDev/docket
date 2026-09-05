@@ -1,10 +1,15 @@
 # Changelog
 
-## 3.0.0-rc.2 (unreleased)
+## 3.0.0-rc.2
 
-Second review pass over the self-hosted half. One security fix, three
-data-correctness fixes, and the reason CI was green while a directory of tests
-went unexecuted.
+Two review passes and a full release-readiness audit. The audit's verdict on the
+previous build was a plain no-go: not because anything visible was broken, but
+because the failures that were left all sat at the seams where state moves —
+between processes, between machines, between local and self-hosted — and every
+one of them reported success while losing something.
+
+Twenty-seven blockers, all closed, each with a regression test that was checked
+to fail against the code it replaces.
 
 ### Security
 
@@ -54,8 +59,165 @@ the proxy.
   and `team-b/platform/backend` both collapsed to `platform/backend`, merging two
   teams' lists. **This changes existing slugs again** for nested groups only.
 
+### Durability and concurrency
+
+- **Every persistent write is now durable, not just atomic.** "Temp file plus
+  rename" guarantees that no reader sees half a file. It guarantees nothing about
+  whether the data or the directory entry reached the disk, so a crash seconds
+  after a successful write could leave the old contents, the new contents, or an
+  empty file where the store had been. Both fsyncs are in place, and every write
+  goes through one function — including three that had no temp file at all: your
+  Claude `settings.json`, each MCP host's config, and the backup bundle itself.
+
+- **First-run secrets can no longer be minted twice.** Two processes starting
+  against an empty data directory — an MCP session and the dashboard it spawns,
+  which is the ordinary case — both read nothing, both generated a key, and both
+  wrote. Whichever lost then held a key that was not on disk, and everything it
+  encrypted afterwards was unreadable by anyone, itself included, from the next
+  restart. The at-rest key, the store epoch and the server's admin token are all
+  settled by an exclusive create now.
+
+- **A suspended process can no longer overwrite newer state.** The advisory lock
+  cannot stop a laptop that sleeps mid-write from having its lock reaped and
+  waking up still inside its own critical section. The todo store detected that;
+  the peer list, the viewer list, the server's device registry, the remote
+  credentials and this device's own identity did not — so a stale writer could
+  silently unpair a device that had just been added. They all carry the same two
+  guards now: the lock's identity, then a hash of the bytes.
+
+- **That content check is a hash rather than a size and a timestamp.** Two
+  encrypted stores very often share a length, and several filesystems keep
+  modification times to the nearest second.
+
+- **The audit log no longer records edits that did not happen.** History was
+  written to its side file before the store commit, so an attempt that lost a
+  race left its entries behind and then re-ran — a permanent record of an edit
+  that was rolled back, in the one file whose entire job is to be trustworthy.
+
+### Sync
+
+- **An item that outlives a peer's deletion is delivered back to that peer.** When a
+  deletion loses to a newer edit the item correctly stays alive — but the device
+  that deleted it was never told, because our copy still sat at the sequence
+  number it had when that device last saw it, below its cursor. One device showed
+  the item, the other showed it deleted, both reported a healthy sync, and no
+  amount of further syncing repaired it: there was nothing left to send. Reachable
+  with two devices whenever one clock runs behind the other.
+
+- **The convergence property test now controls its own clock.** It generated
+  topologies, operations and clock skew from a seed, then read the real clock for
+  the timestamps — so whether two operations landed in the same millisecond
+  depended on how fast the machine was, and a seed that failed on a CI runner
+  passed everywhere else. A failure that cannot be reproduced is indistinguishable
+  from noise, and this one was dismissed as flaky more than once. The clock is part
+  of the seed now, and the sweep runs deeper on demand
+  (`DOCKET_CONVERGENCE_SEEDS`, `DOCKET_CONVERGENCE_CLOCK_STEP`).
+
+### Backup and restore
+
+- **A backup is one moment.** It read the data directory's files one after
+  another while the rest of the machine kept working, so a bundle could pair a
+  store from before a sync with a peer list from after it. Each file was
+  individually valid; the mixture surfaced much later as a peer that had gone
+  quiet. Backups are now read under every relevant lock and carry a per-file
+  checksum, so a damaged bundle is refused before anything is touched.
+
+- **Restore is a transaction.** It replaced the encryption key and then each
+  encrypted file in turn, so a crash in the middle left the new key beside some
+  of the old ciphertext — unreadable, and unreadable in a way no later run could
+  diagnose. Everything is now validated and staged first, the operation is
+  journalled before the first file moves, and an interrupted restore is finished
+  automatically on the next start.
+
+- **Nothing that predates a restore can write into what it produced.** Every
+  long-running process caches the key, this device's identity, the store epoch
+  and the admin token, and all four are silently wrong the moment the directory
+  underneath is replaced. The directory now carries a generation id that every
+  write re-checks; a process whose generation has moved stops and says so.
+  `docket restore` also names what is still running and asks you to stop it.
+
+### Moving a workspace between local and self-hosted
+
+- **`docket backend use` and `backend localize` preserve the workspace.** They
+  re-created every item through the ordinary "add a todo" path, which meant new
+  identities (so every paired device saw the whole list deleted and a different
+  one appear), today's timestamps, no history, and — since v3 made projects the
+  centre of the product — no project either: everything landed in Unfiled. None
+  of it was reported. A migration now carries item identity, project, chronology,
+  completion, revision, provenance, full history and deletions.
+
+- **A migration that fails halfway can simply be run again.** It used to leave
+  both sides populated and refuse to continue, telling you to repair it by hand.
+
+- **Switching to a server stops the local dashboard and its sync loop.** It kept
+  running, kept pulling from paired devices, and kept writing to a store that was
+  no longer the source of truth.
+
+- **`docket setup --remote` no longer hides an existing local workspace.** It
+  wrote remote mode without looking at what was already there: a year of todos
+  stayed on disk and stopped being part of the product, with nothing saying so.
+  It now offers to upload, to keep them where they are, or to cancel.
+
+### Configuration
+
+- **`~/.config/docket/config.json` is the source of truth.** Setup wrote
+  `DOCKET_MODE` into every MCP host's config, and the environment beats the
+  config file — so `docket backend localize` would report a switch to local mode
+  while every agent carried on talking to the server, and the only way out was
+  hand-editing four host config files you never knew existed. Setup writes no
+  deployment environment at all now; the override still exists for a container or
+  a single command.
+
+- **A custom data directory is recorded in one place.** It lived only in host
+  configs and a shell startup file, so `docket backup` typed in a terminal that
+  had not sourced that file backed up an empty `~/.docket` and reported success.
+  `docket status` now says which source the directory came from.
+
+- **In remote mode the CLI reads the server.** `list`, `stats`, `workspaces` and
+  `export` read the local store, and `import` wrote to it — the terminal showed
+  an empty list while the editor showed the real one, and an import reported
+  success for items that existed nowhere you could reach.
+
+### Identity, installation and containers
+
+- **Two items can no longer share a short id in silence.** The six-character id
+  is a hash, and the lookup returned the first match — so on a list that has run
+  for a while, `todo_complete T-XXXXXX` could quietly complete somebody else's
+  task. An ambiguous id is now refused, naming both items.
+
+- **Setup no longer discards MCP configuration it cannot parse.** A trailing
+  comma in `~/.cursor/mcp.json` was treated as "there is nothing here", and every
+  other MCP server you had configured was replaced by a file containing only
+  Docket. Unreadable configs are now left exactly as they are, readable ones keep
+  their unknown fields, and the previous version is saved beside them.
+
+- **An old dashboard left over from a previous version is replaced, not
+  adopted.** Auto-start accepted any answer on the port as "already running", so
+  after an upgrade the old process kept serving the same data directory.
+
+- **The container image builds, and the documented commands work inside it.** The
+  image copied one of the three TypeScript configs its own build needs, and had
+  no `docket` on `PATH` at all — so `docker compose exec docket docket devices
+  pair`, the first instruction given to a new self-hoster, could not have worked.
+  The default `docker compose up -d` also no longer needs a `chown` you would
+  have to guess at, and the published port is overridable for a machine already
+  running `docket serve`.
+
 ### Release plumbing
 
+- **A pre-release can no longer be published as `latest`.** npm's default tag is
+  `latest`, so publishing a release candidate would have pointed every
+  unpinned install, every `npx`, and the update checker itself at it.
+- **A tag alone no longer publishes.** The release job built and published; a tag
+  on any commit on any branch became a release. Publishing now requires proof
+  that the tag is on `main`, that it matches the version it claims, and that the
+  full test suite, a dependency audit, an install of the packed artifact, and a
+  container build-and-pair all pass on that exact commit.
+- **Generated host configs pin the version that generated them.** Running a
+  release candidate's own setup configured every agent to launch whatever
+  `latest` resolved to — 2.x code against a 3.x data directory.
+- **CI covers what the package claims.** Node 18, 20, 22 and 24 on Linux plus
+  macOS, the packed artifact, and the container image.
 - CI runs `npm test` rather than a hand-copied glob of it. The copy stopped
   running the browser-client tests the moment they moved, and CI stayed green.
 - `docket check-update` follows the channel it was installed from, so an RC hears

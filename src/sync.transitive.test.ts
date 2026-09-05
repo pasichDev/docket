@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import * as mutations from "./mutations.js";
 import { applyEdits, createTodo, stampSeq } from "./mutations.js";
 import type { TodoStore } from "./types.js";
 
@@ -133,4 +134,66 @@ test("sync: a LATER deletion of an already-tombstoned item is adopted, sequenced
 
   aFromB = pull(b, a, aFromB, "device-b");
   assert.equal(a.todos.length, 0, "A never heard about the second deletion and kept a deleted item");
+});
+
+/**
+ * A deletion that loses to a newer edit has to travel BACK to the device that deleted it.
+ *
+ * The merge already understood the resolution: a tombstone older than the local edit leaves
+ * the item alive. What it did not do was tell the other side. Accepting a tombstone is a
+ * local write like any other, and refusing its effect is exactly the moment the peer most
+ * needs to hear from us — their cursor into our store has already moved past our copy, so
+ * without a fresh sequence number they will never ask for it again.
+ *
+ * The result is not a slow convergence, it is two devices that disagree for ever while both
+ * report a healthy sync: one shows the item, the other shows it deleted, and there is
+ * nothing left in either direction to send.
+ *
+ * Skew is what makes the ordering reachable rather than exotic: B's deletion is made after
+ * A's edit in real time, and carries an EARLIER timestamp because B's clock runs behind.
+ * The whole sync layer is built on the assumption that this happens.
+ */
+test("sync: an item that outlives a peer's deletion is delivered back to the peer that deleted it", () => {
+  const a = emptyStore();
+  const b = emptyStore();
+
+  const item = createTodo(a, { title: "still wanted", agent: "codex", session: "s" }, "device-a", "A");
+  let aToB = pull(a, b, 0, "device-a"); // B learns about the item
+  let bToA = pull(b, a, 0, "device-b");
+
+  // A edits it. This is the version that must survive.
+  applyEdits(a, item, { title: "still wanted, and updated" }, "codex", "device-a", "A");
+  const editedAt = item.updatedAt;
+  aToB = pull(a, b, aToB, "device-a"); // …and B receives the edit, so B's cursor is now past it
+  assert.equal(b.todos[0]?.title, "still wanted, and updated", "premise broken: B never got the edit");
+
+  // Now B deletes it, on a clock that runs behind A's — so the deletion is genuinely later
+  // but timestamped earlier, which is precisely the case last-write-wins has to resolve.
+  const { tombstoneDelete } = mutations;
+  tombstoneDelete(b, b.todos[0], "device-b");
+  const tombstone = b.deletedUuids.at(-1)!;
+  tombstone.deletedAt = new Date(Date.parse(editedAt) - 5_000).toISOString();
+  assert.equal(b.todos.length, 0, "premise broken: B should have removed its own copy");
+  assert.ok(tombstone.deletedAt < editedAt, "premise broken: the deletion must be older than the edit");
+
+  // A pulls: it accepts the tombstone, and keeps the item because its edit is newer.
+  bToA = pull(b, a, bToA, "device-b");
+  assert.equal(a.todos.length, 1, "A dropped an item whose edit is newer than the deletion");
+  assert.equal(a.deletedUuids.length, 1, "A should still record that B deleted it");
+
+  // …and B pulls back. This is the assertion that used to fail: A's copy sat at the sequence
+  // number it had when B last saw it, below B's cursor, so nothing was ever sent again.
+  aToB = pull(a, b, aToB, "device-a");
+  assert.equal(
+    b.todos.length,
+    1,
+    "B still believes the item is deleted — A never re-delivered the copy that outlived B's tombstone, and no further syncing can fix it",
+  );
+  assert.equal(b.todos[0].title, "still wanted, and updated");
+
+  // And it settles rather than ping-ponging: once both agree, another round changes nothing.
+  const before = JSON.stringify([a.todos, b.todos]);
+  pull(b, a, bToA, "device-b");
+  pull(a, b, aToB, "device-a");
+  assert.equal(JSON.stringify([a.todos, b.todos]), before, "the two devices keep re-sending the same record at each other");
 });
