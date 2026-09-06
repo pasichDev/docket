@@ -1,0 +1,7 @@
+]777;notify;warp://cli-agent;{"v": 1, "agent": "opencode", "event": "session_start", "plugin_version": "0.1.7"}
+{"type": "step_start", "timestamp": 1757112000000, "sessionID": "ses_f8c8bd4a1af1JzTOiVVXvcAMOc", "part": {"id": "prt_1", "type": "step-start"}}
+]777;notify;warp://cli-agent;{"v": 1, "agent": "opencode", "event": "agent_turn_end"}{"type": "text", "timestamp": 1757112001000, "sessionID": "ses_f8c8bd4a1af1JzTOiVVXvcAMOc", "part": {"id": "prt_2", "type": "text", "text": "CREW_OPENCODE_OK", "time": {"start": 1757112000500, "end": 1757112001000}}}
+{"type": "tool", "timestamp": 1757112000800, "sessionID": "ses_f8c8bd4a1af1JzTOiVVXvcAMOc", "part": {"id": "prt_3", "type": "tool", "tool": "read", "state": {"status": "completed"}}}
+this line is not json at all {broken
+{"type": "mystery_event", "sessionID": "ses_f8c8bd4a1af1JzTOiVVXvcAMOc"}
+{"type": "step_finish", "timestamp": 1757112002000, "sessionID": "ses_f8c8bd4a1af1JzTOiVVXvcAMOc", "part": {"id": "prt_4", "type": "step-finish", "reason": "stop", "tokens": {"total": 31157, "input": 30967, "output": 7, "reasoning": 183, "cache": {"read": 0, "write": 0}}, "cost": 0.02393775}}

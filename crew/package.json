@@ -1,0 +1,38 @@
+{
+  "name": "@pasichdev/docket-crew",
+  "version": "0.1.0",
+  "description": "Docket Crew — local multi-agent orchestration runtime that drives claude/codex/opencode as a team against a Docket backlog. Separate package on purpose: Docket Core stays a task store, Crew owns supervision, routing and orchestration.",
+  "license": "MIT",
+  "author": "pasichDev",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "docket-crew": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "skills",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "start": "node dist/cli.js start",
+    "dev": "tsc --watch",
+    "test": "npm run build && DOCKET_CREW_HOME=\"${DOCKET_CREW_TEST_HOME:-$(mktemp -d)}\" node --test 'dist/**/*.test.js'",
+    "test:live": "npm run build && DOCKET_CREW_LIVE=1 DOCKET_CREW_HOME=\"${DOCKET_CREW_TEST_HOME:-$(mktemp -d)}\" node --test 'dist/adapters/live.test.js'"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "yaml": "^2.6.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  },
+  "//yaml": "The one runtime dependency. config.yml is mandated by spec §31 and a hand-rolled YAML subset parser is a bug farm; `yaml` is zero-dependency and well maintained."
+}

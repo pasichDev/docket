@@ -1,0 +1,9 @@
+{"type": "thread.started", "thread_id": "01a07370-b986-76c0-9ecc-bc4137ffb06e"}
+{"type": "turn.started"}
+{"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "Creating the file now."}}
+{"type": "item.started", "item": {"id": "item_1", "type": "file_change", "changes": [{"path": "/tmp/crew-probe-codex/crew-codex.txt", "kind": "add"}], "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "item_1", "type": "file_change", "changes": [{"path": "/tmp/crew-probe-codex/crew-codex.txt", "kind": "add"}], "status": "completed"}}
+{"type": "item.completed", "item": {"id": "item_2", "type": "reasoning", "text": "..."}}
+{"type": "item.completed", "item": {"id": "item_3", "type": "agent_message", "text": "Done: created crew-codex.txt containing CREW_CODEX_OK"}}
+{"type": "some.future.event", "data": 123}
+{"type": "turn.completed", "usage": {"input_tokens": 42053, "cached_input_tokens": 31232, "output_tokens": 121, "reasoning_output_tokens": 16}}

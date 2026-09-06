@@ -1,0 +1,8 @@
+{"type": "system", "subtype": "init", "cwd": "/tmp/x", "session_id": "c0ffee00-1111-2222-3333-444455556666", "tools": ["Bash", "Read"], "model": "claude-haiku-4-5"}
+{"type": "system", "subtype": "hook_started", "hook_name": "SessionStart", "session_id": "c0ffee00-1111-2222-3333-444455556666"}
+{"type": "system", "subtype": "hook_finished", "hook_name": "SessionStart", "session_id": "c0ffee00-1111-2222-3333-444455556666"}
+{"type": "rate_limit_event", "session_id": "c0ffee00-1111-2222-3333-444455556666", "rate_limit": {"status": "allowed"}}
+{"type": "assistant", "message": {"id": "msg_01", "role": "assistant", "content": [{"type": "text", "text": "CREW_PROBE_OK"}]}, "session_id": "c0ffee00-1111-2222-3333-444455556666"}
+{"type": "assistant", "message": {"id": "msg_02", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {"command": "ls"}}]}, "session_id": "c0ffee00-1111-2222-3333-444455556666"}
+{"type": "totally_new_event_kind", "session_id": "c0ffee00-1111-2222-3333-444455556666", "payload": {"x": 1}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "CREW_PROBE_OK", "session_id": "c0ffee00-1111-2222-3333-444455556666", "total_cost_usd": 0.25832, "num_turns": 1, "stop_reason": "end_turn"}
