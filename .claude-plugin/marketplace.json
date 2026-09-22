@@ -10,7 +10,7 @@
       "name": "docket",
       "source": "./",
       "description": "Field and tool reference for docket, the shared list every AI tool and project writes to.",
-      "version": "2.0.0"
+      "version": "3.0.0"
     }
   ]
 }

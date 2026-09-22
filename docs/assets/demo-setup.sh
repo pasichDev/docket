@@ -59,9 +59,9 @@ seed() {
 node "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/dist/web.js" > "$ROOT/web.log" 2>&1 &
 sleep 2
 
-seed "acme/backend" "fix token refresh race" "drop the legacy auth path"
-seed "you/tracker"  "ship the new nav"
-seed "you/notes"    "write up the migration notes"
+seed "gitlab.com/acme/backend" "fix token refresh race" "drop the legacy auth path"
+seed "github.com/you/tracker"  "ship the new nav"
+seed "github.com/you/notes"    "write up the migration notes"
 curl -sS -X POST "http://127.0.0.1:$DOCKET_WEB_PORT/api/todos" -H 'Content-Type: application/json' \
   -d '{"title":"a thought with no project yet"}' > /dev/null
 

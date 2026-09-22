@@ -9,6 +9,43 @@
 Warp — across every project, before the work is worth a ticket. Local-first,
 self-hostable, no SaaS account.**
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="Claude Code and Codex, each in a different project, add a todo; both appear on the Docket dashboard within seconds, filed under their own projects" width="100%" />
+</p>
+
+## Quick start
+
+**You need:** Node.js 18+ and at least one MCP host — Claude Code, Codex,
+Cursor, Windsurf, Claude Desktop, Zed or Warp.
+
+```sh
+npx -y @pasichdev/docket setup
+```
+
+That configures every host it finds on this machine and ends by telling you
+which ones. Then restart your agent and ask it *"add a todo: buy milk"* — it
+shows up at **http://localhost:8787**, a dashboard that started by itself the
+moment the agent connected.
+
+Only want Claude Code, and nothing written anywhere else?
+`claude mcp add docket -- npx -y @pasichdev/docket` does just that part.
+Other hosts: [Supported hosts](#supported-hosts).
+
+<details>
+<summary>Optional: see what's open in a project when a session starts</summary>
+
+```sh
+npm install -g @pasichdev/docket        # the hook runs a command, so it needs one on PATH
+docket hook install                     # then: docket hook doctor
+```
+
+`hook install` works without the global install too — it pins the command to
+this exact copy of docket and tells you it did — but the short form survives
+moving or reinstalling, and `npx` leaves nothing on `PATH`.
+</details>
+
+## Why
+
 A thought that shows up mid-session is worth capturing but not worth the
 ceremony: a Notion template, a GitLab issue format, a ticket id you have to
 invent. So today it evaporates. Docket is the layer underneath all of that —
@@ -52,34 +89,6 @@ order and the `.docket.json` override: **[`docs/workspaces.md`](docs/workspaces.
   <img src="docs/assets/demo-edit.jpg" alt="The same item being edited, with a Markdown editor and Write/Preview tabs alongside category, priority and due date" width="49%" />
 </p>
 <p align="center"><sub>Regenerate these with <code>node docs/assets/demo-seed.mjs</code> — it builds the workspace they show, so they stay a picture of the real dashboard rather than a staged one.</sub></p>
-
-## Quick start
-
-**You need:** [Claude Code](https://claude.com/claude-code) (or another MCP host)
-and Node.js 18+ (`node --version`; get it from [nodejs.org](https://nodejs.org)).
-
-```sh
-npx -y @pasichdev/docket setup          # one shared data dir, detected MCP hosts configured
-claude mcp add docket -- npx -y @pasichdev/docket
-```
-
-Restart Claude Code and ask it *"add a todo: buy milk"*. The web dashboard is
-at **http://localhost:8787** — it started itself the moment the first client
-connected.
-
-Optionally, to see what's open in a project when a session starts:
-
-```sh
-npm install -g @pasichdev/docket        # the hook runs a command, so it needs one on PATH
-docket hook install                     # then: docket hook doctor
-```
-
-`hook install` works without the global install too — it pins the command to
-this exact copy of docket and tells you it did — but the short form survives
-moving or reinstalling, and `npx` leaves nothing on `PATH`.
-
-Using Claude Desktop, Cursor, Windsurf, Zed, or Warp instead? Same MCP config
-shape — see [Supported hosts](#supported-hosts).
 
 ## Upgrading from 2.x
 
