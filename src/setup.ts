@@ -165,8 +165,10 @@ async function readHostConfig(target: string): Promise<ExistingConfig> {
   }
 }
 
-async function configureHosts(env: Record<string, string>): Promise<void> {
+/** Returns the hosts it actually configured, so the closing message can name them rather than guess. */
+async function configureHosts(env: Record<string, string>): Promise<string[]> {
   const serverArgs = hostInvocation(await packageSpec(), env).args;
+  const configured: string[] = [];
   const envPairs = Object.entries(env).map(([key, value]) => `${key}=${value}`);
 
   /**
@@ -183,7 +185,7 @@ async function configureHosts(env: Record<string, string>): Promise<void> {
     capture: string[],
     remove: string[],
     add: string[],
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const previous = await execFileAsync(command, capture).then((r) => r.stdout, () => null);
     await execFileAsync(command, remove).catch(() => undefined);
     try {
@@ -191,6 +193,7 @@ async function configureHosts(env: Record<string, string>): Promise<void> {
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       console.log(`Configured ${label}.`);
+      return true;
     } catch (error) {
       console.warn(`Skipped ${label}: ${(error as ExecFileException).message ?? "command failed"}`);
       if (previous?.includes("docket")) {
@@ -199,18 +202,20 @@ async function configureHosts(env: Record<string, string>): Promise<void> {
             `    ${command} ${add.join(" ")}`,
         );
       }
+      return false;
     }
   };
 
   if (await commandExists("codex")) {
     const codexEnvArgs = envPairs.flatMap((pair) => ["--env", pair]);
-    await reconfigure(
+    const ok = await reconfigure(
       "codex",
       "Codex",
       ["mcp", "list"],
       ["mcp", "remove", "docket"],
       ["mcp", "add", "docket", ...codexEnvArgs, "--", "npx", ...serverArgs],
     );
+    if (ok) configured.push("Codex");
   }
   if (await commandExists("claude")) {
     // `claude mcp add` takes the name as a bare positional right after "add" — -e/--env
@@ -218,18 +223,58 @@ async function configureHosts(env: Record<string, string>): Promise<void> {
     // it, so putting the name after -e makes it try to consume "docket" as a second
     // (invalid) env var instead of the server name.
     const envFlag = envPairs.length > 0 ? ["-e", ...envPairs] : [];
-    await reconfigure(
+    const ok = await reconfigure(
       "claude",
       "Claude Code MCP",
       ["mcp", "list"],
       ["mcp", "remove", "--scope", "user", "docket"],
       ["mcp", "add", "docket", "--scope", "user", ...envFlag, "--", "npx", ...serverArgs],
     );
+    if (ok) configured.push("Claude Code");
   }
 
-  for (const target of [`${homedir()}/.cursor/mcp.json`, `${homedir()}/.codeium/windsurf/mcp_config.json`]) {
-    await configureJsonHost(target, serverArgs, env);
+  for (const [label, target] of [
+    ["Cursor", `${homedir()}/.cursor/mcp.json`],
+    ["Windsurf", `${homedir()}/.codeium/windsurf/mcp_config.json`],
+  ] as const) {
+    const outcome = await configureJsonHost(target, serverArgs, env);
+    if (outcome === "configured" || outcome === "created") configured.push(label);
   }
+  return configured;
+}
+
+/**
+ * The last thing setup prints, and so the only part of its output most people read.
+ *
+ * It used to end on env snippets for hosts setup had just configured itself, followed by
+ * "Start the server with: npx -y @pasichdev/docket" — a step that does not exist (the first
+ * agent to connect starts everything) and, run inside a checkout of this repo, the one
+ * invocation that fails. What a new user needs from the last screen is what worked, the one
+ * thing to try, and where to look; the manual config is for hosts setup could not reach.
+ */
+export function nextSteps(opts: {
+  configured: string[];
+  invocation: { command: string; args: string[]; env: Record<string, string> };
+  dashboardPort: number;
+}): string {
+  const { invocation, dashboardPort } = opts;
+  // Claude Code first when it is there: it is the host the README's quick start is written for.
+  const configured = [...opts.configured].sort((x, y) => Number(y === "Claude Code") - Number(x === "Claude Code"));
+  const lines: string[] = [""];
+  if (configured.length > 0) {
+    lines.push(`✓ docket is ready in ${configured.join(", ")}.`, "");
+    lines.push("Next:");
+    lines.push(`  1. Restart ${configured[0]} and ask it: "add a todo: try docket"`);
+  } else {
+    lines.push("No MCP host was configured automatically — add docket to yours (below), then:", "");
+    lines.push("Next:");
+    lines.push(`  1. Restart your agent and ask it: "add a todo: try docket"`);
+  }
+  lines.push(`  2. Watch it land on the dashboard: http://localhost:${dashboardPort}`);
+  lines.push("     (it starts by itself when the first agent connects)", "");
+  lines.push(`${configured.length > 0 ? "Any other MCP host" : "Your MCP host"} (Claude Desktop, Zed, …) takes:`);
+  lines.push(JSON.stringify({ mcpServers: { docket: invocation } }, null, 2));
+  return lines.join("\n");
 }
 
 export type JsonHostOutcome = "configured" | "created" | "skipped-unreadable" | "skipped-absent" | "failed";
@@ -322,17 +367,18 @@ async function runLocalSetup(reader: LineReader, args: string[]): Promise<void> 
   // `docket backup` in one backed up an empty ~/.docket and reported success.
   await writeDataDirectoryConfig(dataDirectory);
   await writeDeploymentConfig({ mode: "local" });
-  if (await shouldAutomate(reader, "Configure detected MCP agents automatically?", args)) await configureHosts({ DOCKET_DATA_DIR: dataDirectory });
+  const env = { DOCKET_DATA_DIR: dataDirectory };
+  const hosts = (await shouldAutomate(reader, "Configure detected MCP agents automatically?", args)) ? await configureHosts(env) : [];
   if (await shouldAutomate(reader, "Install the docket skill for Claude Code?", args)) await installSkill();
   if (await shouldAutomate(reader, "Install the docket skill (Codex and other AGENTS.md-ecosystem agents)?", args)) await installAgentsSkill();
   if (await shouldAutomate(reader, "Install the todo_stats terminal helper and shell startup entry?", args)) await installStatsIntegration(dataDirectory);
-  console.log("\nUse this same directory in every MCP host that should share the list:\n");
-  console.log("Codex (config.toml):");
-  console.log("[mcp_servers.docket.env]");
-  console.log(`DOCKET_DATA_DIR = ${JSON.stringify(dataDirectory)}\n`);
-  console.log("Claude Desktop / Cursor / Windsurf / Zed:");
-  console.log(JSON.stringify({ env: { DOCKET_DATA_DIR: dataDirectory } }, null, 2));
-  console.log("\nStart the server with: npx -y @pasichdev/docket");
+  console.log(
+    nextSteps({
+      configured: hosts,
+      invocation: hostInvocation(await packageSpec(), env),
+      dashboardPort: Number(process.env.DOCKET_WEB_PORT ?? 8787),
+    }),
+  );
 }
 
 /**
