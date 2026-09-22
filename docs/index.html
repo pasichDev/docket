@@ -302,11 +302,11 @@
     <a class="btn secondary" href="https://github.com/pasichDev/docket">View on GitHub</a>
   </div>
   <div class="install-cmd">
-    <code><span class="prompt">$</span>claude mcp add docket -- npx -y @pasichdev/docket</code>
-    <button class="copy-btn" type="button" data-copy="claude mcp add docket -- npx -y @pasichdev/docket">Copy</button>
+    <code><span class="prompt">$</span>npx -y @pasichdev/docket setup</code>
+    <button class="copy-btn" type="button" data-copy="npx -y @pasichdev/docket setup">Copy</button>
   </div>
   <p class="install-note">
-    Node 18 or newer, and no account. Everything on this page ships in 3.0.
+    Configures Claude Code, Codex, Cursor and Windsurf — whichever it finds. Node 18 or newer, and no account.
   </p>
 </div>
 
@@ -471,21 +471,21 @@
 <section id="install" class="wrap">
   <p class="eyebrow">Getting started</p>
   <h2 class="section-title">Installation guide</h2>
-  <p class="section-sub">Five minutes, no prior MCP experience needed.</p>
+  <p class="section-sub">About a minute, no prior MCP experience needed.</p>
   <div class="steps">
     <div class="step">
       <div class="num">1</div>
       <div class="body">
-        <h3>Register the server</h3>
+        <h3>Run setup</h3>
         <p>Open a terminal and run:</p>
-        <pre><code>claude mcp add docket -- npx -y @pasichdev/docket</code></pre>
-        <p style="margin-top:10px;">Using something other than Claude Code? Point it at the same command — the server speaks plain MCP over stdio.</p>
+        <pre><code>npx -y @pasichdev/docket setup</code></pre>
+        <p style="margin-top:10px;">It adds docket to every MCP host it finds on this machine and ends by telling you which ones. Only want Claude Code? <code>claude mcp add docket -- npx -y @pasichdev/docket</code> does just that part. Any other host takes the same command — the server speaks plain MCP over stdio.</p>
       </div>
     </div>
     <div class="step">
       <div class="num">2</div>
       <div class="body">
-        <h3>Restart Claude Code</h3>
+        <h3>Restart your agent</h3>
         <p>Close and reopen it, or start a new session, so it picks up the new server.</p>
       </div>
     </div>
@@ -493,7 +493,7 @@
       <div class="num">3</div>
       <div class="body">
         <h3>Try it</h3>
-        <p>Ask Claude something like <em>"add a todo: buy milk"</em>. If it uses the tool and confirms, you're set.</p>
+        <p>Ask it something like <em>"add a todo: buy milk"</em>. If it uses the tool and confirms, you're set.</p>
       </div>
     </div>
     <div class="step">
