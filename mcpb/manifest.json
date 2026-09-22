@@ -1,0 +1,49 @@
+{
+  "manifest_version": "0.4",
+  "name": "docket",
+  "display_name": "Docket",
+  "version": "3.0.0",
+  "description": "One list every AI tool you use can write to — scoped per project, local-first, self-hostable.",
+  "long_description": "Docket is a shared todo list and backlog that Claude, Codex, Cursor and any other MCP host can all write to. Items are filed under the project they were captured in, automatically, from the git remote of wherever the agent runs. A web dashboard starts on http://localhost:8787 the first time an agent connects. Everything stays on this machine unless you point it at your own self-hosted server.",
+  "author": { "name": "pasichDev", "url": "https://github.com/pasichDev" },
+  "repository": { "type": "git", "url": "https://github.com/pasichDev/docket" },
+  "homepage": "https://github.com/pasichDev/docket#readme",
+  "support": "https://github.com/pasichDev/docket/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/launcher.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/launcher.js"],
+      "env": { "DOCKET_DATA_DIR": "${user_config.data_dir}" }
+    }
+  },
+  "tools": [
+    { "name": "todo_add", "description": "Capture work the moment it comes up, from any tool or project" },
+    { "name": "todo_list", "description": "What's open in this project (or every project)" },
+    { "name": "todo_edit", "description": "Edit an item's title, description, category, priority, due date, source link or list" },
+    { "name": "todo_claim", "description": "Mark an item as being worked on by the calling agent" },
+    { "name": "todo_release", "description": "Clear the in-progress claim without completing the item" },
+    { "name": "todo_complete", "description": "Mark an item as done" },
+    { "name": "todo_history", "description": "Who changed an item, how, and when" },
+    { "name": "todo_delete", "description": "Permanently remove an item" },
+    { "name": "todo_version", "description": "Data format version and start time of this docket process" },
+    { "name": "todo_check_update", "description": "Check npm for a newer docket" }
+  ],
+  "user_config": {
+    "data_dir": {
+      "type": "directory",
+      "title": "Data directory",
+      "description": "Where the list is stored. Use the same directory in every tool that should share it.",
+      "default": "${HOME}/.docket",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=18.0.0" }
+  },
+  "keywords": ["todo", "backlog", "tasks", "multi-agent", "local-first", "claude-code", "codex", "cursor"],
+  "license": "MIT"
+}
