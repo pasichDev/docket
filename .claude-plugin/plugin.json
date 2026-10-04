@@ -1,7 +1,7 @@
 {
   "name": "docket",
   "description": "Skills for docket, the shared list every AI tool and project writes to: the field and tool reference, and digests of your MRs, PRs and tickets on the dashboard.",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "author": {
     "name": "pasichDev",
     "url": "https://github.com/pasichDev"

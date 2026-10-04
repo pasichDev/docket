@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 3.1.0
+
+Digests: the agent reads your merge requests, pull requests, tickets, notes and
+mail, and the dashboard's home page shows what needs you, what shipped and what
+is stuck — in Local Mode, across paired devices, and on a self-hosted server.
+No data format changes: a 3.0 install upgrades in place, and the todo store is
+untouched.
 
 ### Digests and a dashboard home page
 
@@ -47,8 +53,10 @@
   `mail` / `chat` item kinds), a daily schedule recipe, and learned preferences in
   `~/.config/docket/digest-learned.md`.
 - `docket backup` includes `digests.json.enc`.
-- Not yet in remote (self-hosted server) mode: the digest tools say so instead
-  of writing somewhere no dashboard reads.
+- **Self-hosted Mode.** The Docket Server keeps digests and seen marks on its own
+  data directory under `/api/v1/digests*`, device-signed like every other route;
+  the publishing device comes from the signature, never from the body. In remote
+  mode every digest tool forwards to it, so all paired clients share one set.
 
 ## 3.0.0
 

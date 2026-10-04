@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "docket",
   "display_name": "Docket",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "One list every AI tool you use can write to — scoped per project, local-first, self-hostable.",
   "long_description": "Docket is a shared todo list and backlog that Claude, Codex, Cursor and any other MCP host can all write to. Items are filed under the project they were captured in, automatically, from the git remote of wherever the agent runs. A web dashboard starts on http://localhost:8787 the first time an agent connects. Everything stays on this machine unless you point it at your own self-hosted server.",
   "author": { "name": "pasichDev", "url": "https://github.com/pasichDev" },
