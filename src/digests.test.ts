@@ -62,6 +62,13 @@ test("validateDigestInput: a metric value sent as a number is kept as text, not 
   assert.equal(body.sections[0].items[0].attention, true);
 });
 
+test("validateDigestInput: a section's group is kept, trimmed and length-checked", () => {
+  const body = validateDigestInput({ ...sample(), sections: [{ ...sample().sections[0], group: "  vploq  " }] });
+  assert.equal(body.sections[0].group, "vploq");
+  assert.equal(validateDigestInput(sample()).sections[0].group, null);
+  assert.throws(() => validateDigestInput({ ...sample(), sections: [{ ...sample().sections[0], group: "g".repeat(61) }] }), /group is 61 characters/);
+});
+
 test("validateDigestInput: names the field that broke a limit, so the agent can fix its call", () => {
   const tooLong = { ...sample(), title: "x".repeat(201) };
   assert.throws(() => validateDigestInput(tooLong), (err: Error) => err instanceof DigestValidationError && /title is 201 characters/.test(err.message));

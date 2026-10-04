@@ -205,10 +205,64 @@ export function heroHtml(d: Digest, now = Date.now()): string {
   </article>`;
 }
 
-export function digestBodyHtml(d: Digest, linked: LinkedTodos, now = Date.now(), adding: ReadonlySet<string> = NONE): string {
-  const sections = d.sections.map((_, i) => sectionHtml(d, i, linked, adding)).join("");
+export interface DigestGroup {
+  name: string;
+  /** Indexes into digest.sections, in order — the indexes also key each "+ task" button. */
+  sections: number[];
+  items: number;
+  attention: number;
+}
+
+/** Sections grouped by `group`, in order of first appearance. Empty for an ungrouped digest. */
+export function groupsOf(d: Pick<Digest, "sections">): DigestGroup[] {
+  if (!d.sections.some((s) => s.group)) return [];
+  const byName = new Map<string, DigestGroup>();
+  d.sections.forEach((s, i) => {
+    const name = s.group || "Other";
+    let g = byName.get(name);
+    if (!g) {
+      g = { name, sections: [], items: 0, attention: 0 };
+      byName.set(name, g);
+    }
+    g.sections.push(i);
+    g.items += s.items.length;
+    g.attention += s.items.filter((it) => it.attention).length;
+  });
+  return [...byName.values()];
+}
+
+function groupChipsHtml(groups: readonly DigestGroup[], active: string | null, total: number): string {
+  const chip = (name: string | null, label: string, n: number, need: number) =>
+    `<button type="button" class="dg-group-chip" data-digest-group="${escapeHtml(name ?? "")}" data-active="${(active ?? "") === (name ?? "")}">${escapeHtml(label)} <span class="n">${n}</span>${need ? `<span class="need">${need}</span>` : ""}</button>`;
+  const need = groups.reduce((n, g) => n + g.attention, 0);
+  return `<div class="dg-groups" role="toolbar" aria-label="Filter by area">${chip(null, "All", total, need)}${groups.map((g) => chip(g.name, g.name, g.items, g.attention)).join("")}</div>`;
+}
+
+/**
+ * `group` filters the body to one area; null shows every group, each under its own heading.
+ * An unknown group (the digest changed under a remembered filter) falls back to all.
+ */
+export function digestBodyHtml(d: Digest, linked: LinkedTodos, now = Date.now(), adding: ReadonlySet<string> = NONE, group: string | null = null): string {
+  const groups = groupsOf(d);
+  let body: string;
+  if (groups.length === 0) {
+    body = d.sections.map((_, i) => sectionHtml(d, i, linked, adding)).join("");
+  } else {
+    const shown = groups.filter((g) => g.name === group);
+    const visible = shown.length ? shown : groups;
+    body =
+      groupChipsHtml(groups, shown.length ? group : null, itemCount(d)) +
+      visible
+        .map(
+          (g) => `<div class="dg-group">
+        <h2 class="dg-group-head"><span>${escapeHtml(g.name)}</span><span class="dg-count">${items(g.items)}</span>${g.attention ? `<span class="dg-need">${g.attention} need you</span>` : ""}</h2>
+        ${g.sections.map((i) => sectionHtml(d, i, linked, adding)).join("")}
+      </div>`,
+        )
+        .join("");
+  }
   // The hero's "N need you" chip jumps here.
-  const anchored = sections.replace('data-attention="true"', 'id="dg-first-attention" data-attention="true"');
+  const anchored = body.replace('data-attention="true"', 'id="dg-first-attention" data-attention="true"');
   return `${heroHtml(d, now)}${metricsHtml(d)}${anchored || `<p class="dg-empty-note">This digest has no items.</p>`}`;
 }
 

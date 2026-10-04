@@ -614,6 +614,7 @@ server.registerTool(
       sections: z
         .array(
           z.object({
+            group: z.string().optional().describe("The area this section belongs to, e.g. \"vploq\" or \"Side projects\". Sections with the same group are shown together under one heading; the digest skill's config says which repos go where"),
             title: z.string().describe("e.g. \"Needs you\", \"Merged\", \"In review\", \"Tickets\""),
             items: z.array(
               z.object({

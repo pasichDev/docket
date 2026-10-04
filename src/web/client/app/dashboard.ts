@@ -29,6 +29,9 @@ const dash = {
   failed: false,
   /** Delete is two clicks: the first arms the button for a few seconds. */
   armedDelete: null as string | null,
+  /** The area filter ("vploq", "Learning"…); null shows every group. Kept across digests,
+   *  so the morning's "vploq only" view survives a fresh digest landing. */
+  group: null as string | null,
   /** Items whose "+ task" request is in flight, so a re-render can't re-enable the button. */
   adding: new Set<string>(),
   /** What the two columns last held. The page refreshes every 15 seconds and on every SSE
@@ -81,7 +84,7 @@ export function renderDashboard(): void {
   if (!dash.loaded || (uuid && !current)) {
     mainHtml = dash.failed ? `<p class="dg-empty-note">Couldn't load digests — retrying.</p>` : `<div class="dg-skeleton"></div><div class="dg-skeleton short"></div>`;
   } else if (current) {
-    mainHtml = digestBodyHtml(current, linkedTodos(state.allTodos), Date.now(), dash.adding);
+    mainHtml = digestBodyHtml(current, linkedTodos(state.allTodos), Date.now(), dash.adding, dash.group);
   } else {
     mainHtml = emptyDashboardHtml();
   }
@@ -200,7 +203,24 @@ async function select(uuid: string): Promise<void> {
   byId("dash-main").scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
+const GROUP_KEY = "docket-digest-group";
+
+function rememberGroup(group: string | null): void {
+  try {
+    if (group) localStorage.setItem(GROUP_KEY, group);
+    else localStorage.removeItem(GROUP_KEY);
+  } catch {
+    // Private window or blocked storage: the filter just doesn't survive a reload.
+  }
+}
+
 export function initDashboard(): void {
+  try {
+    dash.group = localStorage.getItem(GROUP_KEY);
+  } catch {
+    dash.group = null;
+  }
+
   document.addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof Element)) return;
@@ -216,6 +236,14 @@ export function initDashboard(): void {
     const pick = target.closest<HTMLElement>("[data-digest]");
     if (pick?.dataset.digest) {
       void select(pick.dataset.digest);
+      return;
+    }
+
+    const chip = target.closest<HTMLElement>("button[data-digest-group]");
+    if (chip) {
+      dash.group = chip.dataset.digestGroup || null;
+      rememberGroup(dash.group);
+      renderDashboard();
       return;
     }
 

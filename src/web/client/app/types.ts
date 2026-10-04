@@ -88,7 +88,7 @@ export interface Digest {
   summary: string;
   highlights: string[];
   metrics: Array<{ label: string; value: string; tone: DigestTone | null }>;
-  sections: Array<{ title: string; items: DigestItem[] }>;
+  sections: Array<{ group?: string | null; title: string; items: DigestItem[] }>;
   sources: Array<{ name: string; ok: boolean; detail: string | null }>;
   windowFrom: string | null;
   windowTo: string | null;

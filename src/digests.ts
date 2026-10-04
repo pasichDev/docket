@@ -58,6 +58,10 @@ export interface DigestItem {
 }
 
 export interface DigestSection {
+  /** The area this section belongs to — "vploq", "Learning", "Side projects". Sections that
+   *  share a group are shown together under one heading, in order of first appearance, and
+   *  the dashboard can filter to one group. Null for an ungrouped digest. */
+  group: string | null;
   title: string;
   items: DigestItem[];
 }
@@ -120,6 +124,7 @@ export const DIGEST_LIMITS = {
   metricValue: 40,
   sections: 16,
   sectionTitle: 120,
+  groupName: 60,
   items: 300,
   itemTitle: 300,
   itemNote: 600,
@@ -139,6 +144,7 @@ export interface DigestInput {
   highlights?: string[];
   metrics?: Array<{ label: string; value: string; tone?: DigestTone | null }>;
   sections?: Array<{
+    group?: string | null;
     title: string;
     items: Array<{
       kind: DigestItemKind;
@@ -294,6 +300,7 @@ function normalizeBody(raw: unknown, mode: Mode): Body {
   const sections = each(list<Record<string, unknown>>(r.sections, L.sections, "sections", mode), mode, (s, si) => {
     if (!s || typeof s !== "object") throw new DigestValidationError(`sections[${si}] must be an object`);
     return {
+      group: text(s.group, L.groupName, `sections[${si}].group`, mode),
       title: text(s.title, L.sectionTitle, `sections[${si}].title`, mode, true),
       items: each(list<Record<string, unknown>>(s.items, L.items, `sections[${si}].items`, mode), mode, (i, ii) => {
         const at = `sections[${si}].items[${ii}]`;
@@ -645,7 +652,10 @@ export function formatDigest(d: Digest): string {
   if (d.summary) out.push("", d.summary);
   if (d.highlights.length) out.push("", ...d.highlights.map((h) => `• ${h}`));
   if (d.metrics.length) out.push("", d.metrics.map((m) => `${m.label}: ${m.value}`).join(" | "));
+  let group: string | null = null;
   for (const s of d.sections) {
+    if (s.group && s.group !== group) out.push("", `# ${s.group}`);
+    group = s.group;
     out.push("", `## ${s.title}`);
     for (const i of s.items) {
       const head = [i.attention ? "!" : "-", `[${i.kind}]`, i.ref, i.title, i.status ? `(${i.status})` : null, i.repo ? `— ${i.repo}` : null].filter(Boolean).join(" ");
