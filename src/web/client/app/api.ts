@@ -1,4 +1,4 @@
-import type { Todo } from "./types.js";
+import type { Digest, DigestSummary, Todo } from "./types.js";
 
 /**
  * What the dashboard's own endpoints answer with.
@@ -27,6 +27,8 @@ export interface PeerRow {
   trustState: TrustState;
   lastSyncAt: string | null;
   lastError?: string | null;
+  /** The digest sync's own error slot — separate so a healthy todo sync can't hide it. */
+  digestError?: string | null;
   revoked?: boolean;
   fingerprint?: string | null;
   protocolVersion?: number;
@@ -100,6 +102,8 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export const listTodos = () => getJson<{ todos: Todo[] }>("/api/todos");
+export const listDigests = () => getJson<{ digests: DigestSummary[]; total: number }>("/api/digests?limit=60");
+export const getDigest = (uuid: string) => getJson<{ digest: Digest }>(`/api/digests/${encodeURIComponent(uuid)}`);
 export const listPeers = () => getJson<{ peers: PeerRow[] }>("/api/peers");
 export const listViewers = () => getJson<{ viewers: ViewerRow[] }>("/api/access/viewers");
 export const listPresence = () => getJson<{ presence: PresenceRow[] }>("/api/presence");

@@ -151,6 +151,20 @@ export async function markPeerSynced(
 }
 
 /**
+ * Records how far into a peer's digest sequence this device has merged. Separate from
+ * markPeerSynced so a digest pull can never touch the todo cursor or its error slot.
+ */
+export async function markPeerDigestSynced(id: string, details: { digestSeq?: number; digestEpoch?: string; error?: string | null }): Promise<void> {
+  await withPeers((peers) => {
+    const peer = peers.find((p) => p.id === id);
+    if (!peer) return;
+    if (details.digestSeq !== undefined) peer.digestSeq = details.digestSeq;
+    if (details.digestEpoch !== undefined) peer.digestEpoch = details.digestEpoch;
+    peer.digestError = details.error ?? null;
+  });
+}
+
+/**
  * Forgets what this device believes it has already received from every peer.
  *
  * Called after a bulk replacement of the local store (`docket backend localize`, a snapshot
@@ -165,9 +179,11 @@ export async function resetPeerCursors(): Promise<number> {
   return withPeers((peers) => {
     let reset = 0;
     for (const peer of peers) {
-      if (peer.lastSeq === undefined && !peer.lastSyncAt && peer.epoch === undefined) continue;
+      if (peer.lastSeq === undefined && !peer.lastSyncAt && peer.epoch === undefined && peer.digestSeq === undefined) continue;
       delete peer.lastSeq;
       delete peer.epoch;
+      delete peer.digestSeq;
+      delete peer.digestEpoch;
       peer.lastSyncAt = null;
       reset += 1;
     }

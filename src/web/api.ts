@@ -3,6 +3,7 @@ import type { ApiContext } from "./http.js";
 import { handleAccessRoutes } from "./routes/access.js";
 import { handleDataRoutes } from "./routes/data.js";
 import { handleDeviceRoutes } from "./routes/device.js";
+import { handleDigestRoutes } from "./routes/digests.js";
 import { handlePairingRoutes } from "./routes/pairing.js";
 import { handlePeerRoutes } from "./routes/peers.js";
 import { handleStreamRoutes } from "./routes/stream.js";
@@ -26,6 +27,7 @@ const ROUTE_GROUPS = [
   handleDataRoutes,
   handleDeviceRoutes,
   handleTodoRoutes,
+  handleDigestRoutes,
   handlePeerRoutes,
   handlePairingRoutes,
   handleAccessRoutes,

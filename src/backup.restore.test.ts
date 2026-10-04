@@ -547,3 +547,15 @@ try {
 }
 process.stdout.write(JSON.stringify({ refused, error }));
 `;
+
+test("restoring a backup without digests sets the current digest file aside — it is encrypted under the key being replaced", async () => {
+  await seedDataDirectory();
+  await rm(inData("digests.json.enc"), { force: true });
+  const bundle = await despiteContention("backup", () => createBackup(PASSWORD));
+  // After the backup: this machine publishes a digest, under the key the restore will replace.
+  await writeFile(inData("digests.json.enc"), Buffer.from("digests-under-the-old-key"));
+  await despiteContention("restore", () => restoreBackup(bundle, PASSWORD));
+  await assert.rejects(stat(inData("digests.json.enc")), "a digest file the restored key cannot decrypt was left live");
+  const asideNames = (await readdir(dataDirectory)).filter((n) => n.startsWith("digests.json.enc.pre-restore-"));
+  assert.equal(asideNames.length, 1, "the old digest file must be kept aside, not deleted");
+});

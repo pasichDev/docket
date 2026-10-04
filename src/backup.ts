@@ -20,6 +20,7 @@ const BACKUP_FILES = [
   "key",
   "todos.json.enc",
   "history.json.enc",
+  "digests.json.enc",
   "peers.json.enc",
   "viewers.json.enc",
   // The self-hosted server's registry of authorised devices. Without it, restoring a server
@@ -43,7 +44,7 @@ const BACKUP_FILES = [
  * history.json.enc needs none of its own (it is only ever written inside the store's lock).
  */
 function snapshotLockPaths(dir: string): string[] {
-  return ["device.json", "todos.json.enc", "peers.json.enc", "viewers.json.enc", "devices.json.enc"]
+  return ["device.json", "digests.json.enc", "todos.json.enc", "peers.json.enc", "viewers.json.enc", "devices.json.enc"]
     .map((name) => join(dir, `${name}.lock`))
     .sort();
 }
@@ -76,7 +77,11 @@ async function assertAllOwned(leases: readonly Lease[]): Promise<void> {
 }
 
 /** Files whose contents only make sense alongside the store they were captured with. */
-const STORE_COUPLED_FILES = ["history.json.enc"];
+// digests.json.enc is here for the key, not the store: it is encrypted under `key`, which a
+// restore replaces, so a current file left beside an older backup's key could never be
+// decrypted again. Swept aside, it is simply empty, and its fresh epoch tells every peer to
+// re-send.
+const STORE_COUPLED_FILES = ["history.json.enc", "digests.json.enc"];
 const MAGIC = "docket-backup-v1";
 /**
  * The bundle's INNER format version, independent of the envelope magic — old backups must

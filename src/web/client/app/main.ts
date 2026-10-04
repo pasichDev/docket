@@ -1,4 +1,5 @@
 import { initAddForm } from "./addform.js";
+import { currentView, initDashboard, refreshDigests, renderDashboard, showView, viewFromPath } from "./dashboard.js";
 import { byId, el } from "./dom.js";
 import { initDevices, loadDeviceInfo, pollNotifications } from "./devices.js";
 import { watchHistoryPanels } from "./history.js";
@@ -50,6 +51,14 @@ function initCardActions(): void {
   });
 }
 
+/** Both views' data in one go — the dashboard reads the todos too, for its "Tasks" card. */
+async function refreshAll(): Promise<void> {
+  await Promise.all([refresh(), refreshDigests()]);
+  const open = state.allTodos.filter((t) => !t.done).length;
+  byId("nav-open-count").textContent = open ? String(open) : "";
+  if (currentView() === "dash") renderDashboard();
+}
+
 async function loadVersionFooter(): Promise<void> {
   const footer = byId("version-footer");
   try {
@@ -72,7 +81,7 @@ function setupEvents(): void {
   try {
     const es = new EventSource("/api/events");
     es.addEventListener("update", () => {
-      if (state.editingId === null) void refresh();
+      if (state.editingId === null) void refreshAll();
     });
     // The device sync runs on the server's own interval, in the server's process. This is
     // the only signal the browser gets that one is in flight.
@@ -105,6 +114,8 @@ function setupEvents(): void {
 }
 
 function start(): void {
+  // Before anything renders, so the first paint is already the right page.
+  showView(viewFromPath(location.pathname));
   restoreWorkspace();
   initList();
   initModals();
@@ -112,15 +123,18 @@ function start(): void {
   initPairingUi();
   initAddForm();
   initCardActions();
+  initDashboard();
   watchHistoryPanels();
 
   void loadVersionFooter();
   setupEvents();
-  void refresh();
+  void refreshAll();
 
-  // Fallback for a dropped SSE connection; skipped while a dialog holds unsaved input.
+  // Fallback for a dropped SSE connection, and the only way a digest published by an MCP
+  // process (a different process from this server) shows up; skipped while a dialog holds
+  // unsaved input.
   window.setInterval(() => {
-    if (state.editingId === null) void refresh();
+    if (state.editingId === null) void refreshAll();
   }, 15_000);
   window.setInterval(tickSyncedLabel, 1_000);
 

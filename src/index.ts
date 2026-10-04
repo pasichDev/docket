@@ -19,6 +19,7 @@ import { duplicationWarning, emptyScopeNotice, formatIdle, formatResult, formatT
 import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } from "./remote/client.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { filterTodos, type MutationContext } from "./repository.js";
+import { DIGEST_ITEM_KINDS, DIGEST_TONES, DigestValidationError, deleteDigest, digestShortId, formatDigest, formatDigestLine, getDigest, listDigests, publishDigest } from "./digests.js";
 import { CURRENT_FORMAT_VERSION, LAST_V7_RELEASE, migrateLegacyFields, readStore, restorePreUpgradeStore, withStore } from "./storage.js";
 import { buildSnapshot } from "./snapshot.js";
 import { TodoService, todoService as localTodoService } from "./todo-service.js";
@@ -581,6 +582,140 @@ server.registerTool(
     if (!removed) return text(`No todo with id #${id}`);
     log(`deleted #${removed.id} "${removed.title}" by ${context.agent ?? "unknown"}`);
     return text(`Deleted #${removed.id} ${removed.title}`);
+  }),
+);
+
+/**
+ * Digests are local-and-P2P only for now: they live in this device's data directory and
+ * travel by peer sync. A device in remote mode has no local store anyone else reads, so
+ * publishing there would put the digest somewhere no dashboard looks — say so instead.
+ */
+async function digestsUnavailable(): Promise<ReturnType<typeof errorText> | null> {
+  if ((await getDeployment()).mode !== "remote") return null;
+  return errorText("docket: digests are not available in remote (self-hosted server) mode yet — they are stored locally and shared by peer sync.");
+}
+
+const toneSchema = z.enum(DIGEST_TONES).optional().describe("Colour cue: good (merged/done), warn (waiting/stale), bad (failing/blocked), info, neutral");
+
+server.registerTool(
+  "digest_publish",
+  {
+    title: "Publish digest",
+    description:
+      "Save a digest — a snapshot of the user's work across Notion, GitHub, GitLab, git and docket that YOU compiled after actually reading those sources — so it shows on the Docket dashboard and syncs to the user's paired devices. Load the docket:digest skill for how to build one. Digests are immutable: publish a new one rather than editing. Put structure in fields, not in the summary: every PR/MR/ticket is an item with url, ref, status and tone, and anything the user must act on gets attention:true.",
+    inputSchema: {
+      title: z.string().min(1).describe("Short heading, e.g. \"Fri 4 Oct — 2 MRs await review, VPQ-680 blocked\""),
+      summary: z.string().describe("Markdown, 2–6 sentences: what matters, what changed since the last digest, what to do next"),
+      highlights: z.array(z.string()).optional().describe("Up to 12 one-line takeaways, most important first"),
+      metrics: z
+        .array(z.object({ label: z.string(), value: z.union([z.string(), z.number()]), tone: toneSchema }))
+        .optional()
+        .describe("Up to 8 headline numbers, e.g. {label:\"MRs merged\", value:3, tone:\"good\"}"),
+      sections: z
+        .array(
+          z.object({
+            title: z.string().describe("e.g. \"Needs you\", \"Merged\", \"In review\", \"Tickets\""),
+            items: z.array(
+              z.object({
+                kind: z.enum(DIGEST_ITEM_KINDS).describe("pr (GitHub), mr (GitLab), issue, ticket (Notion/Jira), commit, release, todo, doc, note"),
+                title: z.string(),
+                url: z.string().optional().describe("http(s) link to the item — always set it when there is one"),
+                ref: z.string().optional().describe("Human handle: \"!154\", \"#12\", \"VPQ-680\", \"v3.0.1\""),
+                repo: z.string().optional().describe("group/repo, or the Notion database"),
+                status: z.string().optional().describe("As the source says it: merged, open, In review, Blocked…"),
+                tone: toneSchema,
+                attention: z.boolean().optional().describe("True when the user has to act: review it, unblock it, reply"),
+                note: z.string().optional().describe("One line of your judgement: why it matters or what changed"),
+                updatedAt: z.string().optional().describe("ISO timestamp of the item's last change at the source"),
+              }),
+            ),
+          }),
+        )
+        .optional()
+        .describe("Grouped items, up to 300 in total. Put the \"needs you\" group first."),
+      sources: z
+        .array(z.object({ name: z.string(), ok: z.boolean(), detail: z.string().optional() }))
+        .optional()
+        .describe("Every source you tried, including the ones that failed, e.g. {name:\"gitlab\", ok:true, detail:\"9 MRs in vploq/*\"}"),
+      windowFrom: z.string().optional().describe("Start of the period covered, ISO date or timestamp"),
+      windowTo: z.string().optional().describe("End of the period covered, ISO date or timestamp"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  withRemoteErrorHandling(async (input) => {
+    const blocked = await digestsUnavailable();
+    if (blocked) return blocked;
+    try {
+      // Not filed under the session's project: a digest spans every source the user works
+      // in, and tagging it with whichever repo the agent happened to be opened in is noise.
+      const digest = await publishDigest(input, { agent: currentAgent(), deviceId, deviceName, workspace: null });
+      log(`published digest ${digestShortId(digest.uuid)} "${digest.title}" by ${currentAgent() ?? "unknown"}`);
+      return text(`Published ${formatDigestLine(digest)}\nOpen it on the dashboard: http://localhost:${WEB_PORT}/`);
+    } catch (err) {
+      if (err instanceof DigestValidationError) return errorText(`Digest rejected: ${err.message}`);
+      throw err;
+    }
+  }),
+);
+
+server.registerTool(
+  "digest_list",
+  {
+    title: "List digests",
+    description: "Recent digests, newest first, one line each. Read the latest before compiling a new one so you can say what changed since.",
+    inputSchema: { limit: z.number().int().min(1).max(50).default(5).describe("How many to return") },
+    annotations: { readOnlyHint: true },
+  },
+  withRemoteErrorHandling(async ({ limit }) => {
+    const blocked = await digestsUnavailable();
+    if (blocked) return blocked;
+    const { digests, total } = await listDigests(limit);
+    if (digests.length === 0) return text("No digests yet. Load the docket:digest skill to compile one.");
+    return text(`${digests.map(formatDigestLine).join("\n")}${total > digests.length ? `\n… ${total - digests.length} older` : ""}`);
+  }),
+);
+
+server.registerTool(
+  "digest_get",
+  {
+    title: "Read digest",
+    description: "One digest in full: summary, highlights, metrics, every item with its link and status, and which sources it was built from.",
+    inputSchema: { id: z.string().describe("The digest's short id, e.g. D-7K2F9A, or its uuid") },
+    annotations: { readOnlyHint: true },
+  },
+  withRemoteErrorHandling(async ({ id }) => {
+    const blocked = await digestsUnavailable();
+    if (blocked) return blocked;
+    try {
+      const digest = await getDigest(id);
+      return digest ? text(formatDigest(digest)) : text(`No digest ${id}`);
+    } catch (err) {
+      if (err instanceof DigestValidationError) return errorText(err.message);
+      throw err;
+    }
+  }),
+);
+
+server.registerTool(
+  "digest_delete",
+  {
+    title: "Delete digest",
+    description: "Permanently remove a digest, here and on every paired device.",
+    inputSchema: { id: z.string().describe("The digest's short id, e.g. D-7K2F9A, or its uuid") },
+    annotations: { readOnlyHint: false, destructiveHint: true },
+  },
+  withRemoteErrorHandling(async ({ id }) => {
+    const blocked = await digestsUnavailable();
+    if (blocked) return blocked;
+    try {
+      const removed = await deleteDigest(id, deviceId);
+      if (!removed) return text(`No digest ${id}`);
+      log(`deleted digest ${digestShortId(removed.uuid)} "${removed.title}" by ${currentAgent() ?? "unknown"}`);
+      return text(`Deleted ${digestShortId(removed.uuid)} ${removed.title}`);
+    } catch (err) {
+      if (err instanceof DigestValidationError) return errorText(err.message);
+      throw err;
+    }
   }),
 );
 

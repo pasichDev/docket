@@ -161,13 +161,21 @@ export function cursorAfterPage(payload: SyncPayload, current: number, acceptedB
   return Math.max(current, promised);
 }
 
-/** AES-256-GCM encrypt a sync response with the peer's derived secret, so payload contents aren't plaintext on the LAN. */
-export function encryptSyncPayload(secretHex: string, payload: SyncPayload): { encrypted: string } {
+/** AES-256-GCM encrypt a sync response with the peer's derived secret, so payload contents aren't plaintext on the LAN. Shared by every peer-facing response (todos and digests). */
+export function encryptEnvelope(secretHex: string, payload: unknown): { encrypted: string } {
   const key = Buffer.from(secretHex, "hex");
   return { encrypted: encryptWithKey(key, JSON.stringify(payload)).toString("base64") };
 }
 
-export function decryptSyncPayload(secretHex: string, encryptedBase64: string): SyncPayload {
+export function decryptEnvelope<T>(secretHex: string, encryptedBase64: string): T {
   const key = Buffer.from(secretHex, "hex");
-  return JSON.parse(decryptWithKey(key, Buffer.from(encryptedBase64, "base64"))) as SyncPayload;
+  return JSON.parse(decryptWithKey(key, Buffer.from(encryptedBase64, "base64"))) as T;
+}
+
+export function encryptSyncPayload(secretHex: string, payload: SyncPayload): { encrypted: string } {
+  return encryptEnvelope(secretHex, payload);
+}
+
+export function decryptSyncPayload(secretHex: string, encryptedBase64: string): SyncPayload {
+  return decryptEnvelope<SyncPayload>(secretHex, encryptedBase64);
 }

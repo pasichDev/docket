@@ -100,6 +100,15 @@ export interface Peer {
   lastError?: string | null;
   /** peer's reported clock minus ours, at the most recent sync — a large value is worth surfacing, see peerTrustState() in peers.ts. */
   clockSkewMs?: number | null;
+  /** Delivery cursor into the peer's DIGEST sequence space (see src/digests.ts) — separate
+   *  from `lastSeq` because digests live in their own file with their own counter. Absent
+   *  until the first digest sync, treated as 0. */
+  digestSeq?: number;
+  /** The peer's store epoch `digestSeq` was counted under; a change voids the cursor. */
+  digestEpoch?: string;
+  /** Why the last digest pull failed, or null. Kept apart from `lastError`, which belongs to
+   *  the todo sync — one slot for both would let a healthy todo sync hide a broken digest one. */
+  digestError?: string | null;
   /** The peer's X25519 public key, as verified at pairing time — public by design, safe to display. Used only to derive a human-checkable fingerprint (see peerFingerprint() in peers.ts); never used to re-derive the secret. Absent on peers paired before this field existed. */
   publicKeyX?: string;
 }

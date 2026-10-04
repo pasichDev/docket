@@ -9,7 +9,15 @@
  */
 export const MARKUP = `
   <header>
-    <h1>Docket</h1>
+    <div class="header-left">
+      <h1>Docket</h1>
+      <!-- Two pages, one document: see dashboard.ts. Real links, so a middle-click or a
+           copied URL still lands on the right one. -->
+      <nav class="views" aria-label="Views">
+        <a href="/" data-nav="dash" data-nav-tab="dash">Dashboard</a>
+        <a href="/tasks" data-nav="tasks" data-nav-tab="tasks">Tasks <span class="n" id="nav-open-count"></span></a>
+      </nav>
+    </div>
     <div class="header-right">
       <div class="synced" data-state="idle"><span class="dot"></span><span class="spinner"></span><span id="synced-text">syncing…</span></div>
       <button class="theme-toggle" id="export-toggle" title="Export & Import" type="button">
@@ -183,6 +191,11 @@ export const MARKUP = `
     </div>
     <div id="edit-panel-form"></div>
   </dialog>
+
+  <div class="dash" id="view-dash">
+    <div class="dash-main" id="dash-main"></div>
+    <aside class="dash-side" id="dash-side"></aside>
+  </div>
 
   <div class="page">
     <div class="tags">
