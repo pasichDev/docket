@@ -277,7 +277,7 @@ test("hostile: a well-formed record crosses the wire with every field intact", (
     description: "a real description",
     done: true,
     list: "backlog",
-    category: "VPQ-834",
+    category: "ACME-834",
     priority: "high",
     dueDate: "2026-12-01",
     sourceUrl: "https://gitlab.com/acme/backend/-/issues/834",

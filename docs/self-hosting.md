@@ -87,7 +87,7 @@ Server: https://docket.home.example
 Status: connected
 Latency: 18 ms
 Server version: 2.3.0
-Device: andrii-desktop
+Device: jane-desktop
 Device authorization: active
 ```
 

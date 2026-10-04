@@ -35,7 +35,7 @@ function richStore(): TodoStore {
       title: "everything set",
       description: "multi\nline\tbody with <markup> & \"quotes\"",
       list: "backlog",
-      category: "VPQ-834",
+      category: "ACME-834",
       priority: "high",
       dueDate: "2026-12-01",
       sourceUrl: "https://gitlab.com/acme/backend/-/issues/1",

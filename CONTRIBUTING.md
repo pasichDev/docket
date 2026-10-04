@@ -28,6 +28,17 @@ npm test
 - To run the MCP server itself against your working copy: `claude mcp add docket -- node "$(pwd)/dist/index.js"` (see [README → From source](README.md#from-source)).
 - To exercise the Web UI or `docket serve` locally without touching your real `~/.docket`, set `DOCKET_DATA_DIR` to a scratch directory first — every test in this repo already does this (see the `mkdtemp(...)` + `DOCKET_DATA_DIR` pattern at the top of any `*.test.ts` file) and your manual testing should too.
 
+## Examples are made up
+
+Skills, tool descriptions, docs and tests are read by every user, so every example in them is
+invented: ticket ids are `ACME-123` or `PROJ-123`, repos are `acme/backend`, people are Jane
+and John. `src/examples.guard.test.ts` fails on any other ticket-shaped id.
+
+It also reads a list you keep **outside** the checkout — `~/.config/docket/private-words.txt`
+(or `$DOCKET_PRIVATE_WORDS`), one word per line: your employer, your projects, your name.
+`npm test` then fails while any of them is in a tracked file. CI has no such file and skips
+that half; it is the one check that knows what you would never want published.
+
 ## What a good PR looks like
 
 - **Add tests for new behavior.** This codebase leans heavily on `node:test` (no

@@ -351,7 +351,7 @@ server.registerTool(
         .string()
         .min(1)
         .optional()
-        .describe("Optional free-form category/tag, e.g. a ticket id like \"VPQ-834\""),
+        .describe("Optional free-form category/tag, e.g. a ticket id like \"ACME-834\""),
       priority: z.enum(["low", "medium", "high"]).optional().describe("Optional priority"),
       dueDate: dateSchema.optional().describe("Optional due date, YYYY-MM-DD"),
       sourceUrl: httpUrlSchema
