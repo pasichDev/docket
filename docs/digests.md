@@ -72,12 +72,14 @@ Digest
 ├─ title, summary (markdown), highlights[]
 ├─ metrics[]   { label, value, tone }
 ├─ sections[]  { group, title, items[] }
-│    └─ item   { kind, title, url, ref, repo, status, tone, attention, note, updatedAt }
+│    └─ item   { n, kind, title, url, ref, repo, status, tone, attention, owner, note, detail,
+│                updatedAt, change, previousStatus }        ← n and change are set on publish
+├─ changes     { since, added, changed, gone[] }  ← set on publish
 ├─ sources[]   { name, ok, detail }           ← failed sources show in red
 └─ windowFrom, windowTo, agent, device, workspace, createdAt
 ```
 
-`kind` is one of `pr mr issue ticket commit release todo doc note`; `tone` one of
+`kind` is one of `pr mr issue ticket commit release todo doc mail chat decision check note`; `tone` one of
 `good warn bad info neutral`. Limits (enforced on publish, clamped on sync): 300 items per
 digest, 16 sections, 8 metrics, 12 highlights, 12 000 characters of summary. Links must be
 `http(s)`.
@@ -109,6 +111,27 @@ the todo routes. The publishing device is the one the request was signed by — 
 claim to be another. Every client of the server sees the same digests; there is no peer sync
 to wait for. The server announces `digest.published`, `digest.deleted` and `digest.seen` on
 its event stream.
+
+## Numbers, owners and hand-off
+
+Every item is numbered on publish. `D-7K2F9A/7` names it anywhere — the `#7` on the dashboard
+copies it — and `7` alone means the latest digest. Tell any agent "take 7" and it calls
+`digest_take`: it gets the item's full brief, and a docket task for it (the existing one if
+the item is a task or already became one) claimed in its name, so the dashboard shows who is
+on it. When the work is done the agent closes the task with `todo_complete(id, reason)`.
+
+`owner` says who takes the next step — `you`, `agent`, or a name from the config's `people`.
+**By person** lays the digest out as numbered steps per owner.
+
+`detail` is the deep version of an item, for the ones that need it: what is wrong, what was
+tried, what comes next. Routine items keep to one line.
+
+## What changed
+
+`digest_publish` compares each digest with the previous one by item identity (link, else
+repo#ref, else title): items new since then, items whose status moved (`was open`), and items
+no longer listed. The dashboard shows it as the first card under the summary. It is computed
+by the store, not written by the agent, so it is the same on every device.
 
 ## Seen marks
 

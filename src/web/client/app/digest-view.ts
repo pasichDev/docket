@@ -20,6 +20,8 @@ const KIND_LABEL: Record<DigestItemKind, string> = {
   doc: "Doc",
   mail: "Mail",
   chat: "Chat",
+  decision: "Decide",
+  check: "Check",
   note: "Note",
 };
 
@@ -80,14 +82,16 @@ export function isStale(d: Pick<Digest, "createdAt">, now = Date.now()): boolean
 }
 
 /** What a digest row knows about the task list: which todo, if any, is the same piece of work. */
+type LinkedTodo = Pick<Todo, "id" | "done" | "title" | "workingAgent">;
+
 export interface TodoLinks {
-  byUrl: Map<string, Pick<Todo, "id" | "done" | "title">>;
-  byShortId: Map<string, Pick<Todo, "id" | "done" | "title">>;
+  byUrl: Map<string, LinkedTodo>;
+  byShortId: Map<string, LinkedTodo>;
 }
 
 export function linkedTodos(todos: readonly Todo[]): TodoLinks {
-  const byUrl = new Map<string, Pick<Todo, "id" | "done" | "title">>();
-  const byShortId = new Map<string, Pick<Todo, "id" | "done" | "title">>();
+  const byUrl = new Map<string, LinkedTodo>();
+  const byShortId = new Map<string, LinkedTodo>();
   for (const t of todos) {
     // Open beats done: if both exist, the open one is the one worth pointing at.
     if (t.sourceUrl && (!byUrl.has(t.sourceUrl) || !t.done)) byUrl.set(t.sourceUrl, t);
@@ -97,7 +101,7 @@ export function linkedTodos(todos: readonly Todo[]): TodoLinks {
 }
 
 /** A docket todo the row IS (its ref is a T- id) or that was made from it (same link). */
-export function todoForItem(item: DigestItem, links: TodoLinks): Pick<Todo, "id" | "done" | "title"> | null {
+export function todoForItem(item: DigestItem, links: TodoLinks): LinkedTodo | null {
   const ref = item.ref?.trim().toUpperCase();
   if (ref && /^T-[0-9A-Z]{6}$/.test(ref)) {
     const own = links.byShortId.get(ref);
@@ -121,13 +125,17 @@ export interface DigestView {
   adding: ReadonlySet<string>;
   group: string | null;
   now: number;
+  /** "area" groups sections as the agent wrote them; "people" regroups items by owner. */
+  mode: "area" | "people";
+  /** The digest's short id, for the hand-off handle on each row. */
+  shortId: string;
 }
 
 const NONE: ReadonlySet<string> = new Set();
 const NO_MARKS: SeenMarks = new Map();
 
 export function digestView(links: TodoLinks, overrides: Partial<Omit<DigestView, "links">> = {}): DigestView {
-  return { links, seen: NO_MARKS, adding: NONE, group: null, now: Date.now(), ...overrides };
+  return { links, seen: NO_MARKS, adding: NONE, group: null, now: Date.now(), mode: "area", shortId: "", ...overrides };
 }
 
 const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`;
@@ -138,6 +146,9 @@ const ICON_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 /** The row's task action: close the todo it is, open it in Tasks, or make one from it. */
 function taskButton(item: DigestItem, key: string, view: DigestView): string {
   const todo = todoForItem(item, view.links);
+  if (todo && !todo.done && todo.workingAgent) {
+    return `<span class="dg-working" title="An agent is on it">▶ ${escapeHtml(todo.workingAgent)}</span><button type="button" class="dg-task dg-task-close" data-close-todo="${todo.id}" data-close-title="${escapeHtml(todo.title)}" title="Close this task, with a reason">${ICON_CHECK}<span>close</span></button>`;
+  }
   if (todo && !todo.done) {
     return `<button type="button" class="dg-task dg-task-close" data-close-todo="${todo.id}" data-close-title="${escapeHtml(todo.title)}" title="Close this task, with a reason">${ICON_CHECK}<span>close</span></button>`;
   }
@@ -176,6 +187,25 @@ export function todoFromItem(item: DigestItem, digest: Pick<Digest, "shortId">, 
   };
 }
 
+function ownerLabel(owner: string): string {
+  if (owner.toLowerCase() === "you") return "You";
+  if (owner.toLowerCase() === "agent") return "Agent";
+  return owner;
+}
+
+/** "#7": a click copies what to tell an agent. Absent on digests from before numbering. */
+function handleButton(item: DigestItem, view: DigestView): string {
+  if (!item.n || !view.shortId) return "";
+  const handle = `${view.shortId}/${item.n}`;
+  return `<button type="button" class="dg-n" data-handoff="${escapeHtml(handle)}" title="Copy ${escapeHtml(handle)} — tell any agent to take it">#${item.n}</button>`;
+}
+
+function changeBadge(item: DigestItem): string {
+  if (item.change === "new") return `<span class="dg-change" data-change="new">new</span>`;
+  if (item.change === "changed") return `<span class="dg-change" data-change="changed" title="Status in the previous digest">was ${escapeHtml(item.previousStatus ?? "—")}</span>`;
+  return "";
+}
+
 export function digestItemHtml(item: DigestItem, key: string, view: DigestView, hidden = false): string {
   const href = safeHref(item.url);
   const title = escapeHtml(item.title);
@@ -186,9 +216,10 @@ export function digestItemHtml(item: DigestItem, key: string, view: DigestView, 
   return `<li class="dg-item" data-tone="${tone(item.tone)}"${item.attention && !hidden ? ' data-attention="true"' : ""}${hidden ? ' data-hidden="true"' : ""}>
     <span class="dg-kind" data-kind="${escapeHtml(item.kind)}">${escapeHtml(KIND_LABEL[item.kind] ?? "Note")}</span>
     <div class="dg-main">
-      <div class="dg-line">${item.ref ? `<span class="dg-ref">${escapeHtml(item.ref)}</span>` : ""}${titleHtml}</div>
-      ${meta.length ? `<div class="dg-meta">${meta.join(" · ")}</div>` : ""}
+      <div class="dg-line">${handleButton(item, view)}${item.ref ? `<span class="dg-ref">${escapeHtml(item.ref)}</span>` : ""}${titleHtml}${changeBadge(item)}</div>
+      ${meta.length || item.owner ? `<div class="dg-meta">${item.owner ? `<span class="dg-owner">→ ${escapeHtml(ownerLabel(item.owner))}</span>${meta.length ? " · " : ""}` : ""}${meta.join(" · ")}</div>` : ""}
       ${item.note && !hidden ? `<div class="dg-note">${escapeHtml(item.note)}</div>` : ""}
+      ${item.detail && !hidden ? `<details class="dg-detail"><summary>Details</summary><div class="md">${renderMarkdown(item.detail)}</div></details>` : ""}
     </div>
     <div class="dg-side">
       ${item.status ? `<span class="dg-status" data-tone="${tone(item.tone)}">${item.attention ? ICON_ALERT : ""}${escapeHtml(item.status)}</span>` : item.attention ? `<span class="dg-status" data-tone="warn">${ICON_ALERT}needs you</span>` : ""}
@@ -306,14 +337,73 @@ function groupChipsHtml(groups: readonly DigestGroup[], active: string | null): 
   return `<div class="dg-groups" role="toolbar" aria-label="Filter by area">${chip(null, "All", total, need)}${groups.map((g) => chip(g.name, g.name, g.items, g.attention)).join("")}</div>`;
 }
 
+export function changesHtml(d: Digest): string {
+  const c = d.changes;
+  if (!c) return "";
+  const moved = d.sections.flatMap((s) => s.items.filter((i) => i.change === "changed"));
+  if (c.added === 0 && moved.length === 0 && c.gone.length === 0) {
+    return `<section class="dg-changes"><h3>Since the previous digest</h3><p class="dg-empty-note">Nothing moved.</p></section>`;
+  }
+  const line = (ref: string | null, title: string, rest: string) =>
+    `<li>${ref ? `<span class="dg-ref">${escapeHtml(ref)}</span>` : ""}<span>${escapeHtml(title)}</span>${rest}</li>`;
+  return `<section class="dg-changes">
+    <h3>Since the previous digest <span class="dg-count">${c.added} new · ${c.changed} changed · ${c.gone.length} gone</span></h3>
+    ${moved.length ? `<ul class="dg-change-list">${moved.map((i) => line(i.ref, i.title, `<span class="dg-arrow">${escapeHtml(i.previousStatus ?? "—")} → ${escapeHtml(i.status ?? "—")}</span>`)).join("")}</ul>` : ""}
+    ${c.gone.length ? `<details class="dg-more"><summary>${c.gone.length} no longer listed</summary><ul class="dg-change-list">${c.gone.map((g) => line(g.ref, g.title, g.status ? `<span class="dg-arrow">last: ${escapeHtml(g.status)}</span>` : "")).join("")}</ul></details>` : ""}
+  </section>`;
+}
+
+/** Owners in reading order: the user first, people by name, the agent's own follow-ups last. */
+function ownerOrder(a: string, b: string): number {
+  const rank = (o: string) => (o.toLowerCase() === "you" ? 0 : o.toLowerCase() === "agent" ? 2 : 1);
+  return rank(a) - rank(b) || a.localeCompare(b);
+}
+
+/** "Who does what": every owned item, under its owner, in digest order — numbered steps. */
+export function peopleHtml(d: Digest, view: DigestView): string {
+  const byOwner = new Map<string, Array<{ item: DigestItem; key: string }>>();
+  let unowned = 0;
+  d.sections.forEach((s, si) =>
+    s.items.forEach((item, ii) => {
+      if (isHidden(item, view.seen)) return;
+      if (!item.owner) {
+        unowned += 1;
+        return;
+      }
+      const list = byOwner.get(item.owner) ?? [];
+      list.push({ item, key: `${d.uuid}:${si}:${ii}` });
+      byOwner.set(item.owner, list);
+    }),
+  );
+  const owners = [...byOwner.keys()].sort(ownerOrder);
+  const cards = owners.map((owner) => {
+    const rows = byOwner.get(owner)!;
+    return `<section class="dg-section dg-person"${owner.toLowerCase() === "you" ? ' data-attention="true"' : ""}>
+      <h3><span>${escapeHtml(ownerLabel(owner))}</span><span class="dg-count">${rows.length}</span></h3>
+      <ol class="dg-items dg-steps">${rows.map(({ item, key }) => digestItemHtml(item, key, view)).join("")}</ol>
+    </section>`;
+  });
+  const note = unowned ? `<p class="dg-empty-note">${unowned} item${unowned === 1 ? "" : "s"} without an owner — "By area" shows them.</p>` : "";
+  return `<div class="dg-group">${cards.join("") || `<p class="dg-empty-note">No item names an owner.</p>`}</div>${note}`;
+}
+
+function modeSwitchHtml(d: Digest, mode: DigestView["mode"]): string {
+  if (!d.sections.some((s) => s.items.some((i) => i.owner))) return "";
+  const btn = (m: DigestView["mode"], label: string) => `<button type="button" data-digest-mode="${m}" data-active="${mode === m}">${label}</button>`;
+  return `<div class="dg-mode" role="toolbar" aria-label="Arrange by">${btn("area", "By area")}${btn("people", "By person")}</div>`;
+}
+
 /**
  * `view.group` filters the body to one area; null shows every group, each under its own
  * heading. An unknown group (the digest changed under a remembered filter) falls back to all.
  */
 export function digestBodyHtml(d: Digest, view: DigestView): string {
   const groups = groupsOf(d, view.seen);
+  const people = view.mode === "people" && d.sections.some((s) => s.items.some((i) => i.owner));
   let body: string;
-  if (groups.length === 0) {
+  if (people) {
+    body = peopleHtml(d, view);
+  } else if (groups.length === 0) {
     // Wrapped like a group without a heading, so the grid layouts apply to it as well.
     const sections = d.sections.map((_, i) => sectionHtml(d, i, view)).join("");
     body = sections ? `<div class="dg-group">${sections}</div>` : "";
@@ -333,7 +423,7 @@ export function digestBodyHtml(d: Digest, view: DigestView): string {
   }
   // The hero's "N need you" chip jumps here.
   const anchored = body.replace('data-attention="true"', 'id="dg-first-attention" data-attention="true"');
-  return `${heroHtml(d, view)}${metricsHtml(d)}${anchored || `<p class="dg-empty-note">This digest has no items.</p>`}`;
+  return `${heroHtml(d, view)}${changesHtml(d)}${metricsHtml(d)}${modeSwitchHtml(d, view.mode)}${anchored || `<p class="dg-empty-note">This digest has no items.</p>`}`;
 }
 
 export function timelineHtml(digests: readonly DigestSummary[], selected: string | null): string {

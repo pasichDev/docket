@@ -41,6 +41,18 @@ untouched.
 - **More sources.** Obsidian vaults and project folders (`files`), and any MCP
   server the agent has — Jira, Linear, Sentry, Slack — as configurable `extra`
   sources, read-only like the rest.
+- **Hand-off by number.** Every item is numbered on publish; `D-7K2F9A/7` (or
+  just `7`) names it to any agent. `digest_take` returns the brief and a docket
+  task claimed by that agent — the existing one when the item is or became a
+  task — and `todo_complete(id, reason)` closes it. `#7` on the dashboard copies
+  the handle, and a claimed item shows who is on it.
+- **What changed.** Publishing compares a digest with the previous one by item
+  identity: new items, status changes (`was open`), and items no longer listed,
+  shown as the first card. Computed by the store, not by the agent.
+- **Owners and depth.** Items carry `owner` (`you`, `agent`, or a person from
+  the config) and an optional markdown `detail` for the ones worth a real
+  analysis; **By person** lays the digest out as numbered steps per owner. New
+  kinds: `decision`, `check`.
 - **Seen marks.** Hide a digest item until its status changes; marks carry over
   to later digests and sync across devices (last write wins, undo included).
 - **Close with a reason.** `todo_complete(id, reason)` and a close dialog on the

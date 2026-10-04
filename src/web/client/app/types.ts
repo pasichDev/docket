@@ -66,7 +66,7 @@ export type WorkspaceKey = string | typeof UNFILED;
 
 /** The wire shape of /api/digests — see src/digests.ts on the server. */
 export type DigestTone = "good" | "warn" | "bad" | "info" | "neutral";
-export type DigestItemKind = "pr" | "mr" | "issue" | "ticket" | "commit" | "release" | "todo" | "doc" | "mail" | "chat" | "note";
+export type DigestItemKind = "pr" | "mr" | "issue" | "ticket" | "commit" | "release" | "todo" | "doc" | "mail" | "chat" | "decision" | "check" | "note";
 
 export interface DigestItem {
   /** Identity for seen marks, computed by the server (seenKey in src/digests.ts). */
@@ -80,7 +80,20 @@ export interface DigestItem {
   tone: DigestTone | null;
   attention: boolean;
   note: string | null;
+  detail?: string | null;
+  owner?: string | null;
   updatedAt: string | null;
+  /** 1-based position; "D-XXXXXX/n" hands the item to an agent. 0 on digests from before numbering. */
+  n?: number;
+  change?: "new" | "changed" | null;
+  previousStatus?: string | null;
+}
+
+export interface DigestChanges {
+  since: string;
+  added: number;
+  changed: number;
+  gone: Array<{ title: string; ref: string | null; url: string | null; status: string | null }>;
 }
 
 export interface Digest {
@@ -92,6 +105,7 @@ export interface Digest {
   metrics: Array<{ label: string; value: string; tone: DigestTone | null }>;
   sections: Array<{ group?: string | null; title: string; items: DigestItem[] }>;
   sources: Array<{ name: string; ok: boolean; detail: string | null }>;
+  changes?: DigestChanges | null;
   windowFrom: string | null;
   windowTo: string | null;
   workspace: string | null;

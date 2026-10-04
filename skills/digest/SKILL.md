@@ -41,6 +41,14 @@ skill and run it first, then come back here. Never guess usernames, groups or da
       "query": "threads from people (not newsletters or notifications) since <since> that wait on my reply" },
     { "name": "docs", "type": "files", "paths": ["~/src/acme/docs", "~/src/acme/ADR"], "glob": "*.md" }
   ],
+  "people": [
+    { "name": "Jane", "match": ["jdoe", "Jane Doe", "jane@acme.example"] },
+    { "name": "John", "match": ["jsmith", "John Smith"] }
+  ],
+  "checks": [
+    { "name": "prod", "url": "https://app.acme.example/health" },
+    { "name": "staging", "url": "https://staging.acme.example/health" }
+  ],
   "presets": {
     "work":  { "groups": ["Work"], "window": "since-last" },
     "week":  { "window": "7d" },
@@ -60,6 +68,14 @@ skill and run it first, then come back here. Never guess usernames, groups or da
 so put it last.
 
 A source that is absent or `"enabled": false` is skipped and **not** listed in `sources`.
+
+`people` names the humans a step can belong to: an item is theirs when one of their `match`
+strings is its assignee, author or reviewer at the source. The user is always `"you"`, and
+you — the agent — are `"agent"`. Names stay in the user's config, never in a repo.
+
+`checks` are URLs to probe read-only (`curl -s -o /dev/null -w '%{http_code} %{time_total}' <url>`):
+an environment answering anything but 2xx is a `check` item with `tone: "bad"`; a healthy
+one is a line in the summary, not an item.
 
 `extra` is how a user adds anything the built-in sources don't cover — Jira, Linear,
 YouTrack, Sentry, Slack, a project's docs folder. Each entry has a `name` (shown on the
@@ -185,6 +201,27 @@ silently — the dashboard shows it in red so the user knows the digest has a bl
 
 Write in the configured `language` (default: the language the user wrote to you in).
 
+**Depth is per item, not per digest.** Most items are routine and get one line: kind, ref,
+status, at most a `note`. Some deserve real work, and get a `detail` (markdown, a short
+paragraph or a list):
+- anything **blocked, failing, stale ≥ 3 days, or waiting on a decision**;
+- anything the user owns that changed status since the previous digest;
+- a ticket whose description, comments or linked MR say more than its status does.
+
+For those, open the source — the ticket body and its last comments, the MR's discussion and
+pipeline log — and write what is actually going on: the cause, what was tried, what the next
+step is and who takes it. Be concrete ("the retry loop has no jitter — every client retries
+in the same second"), never generic ("needs attention"). A ticket that turns out simpler
+than its status suggests says so in one line ("blocked on a typo in the config — one-line
+fix"). If you could not read the source, say that instead of guessing.
+
+**Who does the next step** — set `owner` on every item that has one: `"you"`, a name from
+`people`, or `"agent"` for follow-ups *you* will do (update a ticket's status, file a
+ticket, check a log, chase a review). The dashboard can lay the digest out by person, as
+numbered steps; write steps as actions ("merge !160, then deploy !305 to prod"), and keep
+an order where one step unblocks the next. A decision the user has to make is its own
+`decision` item, owned by `"you"`.
+
 **Link things up.** An MR that implements a Notion ticket is ONE item: kind of the thing
 the user acts on (usually the MR), the ticket id in `note` ("Implements ACME-683"). The same
 PR found by two queries is one item.
@@ -218,9 +255,12 @@ what changed since last time. No note that repeats the title.
 **Title** — the date and the one or two facts that matter most:
 `Fri 4 Oct — 2 MRs wait on your review, ACME-683 blocked` (in the configured language).
 
-**Summary** — 2–5 sentences of markdown. The first sentence is the most important thing.
-Say what **changed since the previous digest** (newly merged, newly blocked, newly waiting),
-not a restatement of the lists. No greetings, no "here is your digest".
+**Summary** — 2–5 sentences of markdown, read as "what changed since yesterday": new
+releases and tags, what merged, what moved, what is still sitting where it was ("still
+draft, 7 of 11 — unchanged since yesterday"). The first sentence is the most important
+thing. Don't count changes yourself: `digest_publish` compares the digest with the previous
+one and shows new, changed and gone items on its own — your job is to say what they mean.
+No greetings, no "here is your digest".
 
 **Highlights** — 2–5 one-liners, each an action or a decision, most important first.
 
@@ -232,8 +272,16 @@ Give `tone` to the ones that should draw the eye.
 Call `digest_publish` with everything above plus `sources`, `windowFrom`, `windowTo`.
 If it rejects the digest, the error names the field — fix that and call again.
 
-Then reply in chat with at most 4 lines: the title, the "needs you" items as a short list
-with links, and `http://localhost:8787/`. The dashboard is where the detail lives.
+Then reply in chat with at most 6 lines: the title, the "needs you" items as a short list
+with their numbers (`#3 !160 …`), and `http://localhost:8787/`. The dashboard is where the
+detail lives.
+
+**Every item has a number.** `digest_publish` numbers the items; `D-7K2F9A/3` (or just `3`,
+meaning the latest digest) names one to any agent. When the user says "take 3", "зроби 5 з
+дайджесту" or pastes a handle, call `digest_take(item)`: it returns the full brief and a
+docket task claimed by you — the existing one if there is one. Do the work, then close it
+with `todo_complete(id, reason)`; the dashboard shows it as done. Stop without finishing →
+`todo_release(id)`.
 
 Closing work is not part of a digest run. If the user then says "close T-7K2F9A, merged in
 !160", use `todo_complete(id, reason)` — the reason lands in the task's description and

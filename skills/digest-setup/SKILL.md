@@ -44,7 +44,7 @@ command (`glab auth login`, `gh auth login`) and leave that source disabled.
 
 ## 2. Ask once
 
-One `AskUserQuestion` call (two if you need all six questions), pre-filled from what you detected:
+Two `AskUserQuestion` calls at most (four questions each), pre-filled from what you detected:
 
 1. **Sources** (multiSelect): GitLab · GitHub · Notion · local git · Obsidian, plus one
    option per extra MCP server or files folder you found (docket is always on). "Other"
@@ -55,9 +55,12 @@ One `AskUserQuestion` call (two if you need all six questions), pre-filled from 
    (the work GitLab group, personal GitHub repos, anything else), e.g. Work / Learning /
    Side projects. Each group is a name plus `match` strings checked against an item's url,
    repo and ref; `"*"` catches the rest.
-5. **Presets and schedule**: suggest presets from the groups (one per group, plus "week")
+5. **People and checks**: who else's steps should the digest track (names, and the logins
+   or emails they appear under), and which environment URLs to probe. Offer the people you
+   saw as reviewers and assignees in the user's own MRs and tickets.
+6. **Presets and schedule**: suggest presets from the groups (one per group, plus "week")
    and ask whether a daily digest should run on its own, and at what time.
-6. **Language** of the digest text: the language the user writes in (recommended) or English.
+7. **Language** of the digest text: the language the user writes in (recommended) or English.
 
 For each chosen extra MCP server, write the `query` in plain words from what the user
 wants to see ("Jira issues assigned to me, updated since <since>") and pick the `kind`;
@@ -85,6 +88,8 @@ person property — that is what the digest filters on.
     { "name": "<jira>", "type": "mcp", "server": "<mcp server name>", "kind": "ticket", "query": "<what to read, in plain words>" },
     { "name": "<docs>", "type": "files", "paths": ["<folder>"], "glob": "*.md" }
   ],
+  "people": [{ "name": "<name>", "match": ["<login>", "<email>"] }],
+  "checks": [{ "name": "<env>", "url": "<health url>" }],
   "presets": { "<group>": { "groups": ["<group>"] }, "week": { "window": "7d" } },
   "schedule": { "daily": "09:00" },
   "groups": [

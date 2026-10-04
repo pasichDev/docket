@@ -32,6 +32,8 @@ const dash = {
   /** The area filter ("Work", "Learning"…); null shows every group. Kept across digests,
    *  so the morning's "work only" view survives a fresh digest landing. */
   group: null as string | null,
+  /** "By area" or "By person"; remembered per browser. */
+  mode: "area" as "area" | "people",
   /** Seen marks, key → status when marked. Synced across devices by the server. */
   seen: new Map<string, string | null>(),
   /** The todo the close dialog is holding, if it is open. */
@@ -88,7 +90,7 @@ export function renderDashboard(): void {
   if (!dash.loaded || (uuid && !current)) {
     mainHtml = dash.failed ? `<p class="dg-empty-note">Couldn't load digests — retrying.</p>` : `<div class="dg-skeleton"></div><div class="dg-skeleton short"></div>`;
   } else if (current) {
-    mainHtml = digestBodyHtml(current, digestView(linkedTodos(state.allTodos), { seen: dash.seen, adding: dash.adding, group: dash.group }));
+    mainHtml = digestBodyHtml(current, digestView(linkedTodos(state.allTodos), { seen: dash.seen, adding: dash.adding, group: dash.group, mode: dash.mode, shortId: current.shortId }));
   } else {
     mainHtml = emptyDashboardHtml();
   }
@@ -260,6 +262,35 @@ async function submitClose(): Promise<void> {
   renderDashboard();
 }
 
+/**
+ * The Clipboard API exists only in a secure context, and the dashboard opened from another
+ * device on the LAN is plain http — so fall back to the old selection copy there.
+ */
+async function copyText(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // fall through to the selection copy
+  }
+  const area = document.createElement("textarea");
+  area.value = value;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;top:-1000px;opacity:0";
+  document.body.append(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  area.remove();
+  return ok;
+}
+
 const GROUP_KEY = "docket-digest-group";
 
 function rememberGroup(group: string | null): void {
@@ -274,6 +305,7 @@ function rememberGroup(group: string | null): void {
 export function initDashboard(): void {
   try {
     dash.group = localStorage.getItem(GROUP_KEY);
+    dash.mode = localStorage.getItem("docket-digest-mode") === "people" ? "people" : "area";
   } catch {
     dash.group = null;
   }
@@ -293,6 +325,24 @@ export function initDashboard(): void {
     const pick = target.closest<HTMLElement>("[data-digest]");
     if (pick?.dataset.digest) {
       void select(pick.dataset.digest);
+      return;
+    }
+
+    const handoff = target.closest<HTMLElement>("button[data-handoff]");
+    if (handoff) {
+      // Just the handle: "take D-7K2F9A/7" is all an agent needs — digest_take resolves the rest.
+      const handle = handoff.dataset.handoff ?? "";
+      void copyText(handle).then((ok) => showToast(ok ? `Copied ${handle} — tell any agent "take ${handle}"` : `Tell an agent: take ${handle}`));
+      return;
+    }
+
+    const modeBtn = target.closest<HTMLElement>("button[data-digest-mode]");
+    if (modeBtn) {
+      dash.mode = modeBtn.dataset.digestMode === "people" ? "people" : "area";
+      try {
+        localStorage.setItem("docket-digest-mode", dash.mode);
+      } catch {}
+      renderDashboard();
       return;
     }
 

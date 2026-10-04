@@ -888,4 +888,32 @@ export const STYLES = `
   body[data-dash-layout="wide"] .dg-section:not([data-attention="true"]) .dg-side { grid-column: 2; flex-wrap: wrap; }
 
   .dg-kind[data-kind="mail"], .dg-kind[data-kind="chat"] { color: var(--sage); background: var(--sage-bg); }
+
+  /* ---- Hand-off numbers, owners, changes, details, by-person view ------------------------- */
+  .dg-n {
+    border: none; cursor: copy; font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-text);
+    background: var(--muted2); border-radius: 6px; padding: 2px 6px; flex-shrink: 0;
+  }
+  .dg-n:hover { background: var(--accent); color: #2b2119; }
+  .dg-change { font: 700 10.5px 'Karla', sans-serif; border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+  .dg-change[data-change="new"] { color: var(--lavender); background: var(--lavender-bg); }
+  .dg-change[data-change="changed"] { color: var(--due-text); background: var(--due-bg); }
+  .dg-owner { font-weight: 700; color: var(--text); }
+  .dg-working { font: 700 11px 'Karla', sans-serif; color: var(--lavender); background: var(--lavender-bg); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+  .dg-detail { margin-top: 6px; }
+  .dg-detail summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted); list-style: none; }
+  .dg-detail summary::-webkit-details-marker { display: none; }
+  .dg-detail summary::before { content: "▸ "; }
+  .dg-detail[open] summary::before { content: "▾ "; }
+  .dg-detail .md { font-size: 13.5px; line-height: 1.55; margin-top: 6px; padding: 10px 12px; background: var(--bg); border-radius: 12px; }
+  .dg-changes { background: var(--card-plain-bg); border: 1px solid var(--card-plain-border); border-radius: 20px; box-shadow: var(--card-shadow); padding: 14px 18px 10px; }
+  .dg-change-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .dg-change-list li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+  .dg-arrow { font-size: 12px; font-weight: 700; color: var(--due-text); }
+  .dg-mode { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--card-plain-bg); box-shadow: 0 0 0 1px var(--card-plain-border) inset; align-self: flex-start; }
+  .dg-mode button { border: none; cursor: pointer; font: 600 12.5px 'Fredoka', sans-serif; color: var(--muted); background: none; border-radius: 999px; padding: 6px 13px; }
+  .dg-mode button[data-active="true"] { background: var(--ink); color: var(--ink-text); }
+  .dg-kind[data-kind="decision"] { color: var(--overdue-text); background: var(--overdue-bg); }
+  .dg-kind[data-kind="check"] { color: var(--muted); background: var(--bg); }
+  ol.dg-steps { list-style: none; }
 `;

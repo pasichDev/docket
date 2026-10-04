@@ -105,4 +105,6 @@ nobody reads.
 of the user's work that an agent compiled from GitLab, GitHub, Notion and git;
 the dashboard's home page shows the latest one. Don't build one ad hoc — load the
 `docket:digest` skill, which says what to read, how to verify it and how to lay
-it out. `docket:digest-setup` configures the sources.
+it out. `docket:digest-setup` configures the sources. When the user hands you a digest item
+by number ("take 7", "D-7K2F9A/7"), call `digest_take(item)`, do the work, then close the
+task it gave you with `todo_complete(id, reason)`.

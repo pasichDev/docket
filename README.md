@@ -233,6 +233,8 @@ custom-instructions setting.
 | `todo_version()` / `todo_check_update()` | Data-format version; read-only npm version check. |
 | `digest_publish(title, summary, sections?, metrics?, highlights?, sources?, windowFrom?, windowTo?)` | Save a digest an agent compiled from your GitLab/GitHub/Notion/git — see [Digests](#digests). |
 | `digest_list(limit?)` / `digest_get(id)` / `digest_delete(id)` | Recent digests, one in full, remove one (everywhere it synced). |
+| `digest_take(item)` | Hand item `7` (or `D-7K2F9A/7`) to the calling agent: its brief, plus a docket task claimed in its name. |
+| `digest_seen()` | Items the user marked seen, so the next digest leaves them out. |
 
 Full field and workflow reference: [`skills/docket/SKILL.md`](skills/docket/SKILL.md).
 
