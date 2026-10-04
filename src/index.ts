@@ -19,7 +19,8 @@ import { duplicationWarning, emptyScopeNotice, formatIdle, formatResult, formatT
 import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } from "./remote/client.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { filterTodos, type MutationContext } from "./repository.js";
-import { DIGEST_ITEM_KINDS, DIGEST_TONES, DigestValidationError, deleteDigest, digestShortId, formatDigest, formatDigestLine, getDigest, listDigests, listSeen, publishDigest } from "./digests.js";
+import { DIGEST_ITEM_KINDS, DIGEST_TONES, DigestValidationError, digestShortId, formatDigest, formatDigestLine } from "./digests.js";
+import { localDigestService, RemoteDigestService, type DigestService } from "./digest-service.js";
 import { CURRENT_FORMAT_VERSION, LAST_V7_RELEASE, migrateLegacyFields, readStore, restorePreUpgradeStore, withStore } from "./storage.js";
 import { buildSnapshot } from "./snapshot.js";
 import { TodoService, todoService as localTodoService } from "./todo-service.js";
@@ -76,11 +77,12 @@ function getDeployment(): ReturnType<typeof resolveDeploymentConfig> {
   return deploymentPromise;
 }
 
-let mcpTodoServicePromise: Promise<TodoService> | null = null;
-function getMcpTodoService(): Promise<TodoService> {
-  mcpTodoServicePromise ??= (async () => {
+let remoteRepositoryPromise: Promise<RemoteTodoRepository | null> | null = null;
+/** The one signed client for the configured server, shared by todos and digests; null in Local Mode. */
+function getRemoteRepository(): Promise<RemoteTodoRepository | null> {
+  remoteRepositoryPromise ??= (async () => {
     const deployment = await getDeployment();
-    if (deployment.mode !== "remote") return localTodoService;
+    if (deployment.mode !== "remote") return null;
     const creds = await loadRemoteCredentials();
     if (!creds) {
       throw new DeploymentConfigError(
@@ -94,9 +96,22 @@ function getMcpTodoService(): Promise<TodoService> {
           `Re-pair with \`docket pair ${deployment.serverUrl}\` if this is intentional.`,
       );
     }
-    return new TodoService(new RemoteTodoRepository({ serverUrl: deployment.serverUrl!, deviceId, deviceName, secret: creds.secret }));
+    return new RemoteTodoRepository({ serverUrl: deployment.serverUrl!, deviceId, deviceName, secret: creds.secret });
   })();
+  return remoteRepositoryPromise;
+}
+
+let mcpTodoServicePromise: Promise<TodoService> | null = null;
+function getMcpTodoService(): Promise<TodoService> {
+  mcpTodoServicePromise ??= getRemoteRepository().then((remote) => (remote ? new TodoService(remote) : localTodoService));
   return mcpTodoServicePromise;
+}
+
+let mcpDigestServicePromise: Promise<DigestService> | null = null;
+/** Local store in Local Mode, the Docket Server in Self-hosted Mode — see digest-service.ts. */
+function getMcpDigestService(): Promise<DigestService> {
+  mcpDigestServicePromise ??= getRemoteRepository().then((remote) => (remote ? new RemoteDigestService(remote) : localDigestService));
+  return mcpDigestServicePromise;
 }
 
 interface RunningWebUi {
@@ -588,16 +603,6 @@ server.registerTool(
   }),
 );
 
-/**
- * Digests are local-and-P2P only for now: they live in this device's data directory and
- * travel by peer sync. A device in remote mode has no local store anyone else reads, so
- * publishing there would put the digest somewhere no dashboard looks — say so instead.
- */
-async function digestsUnavailable(): Promise<ReturnType<typeof errorText> | null> {
-  if ((await getDeployment()).mode !== "remote") return null;
-  return errorText("docket: digests are not available in remote (self-hosted server) mode yet — they are stored locally and shared by peer sync.");
-}
-
 const toneSchema = z.enum(DIGEST_TONES).optional().describe("Colour cue: good (merged/done), warn (waiting/stale), bad (failing/blocked), info, neutral");
 
 server.registerTool(
@@ -647,12 +652,10 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
   withRemoteErrorHandling(async (input) => {
-    const blocked = await digestsUnavailable();
-    if (blocked) return blocked;
     try {
       // Not filed under the session's project: a digest spans every source the user works
       // in, and tagging it with whichever repo the agent happened to be opened in is noise.
-      const digest = await publishDigest(input, { agent: currentAgent(), deviceId, deviceName, workspace: null });
+      const digest = await (await getMcpDigestService()).publish(input, { agent: currentAgent(), deviceId, deviceName, workspace: null });
       log(`published digest ${digestShortId(digest.uuid)} "${digest.title}" by ${currentAgent() ?? "unknown"}`);
       return text(`Published ${formatDigestLine(digest)}\nOpen it on the dashboard: http://localhost:${WEB_PORT}/`);
     } catch (err) {
@@ -671,9 +674,7 @@ server.registerTool(
     annotations: { readOnlyHint: true },
   },
   withRemoteErrorHandling(async ({ limit }) => {
-    const blocked = await digestsUnavailable();
-    if (blocked) return blocked;
-    const { digests, total } = await listDigests(limit);
+    const { digests, total } = await (await getMcpDigestService()).list(limit);
     if (digests.length === 0) return text("No digests yet. Load the docket:digest skill to compile one.");
     return text(`${digests.map(formatDigestLine).join("\n")}${total > digests.length ? `\n… ${total - digests.length} older` : ""}`);
   }),
@@ -688,10 +689,8 @@ server.registerTool(
     annotations: { readOnlyHint: true },
   },
   withRemoteErrorHandling(async ({ id }) => {
-    const blocked = await digestsUnavailable();
-    if (blocked) return blocked;
     try {
-      const digest = await getDigest(id);
+      const digest = await (await getMcpDigestService()).get(id);
       return digest ? text(formatDigest(digest)) : text(`No digest ${id}`);
     } catch (err) {
       if (err instanceof DigestValidationError) return errorText(err.message);
@@ -710,9 +709,7 @@ server.registerTool(
     annotations: { readOnlyHint: true },
   },
   withRemoteErrorHandling(async () => {
-    const blocked = await digestsUnavailable();
-    if (blocked) return blocked;
-    const marks = await listSeen();
+    const marks = await (await getMcpDigestService()).seen();
     if (marks.length === 0) return text("Nothing marked seen.");
     return text(marks.map((m) => `${m.key}  [${m.status ?? "no status"}]  ${m.title}`).join("\n"));
   }),
@@ -727,10 +724,8 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   withRemoteErrorHandling(async ({ id }) => {
-    const blocked = await digestsUnavailable();
-    if (blocked) return blocked;
     try {
-      const removed = await deleteDigest(id, deviceId);
+      const removed = await (await getMcpDigestService()).delete(id, deviceId);
       if (!removed) return text(`No digest ${id}`);
       log(`deleted digest ${digestShortId(removed.uuid)} "${removed.title}" by ${currentAgent() ?? "unknown"}`);
       return text(`Deleted ${digestShortId(removed.uuid)} ${removed.title}`);

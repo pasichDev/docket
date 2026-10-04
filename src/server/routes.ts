@@ -28,6 +28,7 @@ import {
 } from "../web/http.js";
 import { isAuthorizedAdminRequest } from "./admin-token.js";
 import { checkDeviceAuth } from "./auth.js";
+import { deleteDigest, DigestValidationError, getDigest, listDigests, listSeen, markSeen, publishDigest } from "../digests.js";
 import {
   approvePairingRequest,
   createPairingCode,
@@ -479,6 +480,89 @@ export async function handleServeApiRoute(
     } catch (err) {
       if (err instanceof TodoConflictError) {
         conflict(res, err.current, "revision_conflict");
+        return true;
+      }
+      throw err;
+    }
+    return true;
+  }
+
+  // Digests — the same store and rules as Local Mode (src/digests.ts), on the server's data
+  // directory. The publishing device and agent come from the authenticated request, never
+  // from the body.
+  if (url.pathname === "/api/v1/digests/seen") {
+    if (req.method === "GET") {
+      json(res, 200, { seen: await listSeen() });
+      return true;
+    }
+    if (req.method === "POST") {
+      const body = parseJsonBody(res, rawBody) as { key?: unknown; status?: unknown; title?: unknown; seen?: unknown } | null;
+      if (body === null) return true;
+      if (typeof body.key !== "string" || !body.key.trim()) {
+        json(res, 400, { error: "key is required" });
+        return true;
+      }
+      const mark = await markSeen(
+        { key: body.key, status: typeof body.status === "string" ? body.status : null, title: typeof body.title === "string" ? body.title : "" },
+        body.seen !== false,
+        context.deviceId,
+      );
+      broadcastServerEvent("digest.seen", null, context.deviceId);
+      json(res, 200, { seen: mark });
+      return true;
+    }
+  }
+  if (url.pathname === "/api/v1/digests") {
+    if (req.method === "GET") {
+      const requested = Number(url.searchParams.get("limit") ?? 30);
+      const limit = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, 200) : 30;
+      json(res, 200, await listDigests(limit));
+      return true;
+    }
+    if (req.method === "POST") {
+      const body = parseJsonBody(res, rawBody);
+      if (body === null) return true;
+      try {
+        const digest = await publishDigest(body, { agent: context.agent, deviceId: context.deviceId, deviceName: context.deviceName, workspace: null });
+        broadcastServerEvent("digest.published", digest.uuid, context.deviceId);
+        json(res, 201, { digest });
+      } catch (err) {
+        if (err instanceof DigestValidationError) {
+          json(res, 400, { error: err.message });
+          return true;
+        }
+        throw err;
+      }
+      return true;
+    }
+  }
+  const digestMatch = url.pathname.match(/^\/api\/v1\/digests\/([^/]+)$/);
+  if (digestMatch && (req.method === "GET" || req.method === "DELETE")) {
+    let id: string;
+    try {
+      id = decodeURIComponent(digestMatch[1]);
+    } catch {
+      json(res, 400, { error: "malformed digest id" });
+      return true;
+    }
+    try {
+      if (req.method === "GET") {
+        const digest = await getDigest(id);
+        if (!digest) json(res, 404, { error: "no such digest" });
+        else json(res, 200, { digest });
+        return true;
+      }
+      const removed = await deleteDigest(id, context.deviceId);
+      if (!removed) {
+        json(res, 404, { error: "no such digest" });
+        return true;
+      }
+      broadcastServerEvent("digest.deleted", removed.uuid, context.deviceId);
+      json(res, 200, { removed });
+    } catch (err) {
+      // An ambiguous short id: the request is fine, the id just names two digests.
+      if (err instanceof DigestValidationError) {
+        json(res, 409, { error: err.message });
         return true;
       }
       throw err;

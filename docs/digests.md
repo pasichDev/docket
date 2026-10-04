@@ -87,6 +87,8 @@ timeline keeps the earlier ones, and the skill reads the previous one to say wha
 
 ## Storage and sync
 
+### Local Mode
+
 - `digests.json.enc` in the data directory, AES-256-GCM like the todo store, with its own
   sequence counter. It is included in `docket backup`.
 - Paired devices pull it over `GET /api/sync/digests?sinceSeq=N`, signed like the todo sync
@@ -98,8 +100,15 @@ timeline keeps the earlier ones, and the skill reads the previous one to say wha
   upgraded its cursor starts at 0 and it receives everything.
 - Deleting a digest leaves a tombstone, which wins on every device.
 
-Not yet supported in remote (self-hosted server) mode: the tools refuse rather than write a
-digest no dashboard would read.
+### Self-hosted Mode
+
+On a client paired with a Docket Server, every digest tool forwards to the server, which
+keeps digests and seen marks in its own data directory: `GET/POST /api/v1/digests`,
+`GET/DELETE /api/v1/digests/:id`, `GET/POST /api/v1/digests/seen`, each device-signed like
+the todo routes. The publishing device is the one the request was signed by — a body cannot
+claim to be another. Every client of the server sees the same digests; there is no peer sync
+to wait for. The server announces `digest.published`, `digest.deleted` and `digest.seen` on
+its event stream.
 
 ## Seen marks
 

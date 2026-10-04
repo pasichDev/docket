@@ -28,6 +28,8 @@ const { getDeviceId, getDeviceName, getDevicePublicKey, deriveServerAuthSecret }
 const { pairingSas } = await import("../sync/peering.js");
 const { RemoteTodoRepository } = await import("../remote/client.js");
 const { TodoClaimConflictError } = await import("../repository.js");
+const { RemoteDigestService } = await import("../digest-service.js");
+const { DigestValidationError, digestShortId } = await import("../digests.js");
 
 test.after(async () => {
   if (originalDataDirectory === undefined) delete process.env.DOCKET_DATA_DIR;
@@ -487,6 +489,60 @@ test("docket serve: a loopback request without the admin token cannot manage dev
     // cleanup(), not a bare kill: the server writes admin-token at startup, and removing the
     // directory while the process is still on its way out is an ENOTEMPTY waiting for a
     // slower machine. CI found it on the first run that actually executed this test.
+    await cleanup(running, serverDataDir);
+  }
+});
+
+test("docket serve: digests over /api/v1 — publish, list, get by short id, seen marks, delete, all device-signed", async () => {
+  const serverDataDir = await mkdtemp(join(tmpdir(), "docket-serve-e2e-digests-"));
+  let running: RunningServe | undefined;
+  try {
+    running = await spawnServe(serverDataDir);
+    const { baseUrl } = running;
+
+    const noAuth = await fetchJson(`${baseUrl}/api/v1/digests`);
+    assert.equal(noAuth.status, 401, "digests are as private as todos: unsigned is refused");
+
+    const { deviceId, deviceName, secret } = await pairThisDevice(running);
+    const digests = new RemoteDigestService(new RemoteTodoRepository({ serverUrl: baseUrl, deviceId, deviceName, secret }));
+    const ctx = { agent: "agent-a", deviceId: "spoofed-in-body", deviceName: "spoofed", workspace: null };
+
+    const published = await digests.publish(
+      {
+        title: "Fri — ACME-701 blocked",
+        summary: "One MR waits on you.",
+        sections: [{ group: "Work", title: "Needs you", items: [{ kind: "mr", title: "Retry webhooks", ref: "!214", url: "https://gitlab.com/acme/backend/-/merge_requests/214", status: "review requested", attention: true }] }],
+        sources: [{ name: "gitlab", ok: true }],
+      },
+      ctx,
+    );
+    assert.equal(published.deviceId, deviceId, "the publishing device comes from the signature, never from the caller");
+    assert.equal(published.agent, "agent-a");
+    assert.equal(published.sections[0].group, "Work");
+
+    await assert.rejects(
+      () => digests.publish({ title: "bad", summary: "", sections: [{ title: "x", items: [{ kind: "mr", title: "t", url: "javascript:alert(1)" }] }] }, ctx),
+      (err: Error) => err instanceof DigestValidationError && /http/.test(err.message),
+      "the server's validation message must reach the agent as a validation error",
+    );
+
+    const listed = await digests.list(10);
+    assert.equal(listed.total, 1);
+    assert.equal(listed.digests[0].uuid, published.uuid);
+    assert.equal((await digests.get(digestShortId(published.uuid)))?.title, "Fri — ACME-701 blocked");
+    assert.equal(await digests.get("D-ZZZZZZ"), null);
+
+    const key = "https://gitlab.com/acme/backend/-/merge_requests/214";
+    await digests.markSeen({ key, status: "review requested", title: "Retry webhooks" }, true, deviceId);
+    assert.deepEqual((await digests.seen()).map((m) => [m.key, m.status, m.seen]), [[key, "review requested", true]]);
+    await digests.markSeen({ key, status: "review requested", title: "Retry webhooks" }, false, deviceId);
+    assert.equal((await digests.seen()).length, 0, "unmarking must take effect on the server");
+
+    const removed = await digests.delete(published.uuid, deviceId);
+    assert.equal(removed?.uuid, published.uuid);
+    assert.equal((await digests.list(10)).total, 0);
+    assert.equal(await digests.delete(published.uuid, deviceId), null);
+  } finally {
     await cleanup(running, serverDataDir);
   }
 });

@@ -293,3 +293,18 @@ test("digest sync over HTTP: a peer without the endpoint is reported plainly, an
     await new Promise((resolve) => old.close(resolve));
   }
 });
+
+test("remote digests: a server without the digest routes is named as too old, not read as 'no such digest'", async () => {
+  const { RemoteDigestService, SERVER_PREDATES_DIGESTS } = await import("./digest-service.js");
+  const { RemoteProtocolError } = await import("./remote/client.js");
+  const reply = (status: number, body: unknown) => ({
+    call: async () => ({ status, body }),
+    unexpectedResponse: (s: number) => new Error(`unexpected ${s}`),
+  });
+  const old = new RemoteDigestService(reply(404, { error: "not found" }));
+  for (const attempt of [() => old.list(5), () => old.get("D-ABCDEF"), () => old.seen(), () => old.publish(sample(), ctx)]) {
+    await assert.rejects(attempt, (err: Error) => err instanceof RemoteProtocolError && err.message === SERVER_PREDATES_DIGESTS);
+  }
+  const current = new RemoteDigestService(reply(404, { error: "no such digest" }));
+  assert.equal(await current.get("D-ABCDEF"), null, "the digest routes' own 404 is a plain miss");
+});

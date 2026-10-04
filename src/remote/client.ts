@@ -178,6 +178,21 @@ export class RemoteTodoRepository implements TodoRepository {
     return { status: res.status, body: parsed };
   }
 
+  /**
+   * One signed call to any /api/v1 route, with the same compatibility check, auth and error
+   * mapping as the todo methods. Exists so a sibling client — digests — rides this exact
+   * machinery instead of a second copy of the signing code that could drift from it.
+   */
+  async call(method: string, path: string, body?: unknown, context?: MutationContext): Promise<{ status: number; body: unknown }> {
+    await this.ensureCompatible();
+    return this.request(method, path, body, context ? this.contextHeaders(context) : undefined);
+  }
+
+  /** The error for a response a caller did not expect — public for the same sibling clients. */
+  unexpectedResponse(status: number, body: unknown): Error {
+    return this.unexpected(status, body);
+  }
+
   private unexpected(status: number, body: unknown): Error {
     const error = typeof body === "object" && body !== null && "error" in body ? String((body as { error: unknown }).error) : undefined;
     return new RemoteUnavailableError(this.options.serverUrl, error ?? `unexpected response (status ${status})`);

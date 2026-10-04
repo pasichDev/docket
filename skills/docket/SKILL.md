@@ -60,6 +60,8 @@ Other tools you have: `todo_history(id)` — full change log for one item, who
 did what and when. `todo_delete(id)` — permanently remove an item (destructive,
 confirm with the human first unless they clearly already decided). `todo_version()`
 — sanity-check the running server isn't stale (e.g. right after an update).
+`todo_complete(id, reason?)` — pass `reason` to say how it was closed ("fixed in
+!42", "duplicate of T-…"); it is appended to the description and kept in history.
 `todo_check_update()` — read-only check for a newer docket version; if one's
 available, tell the human and let them run `docket update` themselves —
 never trigger it yourself.
