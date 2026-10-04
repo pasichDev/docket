@@ -709,9 +709,11 @@ export const STYLES = `
   .dg-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 12px; }
   .dg-metric {
     background: var(--card-plain-bg); border: 1px solid var(--card-plain-border); border-radius: 16px;
-    padding: 14px 16px 12px; box-shadow: var(--card-shadow); position: relative; overflow: hidden;
+    padding: 14px 16px 12px 19px; box-shadow: var(--card-shadow); position: relative; overflow: hidden;
   }
-  .dg-metric::after { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--tone); }
+  /* The tone stripe runs the tile's full height and follows its rounded corners: the tile
+     clips it (overflow: hidden), so the stripe's own left radius matches the tile's. */
+  .dg-metric::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; border-radius: 15px 0 0 15px; background: var(--tone); }
   .dg-metric-value { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 28px; line-height: 1; color: var(--text); font-variant-numeric: tabular-nums; }
   .dg-metric[data-tone="good"] .dg-metric-value, .dg-metric[data-tone="bad"] .dg-metric-value, .dg-metric[data-tone="warn"] .dg-metric-value { color: var(--tone); }
   .dg-metric-label { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 6px; }
