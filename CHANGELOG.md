@@ -28,13 +28,24 @@
   signature covers a `digests:`-prefixed cursor, so a captured todo-sync request
   cannot be replayed against it. Digests are immutable, so the merge is a set
   union plus deletions; a deletion wins everywhere.
-- **Groups.** A section can carry a `group` ("vploq", "Learning", "Side
+- **Groups.** A section can carry a `group` ("Work", "Learning", "Side
   projects"); the dashboard shows each group under its own heading, with chips to
   filter to one, remembered per browser. The config's `groups` say which repos
   and ticket prefixes go where.
 - **More sources.** Obsidian vaults and project folders (`files`), and any MCP
   server the agent has — Jira, Linear, Sentry, Slack — as configurable `extra`
   sources, read-only like the rest.
+- **Seen marks.** Hide a digest item until its status changes; marks carry over
+  to later digests and sync across devices (last write wins, undo included).
+- **Close with a reason.** `todo_complete(id, reason)` and a close dialog on the
+  dashboard append how a task was closed to its description and history, in the
+  same write as the completion. The self-hosted server accepts the reason too.
+- **Layouts.** Dashboard as a stack or grid; Tasks as a list, wide list or grid.
+- **Session start.** The SessionStart hook adds one line about the latest digest
+  — age, what needs you, preset names.
+- **Skill:** presets ("digest work"), mail and chat as read-only sources (new
+  `mail` / `chat` item kinds), a daily schedule recipe, and learned preferences in
+  `~/.config/docket/digest-learned.md`.
 - `docket backup` includes `digests.json.enc`.
 - Not yet in remote (self-hosted server) mode: the digest tools say so instead
   of writing somewhere no dashboard reads.

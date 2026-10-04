@@ -44,7 +44,7 @@ command (`glab auth login`, `gh auth login`) and leave that source disabled.
 
 ## 2. Ask once
 
-One `AskUserQuestion` call (two if you need all five questions), pre-filled from what you detected:
+One `AskUserQuestion` call (two if you need all six questions), pre-filled from what you detected:
 
 1. **Sources** (multiSelect): GitLab · GitHub · Notion · local git · Obsidian, plus one
    option per extra MCP server or files folder you found (docket is always on). "Other"
@@ -55,7 +55,9 @@ One `AskUserQuestion` call (two if you need all five questions), pre-filled from
    (the work GitLab group, personal GitHub repos, anything else), e.g. Work / Learning /
    Side projects. Each group is a name plus `match` strings checked against an item's url,
    repo and ref; `"*"` catches the rest.
-5. **Language** of the digest text: the language the user writes in (recommended) or English.
+5. **Presets and schedule**: suggest presets from the groups (one per group, plus "week")
+   and ask whether a daily digest should run on its own, and at what time.
+6. **Language** of the digest text: the language the user writes in (recommended) or English.
 
 For each chosen extra MCP server, write the `query` in plain words from what the user
 wants to see ("Jira issues assigned to me, updated since <since>") and pick the `kind`;
@@ -83,6 +85,8 @@ person property — that is what the digest filters on.
     { "name": "<jira>", "type": "mcp", "server": "<mcp server name>", "kind": "ticket", "query": "<what to read, in plain words>" },
     { "name": "<docs>", "type": "files", "paths": ["<folder>"], "glob": "*.md" }
   ],
+  "presets": { "<group>": { "groups": ["<group>"] }, "week": { "window": "7d" } },
+  "schedule": { "daily": "09:00" },
   "groups": [
     { "name": "<work>", "match": ["gitlab.com/<group>/", "<TICKET-PREFIX>-"] },
     { "name": "<other>", "match": ["*"] }
@@ -93,6 +97,12 @@ person property — that is what the digest filters on.
 No tokens, passwords or API keys in this file — the CLIs and MCP servers hold credentials.
 Show the user the file you wrote (it is short), then offer to run `docket:digest` now.
 
-**Changing it later** ("додай Jira", "прибери Slack", "перенеси lab_liddle в Learning"):
+A daily schedule is installed by `docket:digest` ("Daily, on its own"), not here — offer to
+do it right after the first digest, so the user sees one before automating it.
+
+Mail is opt-in: offer a Gmail/Outlook MCP server only if the user picks it, and say plainly
+that the digest reads sender, subject and date, not message bodies.
+
+**Changing it later** ("додай Jira", "прибери Slack", "move kernel-notes to Learning"):
 read the file, change only that part — an entry in `sources` or `extra`, or a `match`
 string in `groups` — and show the diff.

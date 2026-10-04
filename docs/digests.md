@@ -51,6 +51,12 @@ machine on purpose — CLI logins, MCP servers and repo paths differ per device.
     { "name": "docs", "type": "files", "paths": ["~/src/acme/docs"], "glob": "*.md" }
   ]
   ```
+- `presets` (optional): named variants — `{ "work": { "groups": ["Work"] }, "week": { "window": "7d" } }`.
+  "digest work" applies one; the session-start hint lists their names.
+- `schedule` (optional): `{ "daily": "09:00" }` — the skill offers to install a LaunchAgent
+  (macOS) or a user timer (Linux) that runs it headless at that time.
+- Learned preferences live beside the config in `digest-learned.md`: short dated rules the
+  skill writes when the user corrects it or keeps hiding the same kind of item. Edit freely.
 - `window`: `since-last` (from the previous digest's end; 24 hours if there is none), `24h`,
   or `7d`. What the user asks for ("за тиждень") overrides it.
 - `groups` (optional): split the digest by area. Each item goes to the first group whose
@@ -95,13 +101,27 @@ timeline keeps the earlier ones, and the skill reads the previous one to say wha
 Not yet supported in remote (self-hosted server) mode: the tools refuse rather than write a
 digest no dashboard would read.
 
+## Seen marks
+
+**Seen** on any item folds it into a "N seen" list at the bottom of its section and leaves
+it out of the counts. A mark is keyed by the item's link (else repo#ref) and remembers the
+status it was given in, so it carries over to later digests until the status changes — an
+open MR you marked comes back when it merges. Marks sync like digests (last write wins;
+unmarking syncs too). `digest_seen` lets the skill leave marked items out of the next digest.
+
 ## Dashboard
 
 - `/` — the selected digest (newest by default): summary, highlights, metric tiles,
   sections; a **Tasks** card (open, in progress, overdue, due in 7 days, the five most
   pressing items); the timeline of earlier digests.
 - `/tasks` — the task list, as before.
-- **+ task** on any item creates a todo: ticket-shaped refs (`VPQ-683`) become its category,
+- **+ task** on any item creates a todo: ticket-shaped refs (`ACME-683`) become its category,
   the link becomes its `sourceUrl`, "needs you" becomes high priority. An item whose link
   already belongs to a task shows **in tasks** instead.
+- A row that is a docket task (its ref is a `T-` id) or was made into one offers **close**:
+  a dialog for how it was closed, with quick picks (Merged, Duplicate, Not needed, Won't
+  do). The reason is appended to the task's description and kept in its history;
+  `todo_complete(id, reason)` does the same from an agent.
+- **Layout** pickers: the dashboard as a stack, a grid or a full-width grid; Tasks as a
+  list, a wide list, a grid or a full-width grid. Remembered per browser.
 - A digest older than 24 hours is labelled as possibly out of date.
