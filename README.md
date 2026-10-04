@@ -44,6 +44,21 @@ this exact copy of docket and tells you it did — but the short form survives
 moving or reinstalling, and `npx` leaves nothing on `PATH`.
 </details>
 
+
+## What's new in 3.1
+
+Docket 3.1 adds **digests**: an agent can read the work you already have in GitHub, GitLab, Notion, git, mail, chat and other configured sources, verify the current state, and publish one snapshot to the dashboard.
+
+The useful loop is short:
+
+```text
+make a digest → see what changed → copy #7 → tell an agent "take 7" → task is claimed → close with a reason
+```
+
+Digests also add owners, deeper per-item analysis, seen-state, "what changed" between snapshots, issue support, configurable MCP/file sources, daily headless runs, and the same behavior in Local and Self-hosted modes.
+
+**Start here:** [Docket 3.1 workflow guide](docs/3.1.md) · [Full digest reference](docs/digests.md) · [3.1 changelog](CHANGELOG.md#310)
+
 ## Why
 
 A thought that shows up mid-session is worth capturing but not worth the
