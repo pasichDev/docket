@@ -49,8 +49,8 @@ export class TodoService {
     return this.notFoundToNull(this.repository.edit(id, input, context, expectedRevision));
   }
 
-  complete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo | null> {
-    return this.notFoundToNull(this.repository.complete(id, context, expectedRevision));
+  complete(id: TodoId, context: MutationContext, expectedRevision?: number, reason?: string | null): Promise<Todo | null> {
+    return this.notFoundToNull(this.repository.complete(id, context, expectedRevision, reason));
   }
 
   delete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo | null> {

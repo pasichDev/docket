@@ -504,12 +504,15 @@ server.registerTool(
   "todo_complete",
   {
     title: "Complete todo",
-    description: "Mark a todo as done by id.",
-    inputSchema: { id: idSchema },
+    description: "Mark a todo as done by id. Pass `reason` to say how it was closed — fixed in which MR, why it was dropped — it is appended to the description and kept in history.",
+    inputSchema: {
+      id: idSchema,
+      reason: z.string().max(2000).optional().describe("How it was closed, e.g. \"fixed in !160\", \"duplicate of T-7K2F9A\", \"no longer needed: …\""),
+    },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
-  withRemoteErrorHandling(async ({ id }) => {
-    const todo = await (await getMcpTodoService()).complete(id, currentContext());
+  withRemoteErrorHandling(async ({ id, reason }) => {
+    const todo = await (await getMcpTodoService()).complete(id, currentContext(), undefined, reason);
     if (!todo) return text(`No todo with id #${id}`);
     return text(`Completed ${formatTodo(todo, workspace)}`);
   }),

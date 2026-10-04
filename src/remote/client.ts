@@ -274,12 +274,14 @@ export class RemoteTodoRepository implements TodoRepository {
     return this.fromWire((body as { todo: WireTodo }).todo);
   }
 
-  async complete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo> {
+  async complete(id: TodoId, context: MutationContext, expectedRevision?: number, reason?: string | null): Promise<Todo> {
     const remoteId = this.resolveRemoteId(id);
     await this.ensureCompatible();
     const headers = this.contextHeaders(context);
     if (expectedRevision !== undefined) headers["If-Match"] = String(expectedRevision);
-    const { status, body } = await this.request("POST", `/api/v1/todos/${encodeURIComponent(remoteId)}/complete`, undefined, headers);
+    // No body without a reason, so a request to a server that predates reasons is byte-for-byte
+    // what it always was. A server that predates them ignores the body and completes anyway.
+    const { status, body } = await this.request("POST", `/api/v1/todos/${encodeURIComponent(remoteId)}/complete`, reason ? { reason } : undefined, headers);
     if (status === 404) throw new TodoNotFoundError(id);
     if (status === 409) throw new TodoConflictError(this.fromWire((body as { todo: WireTodo }).todo));
     if (status !== 200) throw this.unexpected(status, body);

@@ -495,8 +495,11 @@ export async function handleServeApiRoute(
       json(res, 400, { error: "If-Match must be an integer revision number" });
       return true;
     }
+    const completeBody = parseJsonBody(res, rawBody) as { reason?: unknown } | null;
+    if (completeBody === null) return true;
+    const reason = typeof completeBody.reason === "string" ? completeBody.reason : null;
     try {
-      const todo = await todoService.complete(completeId, context, ifMatch.value);
+      const todo = await todoService.complete(completeId, context, ifMatch.value, reason);
       if (!todo) {
         json(res, 404, { error: `No todo with id ${completeId}` });
         return true;

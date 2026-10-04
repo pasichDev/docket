@@ -361,3 +361,26 @@ test("a claim's lease is the 15 minutes the README promises", () => {
  *    test can hold it still — a worse trade than an uncovered boundary that decides nothing
  *    a user could observe.
  */
+
+test("completeTodo: a reason lands at the end of the description and in the history, in one write", async () => {
+  const { completeTodo, createTodo, withClosingNote } = await import("./mutations.js");
+  const store = { formatVersion: 8, nextId: 1, todos: [], deletedUuids: [], seqCounter: 0 } as import("./types.js").TodoStore;
+  const item = createTodo(store, { title: "t", description: "body", agent: null, session: null }, "dev", "Dev");
+  const seqBefore = store.seqCounter;
+  completeTodo(store, item, "codex", "dev", "Dev", "  fixed in !160  ");
+  assert.equal(item.done, true);
+  assert.match(item.description ?? "", /^body\n\n\*\*Closed \d{4}-\d{2}-\d{2}:\*\* fixed in !160$/);
+  assert.equal(item.history.at(-1)?.detail, "marked done — fixed in !160");
+  assert.equal(store.seqCounter, seqBefore + 1, "the reason and the completion must be one write");
+  assert.ok(item.fieldTimestamps.description, "the description edit must carry its own clock so it merges");
+  assert.equal(withClosingNote(null, "x", "2026-10-04T00:00:00Z"), "**Closed 2026-10-04:** x");
+});
+
+test("completeTodo: no reason leaves the description alone", async () => {
+  const { completeTodo, createTodo } = await import("./mutations.js");
+  const store = { formatVersion: 8, nextId: 1, todos: [], deletedUuids: [], seqCounter: 0 } as import("./types.js").TodoStore;
+  const item = createTodo(store, { title: "t", description: "body", agent: null, session: null }, "dev", "Dev");
+  completeTodo(store, item, null, "dev", "Dev", "   ");
+  assert.equal(item.description, "body");
+  assert.equal(item.history.at(-1)?.detail, "marked done");
+});

@@ -140,7 +140,8 @@ export interface TodoRepository {
   /** `expectedRevision`, when passed, throws TodoConflictError (not applying the edit) if it doesn't match the item's current revision — RFC §18. Omitted by every local/MCP call site today. */
   edit(id: TodoId, input: EditTodoInput, context: MutationContext, expectedRevision?: number): Promise<Todo>;
 
-  complete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo>;
+  /** `reason`, when given, is appended to the description and recorded in history — see completeTodo. */
+  complete(id: TodoId, context: MutationContext, expectedRevision?: number, reason?: string | null): Promise<Todo>;
 
   /** Returns the removed item (its last in-memory state, tombstoned in the store) so callers can report what disappeared without a separate lookup. */
   delete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo>;
@@ -257,10 +258,10 @@ export class LocalTodoRepository implements TodoRepository {
     return todo;
   }
 
-  async complete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo> {
+  async complete(id: TodoId, context: MutationContext, expectedRevision?: number, reason?: string | null): Promise<Todo> {
     const todo = await withTodo(id, (item, store) => {
       checkRevision(item, expectedRevision);
-      completeTodo(store, item, context.agent, context.deviceId, context.deviceName);
+      completeTodo(store, item, context.agent, context.deviceId, context.deviceName, reason);
     });
     if (!todo) throw new TodoNotFoundError(id);
     return todo;
