@@ -169,6 +169,36 @@ export function renderSessionStart(todos: Todo[], currentWorkspace: string | nul
   return heading;
 }
 
+/** Past this age the hint stops saying "here is today's" and starts offering a fresh one. */
+export const DIGEST_HINT_STALE_HOURS = 20;
+/** The hint shares the session-start budget with the open-items block; it gets a small slice. */
+export const DIGEST_HINT_TOKEN_BUDGET = 45;
+
+/**
+ * One line about the latest digest for the start of a session, or "" when there has never
+ * been one (a user who doesn't use digests hears nothing about them).
+ *
+ * Fresh: what needs the user, and where to look. Stale: the same, plus the words that make a
+ * new one — including the user's own presets, so "digest work" is discoverable without docs.
+ */
+export function renderDigestHint(
+  latest: { shortId: string; createdAt: string; attention: number } | null,
+  presets: readonly string[] = [],
+  now: number = Date.now(),
+  port = 8787,
+): string {
+  if (!latest) return "";
+  const hours = Math.max(0, Math.floor((now - Date.parse(latest.createdAt)) / 3_600_000));
+  const age = hours < 1 ? "just now" : `${hours}h ago`;
+  const need = latest.attention ? `, ${latest.attention} need you` : "";
+  const base = `Digest ${latest.shortId} (${age}${need}) — http://localhost:${port}/`;
+  if (hours < DIGEST_HINT_STALE_HOURS) return base;
+  const named = presets.slice(0, 4).map((p) => `"digest ${p}"`);
+  const offer = ` · stale: say "digest"${named.length ? ` or ${named.join(", ")}` : ""} for a fresh one`;
+  const line = base + offer;
+  return approximateTokens(line) <= DIGEST_HINT_TOKEN_BUDGET ? line : base + ' · stale: say "digest" for a fresh one';
+}
+
 /** "active" under a minute, then "idle 4m" / "idle 2h" — the same vocabulary presence.ts already uses. */
 export function formatIdle(lastSeenAt: string, now: number = Date.now()): string {
   const ms = Math.max(0, now - Date.parse(lastSeenAt));

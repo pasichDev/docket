@@ -2,7 +2,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ApiContext } from "../http.js";
 import QRCode from "qrcode";
 import { getDevicePublicKey } from "../../device.js";
-import { renderSessionStart } from "../../format.js";
+import { renderDigestHint, renderSessionStart } from "../../format.js";
+import { attentionCount, digestShortId, listDigests } from "../../digests.js";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { computeAgentPresence } from "../../presence.js";
 import { listSessions } from "../../sessions.js";
 import { CURRENT_FORMAT_VERSION, readStore } from "../../storage.js";
@@ -108,9 +112,34 @@ export async function handleDeviceRoutes(
   if (req.method === "GET" && url.pathname === "/api/hook/session-start") {
     const scope = url.searchParams.get("workspace");
     const todos = await todoService.list({ filter: "open", workspace: scope || "*" });
-    json(res, 200, { text: renderSessionStart(todos, scope || null) });
+    const blocks = [renderSessionStart(todos, scope || null), await digestHint()].filter(Boolean);
+    json(res, 200, { text: blocks.join("\n") });
     return true;
   }
 
   return false;
+}
+
+/**
+ * The digest line for the session-start hook. Best effort in every part: a missing or
+ * unreadable digest store, or a config without presets, costs the line or the presets — never
+ * the open-items block above it, which is the hook's actual job.
+ */
+async function digestHint(): Promise<string> {
+  try {
+    const { digests } = await listDigests(1);
+    const latest = digests[0];
+    if (!latest) return "";
+    let presets: string[] = [];
+    try {
+      const config = JSON.parse(await readFile(join(homedir(), ".config", "docket", "digest.json"), "utf8")) as { presets?: Record<string, unknown> };
+      presets = Object.keys(config.presets ?? {});
+    } catch {
+      // No config, or not ours to parse — the hint simply names no presets.
+    }
+    const port = Number(process.env.DOCKET_WEB_PORT ?? 8787);
+    return renderDigestHint({ shortId: digestShortId(latest.uuid), createdAt: latest.createdAt, attention: attentionCount(latest) }, presets, Date.now(), port);
+  } catch {
+    return "";
+  }
 }
