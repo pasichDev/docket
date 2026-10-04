@@ -21,6 +21,7 @@ import { loadRemoteCredentials } from "./remote/credentials.js";
 import { filterTodos, type MutationContext } from "./repository.js";
 import { DIGEST_ITEM_KINDS, DIGEST_TONES, DigestValidationError, digestShortId, formatDigest, formatDigestLine } from "./digests.js";
 import { localDigestService, RemoteDigestService, type DigestService } from "./digest-service.js";
+import { takeDigestItem } from "./digest-handoff.js";
 import { CURRENT_FORMAT_VERSION, LAST_V7_RELEASE, migrateLegacyFields, readStore, restorePreUpgradeStore, withStore } from "./storage.js";
 import { buildSnapshot } from "./snapshot.js";
 import { TodoService, todoService as localTodoService } from "./todo-service.js";
@@ -697,6 +698,27 @@ server.registerTool(
     try {
       const digest = await (await getMcpDigestService()).get(id);
       return digest ? text(formatDigest(digest)) : text(`No digest ${id}`);
+    } catch (err) {
+      if (err instanceof DigestValidationError) return errorText(err.message);
+      throw err;
+    }
+  }),
+);
+
+server.registerTool(
+  "digest_take",
+  {
+    title: "Take a digest item",
+    description:
+      "Pick up one item from a digest by its number, as the user says it: \"7\" or \"#7\" for the latest digest, \"D-7K2F9A/7\" for a specific one. Returns the full brief and a docket task for it — the existing one if the item already is or became a task, otherwise a new one — claimed by you. Do the work, then close it with todo_complete(id, reason); if you stop without finishing, todo_release(id).",
+    inputSchema: { item: z.string().describe("The item's number, e.g. \"7\", or its handle, e.g. \"D-7K2F9A/7\"") },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  withRemoteErrorHandling(async ({ item }) => {
+    try {
+      const taken = await takeDigestItem(item, await getMcpDigestService(), await getMcpTodoService(), currentContext());
+      if (!taken.alreadyDone) log(`digest_take ${item} → ${taken.created ? "new" : "existing"} task ${taken.todo.uuid} for ${currentAgent() ?? "unknown"}`);
+      return text(taken.brief);
     } catch (err) {
       if (err instanceof DigestValidationError) return errorText(err.message);
       throw err;
