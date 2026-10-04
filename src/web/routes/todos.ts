@@ -89,7 +89,9 @@ export async function handleTodoRoutes(
   const completeMatch = url.pathname.match(/^\/api\/todos\/(\d+)\/complete$/);
   if (req.method === "POST" && completeMatch) {
     const id = Number(completeMatch[1]);
-    const todo = await todoService.complete(id, webContext(ctx));
+    const body = (await readJsonBody(req)) as { reason?: unknown };
+    const reason = typeof body?.reason === "string" ? body.reason : null;
+    const todo = await todoService.complete(id, webContext(ctx), undefined, reason);
     if (!todo) {
       json(res, 404, { error: `No todo with id #${id}` });
       return true;

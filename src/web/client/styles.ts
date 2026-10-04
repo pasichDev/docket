@@ -619,4 +619,303 @@ export const STYLES = `
     background: var(--sage); font-family: 'Fredoka', sans-serif; flex-shrink: 0;
   }
   .devices-pair-status { font-size: 12px; color: var(--muted2); }
+
+  /* ---- Views: Dashboard ("/") and Tasks ("/tasks") share one document ------------------ */
+  .header-left { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .views { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--input-bg); box-shadow: 0 0 0 1px var(--input-border) inset; }
+  .views a {
+    font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 13px; text-decoration: none;
+    color: var(--muted); padding: 6px 14px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px;
+    transition: background .15s ease, color .15s ease;
+  }
+  .views a:hover { color: var(--text); }
+  .views a[aria-current="true"] { background: var(--ink); color: var(--ink-text); }
+  .views .n { font-variant-numeric: tabular-nums; opacity: .7; font-size: 12px; }
+  .views .n:empty { display: none; }
+  body[data-view="tasks"] .dash { display: none; }
+  body:not([data-view="tasks"]) .page { display: none; }
+  body:not([data-view="tasks"]) header { max-width: 1080px; }
+
+  /* Tone is the one colour language of the dashboard: every status pill, metric stripe and
+     flag picks from these five, so "green means done" holds everywhere on the page. */
+  .dash [data-tone="good"] { --tone: var(--sage); --tone-bg: var(--sage-bg); }
+  .dash [data-tone="warn"] { --tone: var(--due-text); --tone-bg: var(--due-bg); }
+  .dash [data-tone="bad"] { --tone: var(--overdue-text); --tone-bg: var(--overdue-bg); }
+  .dash [data-tone="info"] { --tone: var(--lavender); --tone-bg: var(--lavender-bg); }
+  .dash [data-tone="neutral"] { --tone: var(--muted); --tone-bg: var(--input-border); }
+
+  .dash {
+    max-width: 1080px; margin: 0 auto; display: grid; gap: 20px;
+    grid-template-columns: minmax(0, 1fr) 300px; align-items: start;
+  }
+  .dash-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .dash-side { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 16px; }
+  @media (max-width: 900px) {
+    .dash { grid-template-columns: minmax(0, 1fr); }
+    .dash-side { position: static; }
+  }
+
+  .dg-hero, .dg-section, .dg-side-card {
+    background: var(--card-plain-bg); border: 1px solid var(--card-plain-border);
+    border-radius: 20px; box-shadow: var(--card-shadow);
+  }
+  .dg-hero { padding: 24px 26px 20px; position: relative; overflow: hidden; }
+  .dg-hero::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--lavender), var(--sage));
+  }
+  .dg-eyebrow {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted2);
+  }
+  .dg-eyebrow > span + span::before { content: "·"; margin-right: 10px; opacity: .6; }
+  .dg-id {
+    margin-left: auto; border: none; cursor: pointer; font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0; text-transform: none; color: var(--muted); background: var(--input-border); border-radius: 6px; padding: 3px 7px;
+  }
+  .dg-hero h2 { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 25px; line-height: 1.22; margin: 10px 0 12px; color: var(--text); }
+  .dg-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .dg-chip {
+    font-size: 12px; font-weight: 600; color: var(--muted); background: var(--bg);
+    border-radius: 999px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 5px; text-decoration: none;
+  }
+  .dg-chip svg { width: 13px; height: 13px; }
+  .dg-chip-need { color: var(--due-text); background: var(--due-bg); }
+  .dg-chip-need:hover { filter: brightness(.97); }
+  .dg-chip-stale { color: var(--overdue-text); background: var(--overdue-bg); }
+  .dg-summary { font-size: 15px; line-height: 1.6; color: var(--text); }
+  .dg-lede { font-size: 15px; line-height: 1.6; margin: 0 0 12px; }
+  .dg-highlights { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+  .dg-highlights li { position: relative; padding-left: 20px; font-size: 14px; line-height: 1.5; }
+  .dg-highlights li::before {
+    content: ""; position: absolute; left: 3px; top: .55em; width: 8px; height: 8px; border-radius: 3px;
+    background: var(--accent); transform: rotate(45deg);
+  }
+  .dg-hero-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--input-border); flex-wrap: wrap; }
+  .dg-sources { display: flex; flex-wrap: wrap; gap: 6px; }
+  .dg-source { font-size: 11.5px; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: var(--bg); cursor: help; }
+  .dg-source .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--sage); }
+  .dg-source[data-ok="false"] { color: var(--overdue-text); background: var(--overdue-bg); }
+  .dg-source[data-ok="false"] .dot { background: var(--overdue-text); }
+  .dg-delete {
+    border: none; background: none; color: var(--muted2); font: 600 12px 'Karla', sans-serif; cursor: pointer;
+    padding: 5px 10px; border-radius: 999px;
+  }
+  .dg-delete:hover { color: var(--danger); background: var(--overdue-bg); }
+  .dg-delete[data-armed="true"] { color: #fff; background: var(--danger); }
+  .dg-hint { font-size: 12.5px; color: var(--muted2); margin: 16px 0 0; }
+  .dg-hero code, .dg-hint code { font-size: .9em; background: var(--bg); padding: 1px 6px; border-radius: 5px; }
+
+  .dg-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 12px; }
+  .dg-metric {
+    background: var(--card-plain-bg); border: 1px solid var(--card-plain-border); border-radius: 16px;
+    padding: 14px 16px 12px 19px; box-shadow: var(--card-shadow); position: relative; overflow: hidden;
+  }
+  /* The tone stripe runs the tile's full height and follows its rounded corners: the tile
+     clips it (overflow: hidden), so the stripe's own left radius matches the tile's. */
+  .dg-metric::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; border-radius: 15px 0 0 15px; background: var(--tone); }
+  .dg-metric-value { font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 28px; line-height: 1; color: var(--text); font-variant-numeric: tabular-nums; }
+  .dg-metric[data-tone="good"] .dg-metric-value, .dg-metric[data-tone="bad"] .dg-metric-value, .dg-metric[data-tone="warn"] .dg-metric-value { color: var(--tone); }
+  .dg-metric-label { font-size: 12px; color: var(--muted); font-weight: 600; margin-top: 6px; }
+
+  .dg-section { padding: 16px 18px 8px; }
+  .dg-section[data-attention="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), var(--card-shadow); }
+  .dash h3 {
+    font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 15px; margin: 0 0 8px; color: var(--text);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dg-count { font-size: 12px; color: var(--muted2); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .dg-need { font: 700 11px 'Karla', sans-serif; color: var(--due-text); background: var(--due-bg); padding: 2px 8px; border-radius: 999px; }
+  .dg-items { list-style: none; margin: 0; padding: 0; }
+  .dg-item { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 11px 0; border-top: 1px solid var(--input-border); }
+  .dg-items > .dg-item:first-child { border-top: none; }
+  .dg-item[data-attention="true"] .dg-title { font-weight: 700; }
+  .dg-kind {
+    font: 700 10.5px 'Karla', sans-serif; letter-spacing: .05em; text-transform: uppercase; text-align: center;
+    padding: 4px 0; border-radius: 7px; color: var(--muted); background: var(--bg); margin-top: 1px;
+  }
+  .dg-kind[data-kind="pr"] { color: var(--lavender); background: var(--lavender-bg); }
+  .dg-kind[data-kind="mr"] { color: var(--due-text); background: var(--due-bg); }
+  .dg-kind[data-kind="ticket"], .dg-kind[data-kind="issue"] { color: var(--ink-text); background: var(--ink); }
+  .dg-kind[data-kind="release"], .dg-kind[data-kind="commit"] { color: var(--sage); background: var(--sage-bg); }
+  .dg-line { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; line-height: 1.4; }
+  .dg-ref { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); background: var(--bg); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+  .dg-title { font-size: 14.5px; font-weight: 600; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+  a.dg-title:hover { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  .dg-meta { font-size: 12px; color: var(--muted2); margin-top: 3px; }
+  .dg-note { font-size: 13px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
+  .dg-side { display: flex; align-items: center; gap: 8px; }
+  .dg-status {
+    font-size: 11.5px; font-weight: 700; color: var(--tone); background: var(--tone-bg); border-radius: 999px;
+    padding: 3px 10px; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .dg-status svg { width: 12px; height: 12px; }
+  .dg-task {
+    border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; text-decoration: none;
+    font: 600 11.5px 'Karla', sans-serif; color: var(--muted); background: transparent; box-shadow: 0 0 0 1px var(--input-border) inset;
+    border-radius: 999px; padding: 4px 10px 4px 8px; opacity: .55; transition: opacity .15s ease, color .15s ease, background .15s ease;
+  }
+  .dg-task svg { width: 12px; height: 12px; }
+  .dg-item:hover .dg-task, .dg-task:focus-visible { opacity: 1; }
+  .dg-task:hover { color: var(--ink-text); background: var(--ink); box-shadow: none; }
+  .dg-task:disabled { opacity: .4; cursor: default; }
+  .dg-task-linked { opacity: 1; color: var(--sage); box-shadow: none; background: var(--sage-bg); }
+  .dg-task-linked:hover { color: var(--sage); background: var(--sage-bg); }
+  @media (hover: none) { .dg-task { opacity: 1; } }
+  .dg-more { padding-bottom: 8px; }
+  .dg-more summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted); padding: 8px 0 4px; list-style: none; }
+  .dg-more summary::-webkit-details-marker { display: none; }
+  .dg-more[open] summary { display: none; }
+  @media (max-width: 560px) {
+    .dg-hero { padding: 20px 18px 16px; }
+    .dg-hero h2 { font-size: 21px; }
+    .dg-item { grid-template-columns: 48px minmax(0, 1fr); }
+    .dg-side { grid-column: 2; }
+  }
+
+  .dg-side-card { padding: 16px 16px 12px; }
+  .dg-link { margin-left: auto; font: 600 12px 'Karla', sans-serif; color: var(--muted); text-decoration: none; }
+  .dg-link:hover { color: var(--text); }
+  .dg-glance { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .dg-glance-stat { background: var(--bg); border-radius: 12px; padding: 9px 11px; display: flex; flex-direction: column; gap: 2px; }
+  .dg-glance-stat b { font-family: 'Fredoka', sans-serif; font-size: 20px; color: var(--text); font-variant-numeric: tabular-nums; }
+  .dg-glance-stat[data-tone="bad"] b, .dg-glance-stat[data-tone="warn"] b, .dg-glance-stat[data-tone="info"] b { color: var(--tone); }
+  .dg-glance-stat span { font-size: 11.5px; color: var(--muted); font-weight: 600; }
+  .dg-glance-list { list-style: none; margin: 0; padding: 0; }
+  .dg-glance-list li { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid var(--input-border); font-size: 13px; }
+  .dg-glance-list a { color: var(--text); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dg-glance-list a .dg-ref { margin-right: 6px; font-size: 11px; display: inline-block; max-width: 96px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+  .dg-flag { font-size: 11px; font-weight: 700; color: var(--tone); background: var(--tone-bg); border-radius: 999px; padding: 1px 8px; white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+  .dg-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 52vh; overflow-y: auto; }
+  .dg-timeline button {
+    width: 100%; text-align: left; border: none; background: none; cursor: pointer; color: var(--text);
+    padding: 9px 10px 9px 14px; border-radius: 12px; display: flex; flex-direction: column; gap: 2px; position: relative; font-family: 'Karla', sans-serif;
+  }
+  .dg-timeline button::before { content: ""; position: absolute; left: 4px; top: 14px; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+  .dg-timeline button:hover { background: var(--bg); }
+  .dg-timeline button[data-active="true"] { background: var(--bg); }
+  .dg-timeline button[data-active="true"]::before { background: var(--accent); }
+  .dg-tl-date { font-size: 11px; font-weight: 700; color: var(--muted2); text-transform: uppercase; letter-spacing: .04em; }
+  .dg-tl-title { font-size: 13px; font-weight: 600; line-height: 1.35; }
+  .dg-tl-meta { font-size: 11.5px; color: var(--muted); }
+  .dg-tl-meta b { color: var(--due-text); }
+  .dg-empty-note { font-size: 13px; color: var(--muted2); margin: 6px 0; }
+  .dg-skeleton { height: 220px; border-radius: 20px; background: linear-gradient(90deg, var(--card-plain-bg), var(--input-border), var(--card-plain-bg)); background-size: 200% 100%; animation: dg-shimmer 1.2s ease-in-out infinite; }
+  .dg-skeleton.short { height: 90px; }
+  @keyframes dg-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+  @media (prefers-reduced-motion: reduce) { .dg-skeleton { animation: none; } }
+
+  .dg-groups { display: flex; flex-wrap: wrap; gap: 8px; }
+  .dg-group-chip {
+    border: none; cursor: pointer; font: 600 13px 'Fredoka', sans-serif; color: var(--muted);
+    background: var(--card-plain-bg); box-shadow: 0 0 0 1px var(--card-plain-border) inset;
+    border-radius: 999px; padding: 7px 14px; display: inline-flex; align-items: center; gap: 7px;
+  }
+  .dg-group-chip .n { font-variant-numeric: tabular-nums; opacity: .7; }
+  .dg-group-chip .need { font: 700 11px 'Karla', sans-serif; color: var(--due-text); background: var(--due-bg); border-radius: 999px; padding: 1px 7px; }
+  .dg-group-chip[data-active="true"] { background: var(--ink); color: var(--ink-text); box-shadow: none; }
+  .dg-group { display: flex; flex-direction: column; gap: 12px; }
+  .dg-group + .dg-group { margin-top: 10px; }
+  .dash h2.dg-group-head {
+    font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 18px; margin: 4px 2px 0; color: var(--text);
+    display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 2px solid var(--input-border);
+  }
+
+  /* ---- Tasks layout (toolbar select; stored per browser) --------------------------------- */
+  body[data-view="tasks"][data-tasks-layout="wide"] .page,
+  body[data-view="tasks"][data-tasks-layout="wide"] header { max-width: 1080px; }
+  body[data-view="tasks"][data-tasks-layout="grid"] .page,
+  body[data-view="tasks"][data-tasks-layout="grid"] header { max-width: 1280px; }
+  body[data-view="tasks"][data-tasks-layout="full"] .page,
+  body[data-view="tasks"][data-tasks-layout="full"] header { max-width: none; }
+  body[data-tasks-layout="grid"] ul.open-list, body[data-tasks-layout="grid"] ul.done-list,
+  body[data-tasks-layout="full"] ul.open-list, body[data-tasks-layout="full"] ul.done-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); align-items: start;
+  }
+  body[data-tasks-layout="grid"] ul.open-list > li.empty,
+  body[data-tasks-layout="full"] ul.open-list > li.empty { grid-column: 1 / -1; }
+  select.layout { max-width: 150px; }
+
+  /* ---- Seen marks and closing a task from the dashboard ---------------------------------- */
+  .dg-seen {
+    border: none; background: transparent; cursor: pointer; color: var(--muted); border-radius: 999px;
+    width: 28px; height: 26px; display: inline-flex; align-items: center; justify-content: center; opacity: .45;
+    font: 600 11.5px 'Karla', sans-serif;
+  }
+  .dg-seen svg { width: 14px; height: 14px; }
+  .dg-item:hover .dg-seen, .dg-seen:focus-visible { opacity: 1; }
+  .dg-seen:hover { background: var(--bg); color: var(--text); }
+  .dg-seen[data-seen="false"] { width: auto; padding: 0 10px; opacity: .8; }
+  @media (hover: none) { .dg-seen { opacity: .8; } }
+  .dg-item[data-hidden="true"] { opacity: .6; padding: 7px 0; }
+  .dg-item[data-hidden="true"] .dg-title { font-weight: 500; font-size: 13.5px; }
+  .dg-seen-list { padding-bottom: 6px; }
+  .dg-seen-list summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted2); padding: 8px 0 4px; list-style: none; }
+  .dg-seen-list summary::-webkit-details-marker { display: none; }
+  .dg-seen-list summary::before { content: "▸ "; }
+  .dg-seen-list[open] summary::before { content: "▾ "; }
+  .dg-section[data-all-seen="true"] { opacity: .75; }
+  .dg-task-close { opacity: 1; color: var(--sage); box-shadow: 0 0 0 1px var(--sage) inset; }
+  .dg-task-close:hover { background: var(--sage); color: #fff; }
+  .close-panel textarea { width: 100%; border-radius: 14px; margin: 6px 0 10px; resize: vertical; font-size: 14px; }
+  .close-label { display: block; font-size: 13px; font-weight: 600; margin-top: 12px; }
+  .close-label span { font-weight: 400; color: var(--muted2); }
+  .close-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .close-quick button {
+    border: none; cursor: pointer; font: 600 12px 'Karla', sans-serif; color: var(--muted);
+    background: var(--bg); border-radius: 999px; padding: 5px 11px;
+  }
+  .close-quick button:hover { color: var(--text); }
+
+  /* ---- Dashboard layout (header select; stored per browser) ------------------------------ */
+  body[data-view="tasks"] .dash-only { display: none; }
+  body[data-dash-layout="grid"] .dg-group, body[data-dash-layout="wide"] .dg-group {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; align-items: start;
+  }
+  body[data-dash-layout="grid"] .dg-group > .dg-group-head, body[data-dash-layout="wide"] .dg-group > .dg-group-head { grid-column: 1 / -1; }
+  body[data-dash-layout="grid"] .dg-section[data-attention="true"],
+  body[data-dash-layout="wide"] .dg-section[data-attention="true"] { grid-column: 1 / -1; }
+  body:not([data-view="tasks"])[data-dash-layout="grid"] .dash,
+  body:not([data-view="tasks"])[data-dash-layout="grid"] header { max-width: 1400px; }
+  body:not([data-view="tasks"])[data-dash-layout="wide"] .dash,
+  body:not([data-view="tasks"])[data-dash-layout="wide"] header { max-width: none; }
+  @media (max-width: 560px) {
+    body[data-dash-layout] .dg-group { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* In a grid column the row is narrow: actions drop under the title instead of squeezing it. */
+  body[data-dash-layout="grid"] .dg-section:not([data-attention="true"]) .dg-item,
+  body[data-dash-layout="wide"] .dg-section:not([data-attention="true"]) .dg-item { grid-template-columns: 50px minmax(0, 1fr); row-gap: 6px; }
+  body[data-dash-layout="grid"] .dg-section:not([data-attention="true"]) .dg-side,
+  body[data-dash-layout="wide"] .dg-section:not([data-attention="true"]) .dg-side { grid-column: 2; flex-wrap: wrap; }
+
+  .dg-kind[data-kind="mail"], .dg-kind[data-kind="chat"] { color: var(--sage); background: var(--sage-bg); }
+
+  /* ---- Hand-off numbers, owners, changes, details, by-person view ------------------------- */
+  .dg-n {
+    border: none; cursor: copy; font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-text);
+    background: var(--muted2); border-radius: 6px; padding: 2px 6px; flex-shrink: 0;
+  }
+  .dg-n:hover { background: var(--accent); color: #2b2119; }
+  .dg-change { font: 700 10.5px 'Karla', sans-serif; border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+  .dg-change[data-change="new"] { color: var(--lavender); background: var(--lavender-bg); }
+  .dg-change[data-change="changed"] { color: var(--due-text); background: var(--due-bg); }
+  .dg-owner { font-weight: 700; color: var(--text); }
+  .dg-working { font: 700 11px 'Karla', sans-serif; color: var(--lavender); background: var(--lavender-bg); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+  .dg-detail { margin-top: 6px; }
+  .dg-detail summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted); list-style: none; }
+  .dg-detail summary::-webkit-details-marker { display: none; }
+  .dg-detail summary::before { content: "▸ "; }
+  .dg-detail[open] summary::before { content: "▾ "; }
+  .dg-detail .md { font-size: 13.5px; line-height: 1.55; margin-top: 6px; padding: 10px 12px; background: var(--bg); border-radius: 12px; }
+  .dg-changes { background: var(--card-plain-bg); border: 1px solid var(--card-plain-border); border-radius: 20px; box-shadow: var(--card-shadow); padding: 14px 18px 10px; }
+  .dg-change-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .dg-change-list li { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+  .dg-arrow { font-size: 12px; font-weight: 700; color: var(--due-text); }
+  .dg-mode { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--card-plain-bg); box-shadow: 0 0 0 1px var(--card-plain-border) inset; align-self: flex-start; }
+  .dg-mode button { border: none; cursor: pointer; font: 600 12.5px 'Fredoka', sans-serif; color: var(--muted); background: none; border-radius: 999px; padding: 6px 13px; }
+  .dg-mode button[data-active="true"] { background: var(--ink); color: var(--ink-text); }
+  .dg-kind[data-kind="decision"] { color: var(--overdue-text); background: var(--overdue-bg); }
+  .dg-kind[data-kind="check"] { color: var(--muted); background: var(--bg); }
+  ol.dg-steps { list-style: none; }
 `;

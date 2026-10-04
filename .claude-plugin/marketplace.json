@@ -4,13 +4,13 @@
     "name": "pasichDev",
     "url": "https://github.com/pasichDev"
   },
-  "description": "Marketplace for the docket skill.",
+  "description": "Marketplace for the docket skills.",
   "plugins": [
     {
       "name": "docket",
       "source": "./",
-      "description": "Field and tool reference for docket, the shared list every AI tool and project writes to.",
-      "version": "3.0.0"
+      "description": "Skills for docket, the shared list every AI tool and project writes to: the field and tool reference, and digests of your MRs, PRs and tickets on the dashboard.",
+      "version": "3.1.0"
     }
   ]
 }

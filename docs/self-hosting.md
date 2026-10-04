@@ -87,7 +87,7 @@ Server: https://docket.home.example
 Status: connected
 Latency: 18 ms
 Server version: 2.3.0
-Device: andrii-desktop
+Device: jane-desktop
 Device authorization: active
 ```
 
@@ -118,6 +118,9 @@ data manually first.
   racing to claim the same item get one winner immediately (`409
   already_claimed`), with explicit `force: true` takeover available when
   that's what you actually want.
+- **Digests** live on the server too: `digest_publish` and the other digest
+  tools forward to it, so every paired client reads the same set and the same
+  seen marks.
 - **`docket web`** opens the server's own Web UI instead of starting a
   second, separately stateful local one.
 - **`docket backup`** on a client machine refuses and points you at the

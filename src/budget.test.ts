@@ -190,3 +190,14 @@ test("a genuinely empty store says nothing extra — an empty list is then the t
   assert.equal(emptyScopeNotice("acme/backend", [todo({ id: 1, workspace: "acme/backend" })]), "");
   assert.equal(emptyScopeNotice("*", [todo({ id: 1, workspace: "acme/web" })]), "", "an unscoped list cannot mislead about scope");
 });
+
+test("the session-start digest hint stays inside its slice of the budget, even with long presets", async () => {
+  const { renderDigestHint, DIGEST_HINT_TOKEN_BUDGET } = await import("./format.js");
+  const latest = { shortId: "D-ABCDEF", createdAt: new Date(Date.now() - 30 * 3_600_000).toISOString(), attention: 12 };
+  const line = renderDigestHint(latest, ["work", "week", "a-very-long-preset-name-that-goes-on", "another-long-one"]);
+  assert.ok(approximateTokens(line) <= DIGEST_HINT_TOKEN_BUDGET, `${approximateTokens(line)} tokens: ${line}`);
+  assert.match(line, /stale/);
+  const fresh = renderDigestHint({ ...latest, createdAt: new Date().toISOString() }, ["work"]);
+  assert.doesNotMatch(fresh, /stale/, "a fresh digest is not offered again");
+  assert.equal(renderDigestHint(null), "", "no digest ever: say nothing");
+});

@@ -9,6 +9,9 @@ export type ServerEventType =
   | "todo.deleted"
   | "claim.acquired"
   | "claim.released"
+  | "digest.published"
+  | "digest.deleted"
+  | "digest.seen"
   | "server.version";
 
 export interface ServerEvent {

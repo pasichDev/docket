@@ -7,13 +7,15 @@ import { installProcessLogging, log } from "../log.js";
 import { loadPeers, removePeer } from "../peers.js";
 import { migrateLegacyFields, withStore } from "../storage.js";
 import { syncAllPeers } from "../sync/client.js";
+import { syncDigestsWithAllPeers } from "../sync/digests.js";
+import { withDigestStore } from "../digests.js";
 import { loadViewers, touchViewer } from "../viewers.js";
 import { handleApiRoute } from "./api.js";
 import { AmbiguousTodoIdError } from "../storage.js";
 import { BadRequestError, json, SECURITY_HEADERS, type ApiContext } from "./http.js";
 import { removePeerAndMaybeRevertRole } from "./peer-admin.js";
 import { isClientAssetPath, serveClientAsset } from "./client-assets.js";
-import { GATE_PAGE, PAGE } from "./views.js";
+import { GATE_PAGE, PAGE as PAGE_SHELL } from "./views.js";
 
 installProcessLogging("web");
 
@@ -170,6 +172,7 @@ const BROWSER_PROTECTED_PATHS = [
   /^\/api\/import$/,
   /^\/api\/qr$/,
   /^\/api\/todos(\/|$)/,
+  /^\/api\/digests(\/|$)/,
   /^\/api\/peers(\/|$)/,
   /^\/api\/presence$/,
   /^\/api\/sessions$/,
@@ -179,6 +182,14 @@ const BROWSER_PROTECTED_PATHS = [
   /^\/api\/pair\/redeem$/,
   /^\/api\/pair\/outgoing\//,
 ];
+
+function pageFor(view: "dash" | "tasks"): string {
+  return VIEW_PAGES[view];
+}
+const VIEW_PAGES = {
+  dash: PAGE_SHELL.replace("<body>", '<body data-view="dash">'),
+  tasks: PAGE_SHELL.replace("<body>", '<body data-view="tasks">'),
+};
 
 export async function createWebServer(): Promise<Server> {
   const DEVICE_ID = await getDeviceId();
@@ -216,19 +227,22 @@ export async function createWebServer(): Promise<Server> {
       const url = new URL(req.url ?? "/", "http://localhost");
 
       // Root dashboard / Gate page
-      if (req.method === "GET" && url.pathname === "/") {
+      // Dashboard ("/") and Tasks ("/tasks") are one document; the body's data-view picks
+      // which shows first, so there is no flash of the wrong page before the script runs.
+      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/tasks")) {
+        const page = pageFor(url.pathname === "/tasks" ? "tasks" : "dash");
         if (isLocalRequest(req)) {
           res.writeHead(200, {
             "Content-Type": "text/html; charset=utf-8",
             "Set-Cookie": `${UI_SESSION_COOKIE}=${UI_SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
             ...SECURITY_HEADERS,
           });
-          res.end(PAGE);
+          res.end(page);
           return;
         }
         if (await hasViewerSession(req)) {
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...SECURITY_HEADERS });
-          res.end(PAGE);
+          res.end(page);
           return;
         }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", ...SECURITY_HEADERS });
@@ -276,6 +290,27 @@ export async function createWebServer(): Promise<Server> {
   return server;
 }
 
+let digestSyncInFlight = false;
+
+/**
+ * Digests ride after the todo sync, never in front of it: a slow peer costs up to a timeout
+ * per page here, and the todo changes this tick just merged should not wait on that to reach
+ * the browser. One run at a time, because two pulls from the same peer racing would let the
+ * slower one write an older cursor over the newer.
+ */
+function syncDigestsInBackground(deviceId: string): void {
+  if (digestSyncInFlight) return;
+  digestSyncInFlight = true;
+  void syncDigestsWithAllPeers(deviceId, withDigestStore)
+    .then((changed) => {
+      if (changed > 0) broadcastUpdate();
+    })
+    .catch((err: Error) => log(`digest sync error: ${err.message}`))
+    .finally(() => {
+      digestSyncInFlight = false;
+    });
+}
+
 export async function startWebServer(port: number = PORT): Promise<Server> {
   await migrateLegacyFields();
   const server = await createWebServer();
@@ -299,6 +334,7 @@ export async function startWebServer(port: number = PORT): Promise<Server> {
       broadcastUpdate();
       await Promise.all(unpairedIds.map((id) => removePeer(id)));
       broadcastSync("end", { ok: true });
+      syncDigestsInBackground(DEVICE_ID);
     } catch (err) {
       log(`sync loop error: ${(err as Error).message}`);
       broadcastSync("end", { ok: false });

@@ -60,6 +60,8 @@ Other tools you have: `todo_history(id)` — full change log for one item, who
 did what and when. `todo_delete(id)` — permanently remove an item (destructive,
 confirm with the human first unless they clearly already decided). `todo_version()`
 — sanity-check the running server isn't stale (e.g. right after an update).
+`todo_complete(id, reason?)` — pass `reason` to say how it was closed ("fixed in
+!42", "duplicate of T-…"); it is appended to the description and kept in history.
 `todo_check_update()` — read-only check for a newer docket version; if one's
 available, tell the human and let them run `docket update` themselves —
 never trigger it yourself.
@@ -96,3 +98,13 @@ replacement for them. An item that turns out to matter gets written up
 properly in whichever of those owns that kind of work, and `sourceUrl` is
 the link back. Items are meant to leave; a list that only grows is a list
 nobody reads.
+
+## Digests
+
+`digest_publish` / `digest_list` / `digest_get` / `digest_delete` store snapshots
+of the user's work that an agent compiled from GitLab, GitHub, Notion and git;
+the dashboard's home page shows the latest one. Don't build one ad hoc — load the
+`docket:digest` skill, which says what to read, how to verify it and how to lay
+it out. `docket:digest-setup` configures the sources. When the user hands you a digest item
+by number ("take 7", "D-7K2F9A/7"), call `digest_take(item)`, do the work, then close the
+task it gave you with `todo_complete(id, reason)`.

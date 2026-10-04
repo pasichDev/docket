@@ -1,0 +1,410 @@
+import { getDigest, listDigests, listSeenMarks } from "./api.js";
+import { digestBodyHtml, digestView, emptyDashboardHtml, glanceHtml, linkedTodos, timelineHtml, todoFromItem } from "./digest-view.js";
+import { byId } from "./dom.js";
+import { refresh } from "./list.js";
+import { showToast } from "./modals.js";
+import { state } from "./state.js";
+import { UNFILED, type Digest, type DigestItem, type DigestSummary } from "./types.js";
+
+/**
+ * The dashboard view and the two-page routing around it.
+ *
+ * `/` is the dashboard, `/tasks` is the list that used to be the whole page. Both are the
+ * same document — the server answers both paths with it — and switching is a pushState and
+ * a `data-view` attribute on <body>, so the list keeps its scroll, filters and open dialogs
+ * when you look away and back.
+ */
+
+export type View = "dash" | "tasks";
+
+const dash = {
+  /** The timeline: one light row per digest, newest first. */
+  summaries: [] as DigestSummary[],
+  /** Full digests by uuid. A digest never changes once published, so an entry here is
+   *  never stale — only ever missing — and is fetched once per page load. */
+  full: new Map<string, Digest>(),
+  /** Which digest is open; null means "the newest one", so a fresh digest takes over the view. */
+  selected: null as string | null,
+  loaded: false,
+  failed: false,
+  /** Delete is two clicks: the first arms the button for a few seconds. */
+  armedDelete: null as string | null,
+  /** The area filter ("Work", "Learning"…); null shows every group. Kept across digests,
+   *  so the morning's "work only" view survives a fresh digest landing. */
+  group: null as string | null,
+  /** "By area" or "By person"; remembered per browser. */
+  mode: "area" as "area" | "people",
+  /** Seen marks, key → status when marked. Synced across devices by the server. */
+  seen: new Map<string, string | null>(),
+  /** The todo the close dialog is holding, if it is open. */
+  closing: null as number | null,
+  /** Items whose "+ task" request is in flight, so a re-render can't re-enable the button. */
+  adding: new Set<string>(),
+  /** What the two columns last held. The page refreshes every 15 seconds and on every SSE
+   *  update; rewriting identical markup would collapse an open "show more", drop focus and
+   *  text selection, and reset hover — for nothing. */
+  lastMain: "",
+  lastSide: "",
+};
+
+export function viewFromPath(pathname: string): View {
+  return pathname.replace(/\/+$/, "") === "/tasks" ? "tasks" : "dash";
+}
+
+export function currentView(): View {
+  return document.body.dataset.view === "tasks" ? "tasks" : "dash";
+}
+
+export function showView(view: View, { push = false }: { push?: boolean } = {}): void {
+  document.body.dataset.view = view;
+  for (const tab of document.querySelectorAll<HTMLElement>("[data-nav-tab]")) {
+    tab.setAttribute("aria-current", String(tab.dataset.navTab === view));
+  }
+  document.title = view === "tasks" ? "Docket — Tasks" : "Docket";
+  if (push) {
+    const path = view === "tasks" ? "/tasks" : "/";
+    if (location.pathname !== path) history.pushState({ view }, "", path);
+    window.scrollTo({ top: 0 });
+  }
+  if (view === "dash") renderDashboard();
+}
+
+function selectedUuid(): string | null {
+  if (dash.selected && dash.summaries.some((d) => d.uuid === dash.selected)) return dash.selected;
+  return dash.summaries[0]?.uuid ?? null;
+}
+
+function paint(element: HTMLElement, html: string, key: "lastMain" | "lastSide"): void {
+  if (dash[key] === html) return;
+  dash[key] = html;
+  element.innerHTML = html;
+}
+
+export function renderDashboard(): void {
+  const main = byId("dash-main");
+  const side = byId("dash-side");
+  const uuid = selectedUuid();
+  const current = uuid ? dash.full.get(uuid) : undefined;
+
+  let mainHtml: string;
+  if (!dash.loaded || (uuid && !current)) {
+    mainHtml = dash.failed ? `<p class="dg-empty-note">Couldn't load digests — retrying.</p>` : `<div class="dg-skeleton"></div><div class="dg-skeleton short"></div>`;
+  } else if (current) {
+    mainHtml = digestBodyHtml(current, digestView(linkedTodos(state.allTodos), { seen: dash.seen, adding: dash.adding, group: dash.group, mode: dash.mode, shortId: current.shortId }));
+  } else {
+    mainHtml = emptyDashboardHtml();
+  }
+  paint(main, mainHtml, "lastMain");
+  paint(side, glanceHtml(state.allTodos) + timelineHtml(dash.summaries, uuid), "lastSide");
+
+  if (current && dash.armedDelete === current.uuid) {
+    const btn = main.querySelector<HTMLElement>("[data-delete-digest]");
+    if (btn) {
+      btn.dataset.armed = "true";
+      btn.textContent = "Confirm delete";
+    }
+  } else {
+    const btn = main.querySelector<HTMLElement>("[data-delete-digest][data-armed]");
+    if (btn) {
+      delete btn.dataset.armed;
+      btn.textContent = "Delete";
+    }
+  }
+}
+
+/** Fetches the full digest the view needs, if it isn't held yet. */
+async function ensureSelectedLoaded(): Promise<void> {
+  const uuid = selectedUuid();
+  if (!uuid || dash.full.has(uuid)) return;
+  const { digest } = await getDigest(uuid);
+  dash.full.set(uuid, digest);
+}
+
+/** Refreshes the data only; the caller renders, so one refresh is one paint. */
+export async function refreshDigests(): Promise<void> {
+  try {
+    const [{ digests }, { seen }] = await Promise.all([listDigests(), listSeenMarks()]);
+    dash.summaries = digests;
+    dash.seen = new Map(seen.map((m) => [m.key, m.status]));
+    const live = new Set(digests.map((d) => d.uuid));
+    for (const uuid of dash.full.keys()) if (!live.has(uuid)) dash.full.delete(uuid);
+    await ensureSelectedLoaded();
+    dash.loaded = true;
+    dash.failed = false;
+  } catch (err) {
+    console.error("digests refresh failed", err);
+    dash.failed = true;
+  }
+}
+
+function findItem(key: string): { digest: Digest; item: DigestItem } | null {
+  const [uuid, s, i] = key.split(":");
+  const digest = dash.full.get(uuid);
+  const item = digest?.sections[Number(s)]?.items[Number(i)];
+  return digest && item ? { digest, item } : null;
+}
+
+function activeWorkspace(): string | null {
+  return state.activeWorkspace === "*" || state.activeWorkspace === UNFILED ? null : String(state.activeWorkspace);
+}
+
+async function addTask(key: string): Promise<void> {
+  const found = findItem(key);
+  if (!found || dash.adding.has(key)) return;
+  dash.adding.add(key);
+  renderDashboard();
+  const res = await fetch("/api/todos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(todoFromItem(found.item, found.digest, activeWorkspace())),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    dash.adding.delete(key);
+    renderDashboard();
+    showToast("Couldn't add the task.");
+    return;
+  }
+  showToast(`Added to Tasks: ${found.item.title}`);
+  await refresh();
+  // Only now: until the list holds the new task, the row cannot show "in tasks", and
+  // releasing the key earlier would put a live "+ task" button back for a moment.
+  dash.adding.delete(key);
+  renderDashboard();
+}
+
+async function deleteSelected(uuid: string): Promise<void> {
+  if (dash.armedDelete !== uuid) {
+    dash.armedDelete = uuid;
+    renderDashboard();
+    window.setTimeout(() => {
+      if (dash.armedDelete !== uuid) return;
+      dash.armedDelete = null;
+      renderDashboard();
+    }, 4000);
+    return;
+  }
+  dash.armedDelete = null;
+  const res = await fetch(`/api/digests/${encodeURIComponent(uuid)}`, { method: "DELETE" }).catch(() => null);
+  if (!res || !res.ok) {
+    renderDashboard();
+    showToast("Couldn't delete the digest.");
+    return;
+  }
+  if (dash.selected === uuid) dash.selected = null;
+  showToast("Digest deleted on every synced device.");
+  await refreshDigests();
+  renderDashboard();
+}
+
+async function select(uuid: string): Promise<void> {
+  dash.selected = uuid;
+  dash.armedDelete = null;
+  renderDashboard(); // the timeline highlight moves at once; the body follows when loaded
+  try {
+    await ensureSelectedLoaded();
+  } catch (err) {
+    console.error("digest load failed", err);
+    showToast("Couldn't load that digest.");
+  }
+  renderDashboard();
+  byId("dash-main").scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+async function toggleSeen(button: HTMLElement): Promise<void> {
+  const key = button.dataset.seenKey ?? "";
+  const status = button.dataset.seenStatus || null;
+  const seen = button.dataset.seen === "true";
+  // Optimistic: the row moves at once, and a failed write puts it back.
+  const before = new Map(dash.seen);
+  if (seen) dash.seen.set(key, status);
+  else dash.seen.delete(key);
+  renderDashboard();
+  const res = await fetch("/api/digests/seen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, status, title: button.dataset.seenTitle ?? "", seen }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    dash.seen = before;
+    renderDashboard();
+    showToast("Couldn't save that.");
+  }
+}
+
+function openCloseDialog(button: HTMLElement): void {
+  const dialog = byId<HTMLDialogElement>("close-panel");
+  dash.closing = Number(button.dataset.closeTodo);
+  byId("close-panel-title").textContent = button.dataset.closeTitle ?? "";
+  const reason = byId<HTMLTextAreaElement>("close-panel-reason");
+  reason.value = "";
+  // A modal of our own, not window.prompt: a native dialog blocks the page and can't be styled.
+  dialog.showModal();
+  reason.focus();
+}
+
+async function submitClose(): Promise<void> {
+  const id = dash.closing;
+  if (id === null) return;
+  const reason = byId<HTMLTextAreaElement>("close-panel-reason").value.trim();
+  const res = await fetch(`/api/todos/${id}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(reason ? { reason } : {}),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    showToast("Couldn't close the task.");
+    return;
+  }
+  dash.closing = null;
+  byId<HTMLDialogElement>("close-panel").close();
+  showToast(reason ? "Closed, with the reason in its description." : "Closed.");
+  await refresh();
+  renderDashboard();
+}
+
+/**
+ * The Clipboard API exists only in a secure context, and the dashboard opened from another
+ * device on the LAN is plain http — so fall back to the old selection copy there.
+ */
+async function copyText(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // fall through to the selection copy
+  }
+  const area = document.createElement("textarea");
+  area.value = value;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;top:-1000px;opacity:0";
+  document.body.append(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  area.remove();
+  return ok;
+}
+
+const GROUP_KEY = "docket-digest-group";
+
+function rememberGroup(group: string | null): void {
+  try {
+    if (group) localStorage.setItem(GROUP_KEY, group);
+    else localStorage.removeItem(GROUP_KEY);
+  } catch {
+    // Private window or blocked storage: the filter just doesn't survive a reload.
+  }
+}
+
+export function initDashboard(): void {
+  try {
+    dash.group = localStorage.getItem(GROUP_KEY);
+    dash.mode = localStorage.getItem("docket-digest-mode") === "people" ? "people" : "area";
+  } catch {
+    dash.group = null;
+  }
+
+  document.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+
+    // Internal navigation: the two pages are one document.
+    const nav = target.closest<HTMLAnchorElement>("a[data-nav]");
+    if (nav && !(e instanceof MouseEvent && (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0))) {
+      e.preventDefault();
+      showView(nav.dataset.nav === "tasks" ? "tasks" : "dash", { push: true });
+      return;
+    }
+
+    const pick = target.closest<HTMLElement>("[data-digest]");
+    if (pick?.dataset.digest) {
+      void select(pick.dataset.digest);
+      return;
+    }
+
+    const handoff = target.closest<HTMLElement>("button[data-handoff]");
+    if (handoff) {
+      // Just the handle: "take D-7K2F9A/7" is all an agent needs — digest_take resolves the rest.
+      const handle = handoff.dataset.handoff ?? "";
+      void copyText(handle).then((ok) => showToast(ok ? `Copied ${handle} — tell any agent "take ${handle}"` : `Tell an agent: take ${handle}`));
+      return;
+    }
+
+    const modeBtn = target.closest<HTMLElement>("button[data-digest-mode]");
+    if (modeBtn) {
+      dash.mode = modeBtn.dataset.digestMode === "people" ? "people" : "area";
+      try {
+        localStorage.setItem("docket-digest-mode", dash.mode);
+      } catch {}
+      renderDashboard();
+      return;
+    }
+
+    const seenBtn = target.closest<HTMLElement>("button[data-seen-key]");
+    if (seenBtn) {
+      void toggleSeen(seenBtn);
+      return;
+    }
+
+    const closeBtn = target.closest<HTMLElement>("button[data-close-todo]");
+    if (closeBtn) {
+      openCloseDialog(closeBtn);
+      return;
+    }
+
+    const chip = target.closest<HTMLElement>("button[data-digest-group]");
+    if (chip) {
+      dash.group = chip.dataset.digestGroup || null;
+      rememberGroup(dash.group);
+      renderDashboard();
+      return;
+    }
+
+    const add = target.closest<HTMLButtonElement>("button[data-digest-item]");
+    if (add?.dataset.digestItem) {
+      void addTask(add.dataset.digestItem);
+      return;
+    }
+
+    const del = target.closest<HTMLElement>("[data-delete-digest]");
+    if (del?.dataset.deleteDigest) {
+      void deleteSelected(del.dataset.deleteDigest);
+      return;
+    }
+
+    const copy = target.closest<HTMLElement>("button[data-copy]");
+    if (copy && copy.closest(".dg-hero")) {
+      void navigator.clipboard?.writeText(copy.dataset.copy ?? "").then(() => showToast(`Copied ${copy.dataset.copy}`));
+    }
+  });
+
+  // Fires for the hero's "N need you" anchor too, which changes only the hash. Re-showing
+  // the same view there would be a pointless re-render under the scroll it just did.
+  byId("close-panel-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    void submitClose();
+  });
+  byId("close-panel-cancel").addEventListener("click", () => {
+    dash.closing = null;
+    byId<HTMLDialogElement>("close-panel").close();
+  });
+  // Quick reasons, because most closes are one of a handful.
+  byId("close-panel-quick").addEventListener("click", (e) => {
+    const pick = (e.target as Element).closest<HTMLElement>("button[data-reason]");
+    if (!pick) return;
+    const area = byId<HTMLTextAreaElement>("close-panel-reason");
+    area.value = area.value ? `${area.value} ${pick.dataset.reason}` : (pick.dataset.reason ?? "");
+    area.focus();
+  });
+
+  window.addEventListener("popstate", () => {
+    const view = viewFromPath(location.pathname);
+    if (view !== currentView()) showView(view);
+  });
+}

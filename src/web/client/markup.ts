@@ -9,7 +9,20 @@
  */
 export const MARKUP = `
   <header>
-    <h1>Docket</h1>
+    <div class="header-left">
+      <h1>Docket</h1>
+      <!-- Two pages, one document: see dashboard.ts. Real links, so a middle-click or a
+           copied URL still lands on the right one. -->
+      <nav class="views" aria-label="Views">
+        <a href="/" data-nav="dash" data-nav-tab="dash">Dashboard</a>
+        <a href="/tasks" data-nav="tasks" data-nav-tab="tasks">Tasks <span class="n" id="nav-open-count"></span></a>
+      </nav>
+      <select class="layout dash-only" id="dash-layout" title="How the digest is laid out">
+        <option value="stack">Stack</option>
+        <option value="grid">Grid</option>
+        <option value="wide">Wide grid</option>
+      </select>
+    </div>
     <div class="header-right">
       <div class="synced" data-state="idle"><span class="dot"></span><span class="spinner"></span><span id="synced-text">syncing…</span></div>
       <button class="theme-toggle" id="export-toggle" title="Export & Import" type="button">
@@ -184,6 +197,35 @@ export const MARKUP = `
     <div id="edit-panel-form"></div>
   </dialog>
 
+  <dialog class="edit-panel close-panel" id="close-panel" aria-labelledby="close-panel-heading">
+    <form id="close-panel-form" method="dialog">
+      <div class="modal-head">
+        <div>
+          <div class="devices-title" id="close-panel-heading">Close task</div>
+          <div class="devices-subtitle" id="close-panel-title"></div>
+        </div>
+      </div>
+      <label class="close-label" for="close-panel-reason">How was it closed? <span>optional — goes into the description and the history</span></label>
+      <textarea id="close-panel-reason" rows="3" maxlength="2000" placeholder="Fixed in !160 · duplicate of T-… · no longer needed because…"></textarea>
+      <div class="close-quick" id="close-panel-quick">
+        <button type="button" data-reason="Done.">Done</button>
+        <button type="button" data-reason="Merged.">Merged</button>
+        <button type="button" data-reason="Duplicate of">Duplicate</button>
+        <button type="button" data-reason="No longer needed:">Not needed</button>
+        <button type="button" data-reason="Won't do:">Won't do</button>
+      </div>
+      <div class="add-form-actions">
+        <button class="add" type="submit">Close task</button>
+        <button class="cancel" type="button" id="close-panel-cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="dash" id="view-dash">
+    <div class="dash-main" id="dash-main"></div>
+    <aside class="dash-side" id="dash-side"></aside>
+  </div>
+
   <div class="page">
     <div class="tags">
       <button class="tag" data-tag="all" data-active="true" type="button"><span class="dot"></span>All <span class="n" data-count="all"></span></button>
@@ -208,6 +250,12 @@ export const MARKUP = `
         <option value="category">By category</option>
         <option value="priority">By priority</option>
         <option value="due">By due date</option>
+      </select>
+      <select class="layout" id="tasks-layout" title="How the list is laid out">
+        <option value="narrow">List</option>
+        <option value="wide">Wide list</option>
+        <option value="grid">Grid</option>
+        <option value="full">Full-width grid</option>
       </select>
     </div>
 

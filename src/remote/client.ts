@@ -178,6 +178,21 @@ export class RemoteTodoRepository implements TodoRepository {
     return { status: res.status, body: parsed };
   }
 
+  /**
+   * One signed call to any /api/v1 route, with the same compatibility check, auth and error
+   * mapping as the todo methods. Exists so a sibling client — digests — rides this exact
+   * machinery instead of a second copy of the signing code that could drift from it.
+   */
+  async call(method: string, path: string, body?: unknown, context?: MutationContext): Promise<{ status: number; body: unknown }> {
+    await this.ensureCompatible();
+    return this.request(method, path, body, context ? this.contextHeaders(context) : undefined);
+  }
+
+  /** The error for a response a caller did not expect — public for the same sibling clients. */
+  unexpectedResponse(status: number, body: unknown): Error {
+    return this.unexpected(status, body);
+  }
+
   private unexpected(status: number, body: unknown): Error {
     const error = typeof body === "object" && body !== null && "error" in body ? String((body as { error: unknown }).error) : undefined;
     return new RemoteUnavailableError(this.options.serverUrl, error ?? `unexpected response (status ${status})`);
@@ -274,12 +289,14 @@ export class RemoteTodoRepository implements TodoRepository {
     return this.fromWire((body as { todo: WireTodo }).todo);
   }
 
-  async complete(id: TodoId, context: MutationContext, expectedRevision?: number): Promise<Todo> {
+  async complete(id: TodoId, context: MutationContext, expectedRevision?: number, reason?: string | null): Promise<Todo> {
     const remoteId = this.resolveRemoteId(id);
     await this.ensureCompatible();
     const headers = this.contextHeaders(context);
     if (expectedRevision !== undefined) headers["If-Match"] = String(expectedRevision);
-    const { status, body } = await this.request("POST", `/api/v1/todos/${encodeURIComponent(remoteId)}/complete`, undefined, headers);
+    // No body without a reason, so a request to a server that predates reasons is byte-for-byte
+    // what it always was. A server that predates them ignores the body and completes anyway.
+    const { status, body } = await this.request("POST", `/api/v1/todos/${encodeURIComponent(remoteId)}/complete`, reason ? { reason } : undefined, headers);
     if (status === 404) throw new TodoNotFoundError(id);
     if (status === 409) throw new TodoConflictError(this.fromWire((body as { todo: WireTodo }).todo));
     if (status !== 200) throw this.unexpected(status, body);

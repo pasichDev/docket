@@ -275,13 +275,37 @@ export function releaseTodo(store: TodoStore, item: Todo, agent: string | null, 
   touch(store, item, deviceId, deviceName, CLAIM_FIELDS);
 }
 
-/** Marks done and drops any claim — shared by the MCP tool and the web API so both stamp the same fields. */
-export function completeTodo(store: TodoStore, item: Todo, agent: string | null, deviceId: string, deviceName: string): void {
+/** Long enough for a paragraph of "why", short enough that it stays a note and not a document. */
+export const MAX_COMPLETION_REASON = 2000;
+
+/**
+ * The closing note as it lands in the description: a dated line at the end, so it reads in
+ * order and survives sync like any other description edit. There is deliberately no separate
+ * "resolution" field — a new field is a store-format and sync-protocol change, and the
+ * description is where a human reading the item looks anyway.
+ */
+export function withClosingNote(description: string | null, reason: string, at: string): string {
+  const line = `**Closed ${at.slice(0, 10)}:** ${reason}`;
+  return description ? `${description}\n\n${line}` : line;
+}
+
+/**
+ * Marks done and drops any claim — shared by the MCP tool and the web API so both stamp the
+ * same fields. A `reason` is appended to the description and repeated in the history entry,
+ * in the same write as the completion, so the two can never disagree.
+ */
+export function completeTodo(store: TodoStore, item: Todo, agent: string | null, deviceId: string, deviceName: string, reason?: string | null): void {
+  const why = reason?.trim().slice(0, MAX_COMPLETION_REASON) || null;
   item.done = true;
   item.completedAt = new Date().toISOString();
   clearClaim(item);
-  pushHistory(item, agent, "completed", "marked done", deviceName);
-  touch(store, item, deviceId, deviceName, ["done", "completedAt", ...CLAIM_FIELDS]);
+  const fields: FieldKey[] = ["done", "completedAt", ...CLAIM_FIELDS];
+  if (why) {
+    item.description = withClosingNote(item.description, why, item.completedAt);
+    fields.push("description");
+  }
+  pushHistory(item, agent, "completed", why ? `marked done — ${why}` : "marked done", deviceName);
+  touch(store, item, deviceId, deviceName, fields);
 }
 
 /** Removes the item and records why it disappeared, so a paired device doesn't resurrect it on next sync. */

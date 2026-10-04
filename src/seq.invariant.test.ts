@@ -277,4 +277,4 @@ test("seq invariant: every store-taking mutator is covered by this file", () => 
 });
 
 /** Exports of mutations.ts that cannot change a record, and so owe no sequence number. */
-const PURE_HELPERS = ["shortId", "formatAgentIdentity", "isSafeUrl", "isClaimActive", "leaseExpiry", "FIELD_KEYS", "CLAIM_LEASE_MS"];
+const PURE_HELPERS = ["shortId", "formatAgentIdentity", "isSafeUrl", "isClaimActive", "leaseExpiry", "FIELD_KEYS", "CLAIM_LEASE_MS", "withClosingNote", "MAX_COMPLETION_REASON"];

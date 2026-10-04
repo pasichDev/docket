@@ -1,5 +1,77 @@
 # Changelog
 
+## 3.1.0
+
+Digests: the agent reads your merge requests, pull requests, tickets, notes and
+mail, and the dashboard's home page shows what needs you, what shipped and what
+is stuck — in Local Mode, across paired devices, and on a self-hosted server.
+No data format changes: a 3.0 install upgrades in place, and the todo store is
+untouched.
+
+### Digests and a dashboard home page
+
+- **Digests.** An agent reads the user's GitLab merge requests, GitHub pull
+  requests, Notion tickets, local git and docket items, and publishes a
+  structured snapshot with the new `digest_publish` tool — summary, highlights,
+  headline metrics, and grouped items each with a link, status, tone and a
+  "needs you" flag. `digest_list`, `digest_get` and `digest_delete` round it
+  out. Docket stores what the agent wrote and nothing else: no source
+  credential ever reaches it.
+- **New skills:** `docket:digest` (collect, verify, compose, publish — read-only
+  towards every source) and `docket:digest-setup` (detects `glab`, `gh`, Notion
+  MCP servers and git roots, asks once, writes `~/.config/docket/digest.json`).
+- **Dashboard.** `/` is now the dashboard: the latest digest, its metrics, a
+  "Tasks" card with open / in progress / overdue / due-soon counts, and a
+  timeline of earlier digests. The task list moved to `/tasks`, same page,
+  switched without a reload. Any digest item becomes a task in one click, with
+  its link, ticket id and "needs you" carried over; an item already in Tasks
+  says so instead.
+- **Digests sync** to paired devices over a new endpoint,
+  `GET /api/sync/digests`, with its own sequence counter and cursor in
+  `digests.json.enc`. The todo sync is untouched: an un-upgraded peer simply has
+  no digests to give (reported on the peer record), and when it is upgraded its
+  cursor starts at 0, so nothing published before the upgrade is skipped. The
+  signature covers a `digests:`-prefixed cursor, so a captured todo-sync request
+  cannot be replayed against it. Digests are immutable, so the merge is a set
+  union plus deletions; a deletion wins everywhere.
+- **Groups.** A section can carry a `group` ("Work", "Learning", "Side
+  projects"); the dashboard shows each group under its own heading, with chips to
+  filter to one, remembered per browser. The config's `groups` say which repos
+  and ticket prefixes go where.
+- **More sources.** Obsidian vaults and project folders (`files`), and any MCP
+  server the agent has — Jira, Linear, Sentry, Slack — as configurable `extra`
+  sources, read-only like the rest.
+- **Hand-off by number.** Every item is numbered on publish; `D-7K2F9A/7` (or
+  just `7`) names it to any agent. `digest_take` returns the brief and a docket
+  task claimed by that agent — the existing one when the item is or became a
+  task — and `todo_complete(id, reason)` closes it. `#7` on the dashboard copies
+  the handle, and a claimed item shows who is on it.
+- **What changed.** Publishing compares a digest with the previous one by item
+  identity: new items, status changes (`was open`), and items no longer listed,
+  shown as the first card. Computed by the store, not by the agent.
+- **Issues** as well as pull requests: assigned, mentioning the user, and open
+  ones in their own repos — someone else's issue counts as needing an answer.
+- **Owners and depth.** Items carry `owner` (`you`, `agent`, or a person from
+  the config) and an optional markdown `detail` for the ones worth a real
+  analysis; **By person** lays the digest out as numbered steps per owner. New
+  kinds: `decision`, `check`.
+- **Seen marks.** Hide a digest item until its status changes; marks carry over
+  to later digests and sync across devices (last write wins, undo included).
+- **Close with a reason.** `todo_complete(id, reason)` and a close dialog on the
+  dashboard append how a task was closed to its description and history, in the
+  same write as the completion. The self-hosted server accepts the reason too.
+- **Layouts.** Dashboard as a stack or grid; Tasks as a list, wide list or grid.
+- **Session start.** The SessionStart hook adds one line about the latest digest
+  — age, what needs you, preset names.
+- **Skill:** presets ("digest work"), mail and chat as read-only sources (new
+  `mail` / `chat` item kinds), a daily schedule recipe, and learned preferences in
+  `~/.config/docket/digest-learned.md`.
+- `docket backup` includes `digests.json.enc`.
+- **Self-hosted Mode.** The Docket Server keeps digests and seen marks on its own
+  data directory under `/api/v1/digests*`, device-signed like every other route;
+  the publishing device comes from the signature, never from the body. In remote
+  mode every digest tool forwards to it, so all paired clients share one set.
+
 ## 3.0.0
 
 Stable. Behaviourally identical to 3.0.0-rc.2 — the only difference is the

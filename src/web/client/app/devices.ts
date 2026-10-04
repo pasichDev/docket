@@ -152,6 +152,7 @@ export async function refreshDevicesPanel(): Promise<void> {
           <div class="device-row-details">
             ${chips.map((c) => `<span>${c}</span>`).join("")}
             ${p.lastError ? `<span class="err">${escapeHtml(p.lastError)}</span>` : ""}
+            ${p.digestError ? `<span class="err">digests: ${escapeHtml(p.digestError)}</span>` : ""}
             <button class="peer-update-address" data-id="${p.id}" data-name="${escapeHtml(p.name)}" type="button">Update address…</button>
           </div>
         </div>`;
