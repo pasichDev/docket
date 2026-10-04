@@ -27,6 +27,15 @@ git config --global user.email           # default git author
   different servers can see different workspaces. Find candidate databases with that
   server's search tool (query "tasks", "tickets", or the user's words), never a broad
   workspace dump.
+- Obsidian: a vault is a folder with a `.obsidian/` directory in it — look in the usual
+  places (`~/Documents`, `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/`) and
+  ask which one when there are several.
+- Other MCP servers: list the servers this session can call (the `<server>` part of every
+  `mcp__<server>__*` tool name). Ones that hold work items or signals — Jira / Atlassian,
+  Linear, YouTrack, GitHub Projects, Sentry, Slack, a calendar — are candidates for `extra`
+  sources. Look only at tool names and descriptions here; don't call anything yet.
+- Project files: docs, ADR or notes folders inside the git roots (`docs/`, `adr/`,
+  `notes/`) are candidates for a `files` source.
 - git roots: the directories holding the user's repos (for example `~/repo`, `~/src`);
   check with `ls`, and that subdirectories contain `.git`.
 
@@ -35,12 +44,22 @@ command (`glab auth login`, `gh auth login`) and leave that source disabled.
 
 ## 2. Ask once
 
-One `AskUserQuestion` call, up to four questions, pre-filled from what you detected:
+One `AskUserQuestion` call (two if you need all five questions), pre-filled from what you detected:
 
-1. **Sources** (multiSelect): GitLab · GitHub · Notion · local git (docket is always on).
+1. **Sources** (multiSelect): GitLab · GitHub · Notion · local git · Obsidian, plus one
+   option per extra MCP server or files folder you found (docket is always on). "Other"
+   lets the user name a server or folder you didn't find.
 2. **Scope**: which GitLab groups / GitHub owners — offer the detected ones.
 3. **Notion database**: the candidates you found, by name.
-4. **Language** of the digest text: the language the user writes in (recommended) or English.
+4. **Groups**: how to split the digest by area — offer one built from what you found
+   (the work GitLab group, personal GitHub repos, anything else), e.g. Work / Learning /
+   Side projects. Each group is a name plus `match` strings checked against an item's url,
+   repo and ref; `"*"` catches the rest.
+5. **Language** of the digest text: the language the user writes in (recommended) or English.
+
+For each chosen extra MCP server, write the `query` in plain words from what the user
+wants to see ("Jira issues assigned to me, updated since <since>") and pick the `kind`;
+ask only when the server could mean several things (Slack: which channels?).
 
 For Notion also confirm the assignee name exactly as it appears on the database's
 person property — that is what the digest filters on.
@@ -57,10 +76,23 @@ person property — that is what the digest filters on.
     "github": { "enabled": true, "user": "<login>", "owners": ["<login>"] },
     "notion": { "enabled": true, "server": "<mcp server name>", "databases": [{ "name": "<name>", "id": "<id or url>" }], "assignee": "<person>" },
     "git":    { "enabled": true, "roots": ["~/repo"], "author": "<email>" },
+    "obsidian": { "enabled": true, "vault": "<vault path>" },
     "docket": { "enabled": true }
-  }
+  },
+  "extra": [
+    { "name": "<jira>", "type": "mcp", "server": "<mcp server name>", "kind": "ticket", "query": "<what to read, in plain words>" },
+    { "name": "<docs>", "type": "files", "paths": ["<folder>"], "glob": "*.md" }
+  ],
+  "groups": [
+    { "name": "<work>", "match": ["gitlab.com/<group>/", "<TICKET-PREFIX>-"] },
+    { "name": "<other>", "match": ["*"] }
+  ]
 }
 ```
 
 No tokens, passwords or API keys in this file — the CLIs and MCP servers hold credentials.
 Show the user the file you wrote (it is short), then offer to run `docket:digest` now.
+
+**Changing it later** ("додай Jira", "прибери Slack", "перенеси lab_liddle в Learning"):
+read the file, change only that part — an entry in `sources` or `extra`, or a `match`
+string in `groups` — and show the diff.

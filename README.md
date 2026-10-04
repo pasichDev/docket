@@ -247,7 +247,9 @@ away from becoming a task.
 
 Docket never holds a GitLab, GitHub or Notion credential: the agent reads them
 with the CLIs and MCP servers it already has, and Docket only keeps what it
-wrote. What to read is local to each machine, in `~/.config/docket/digest.json`
+wrote. Anything else the agent can reach — Jira, Linear or Sentry through their MCP
+servers, an Obsidian vault, a project's docs folder — can be added as a source, and
+the digest can be split into groups such as work, learning and side projects. What to read is local to each machine, in `~/.config/docket/digest.json`
 (the `docket:digest-setup` skill writes it); the digests themselves sync to
 paired devices. Details: [`docs/digests.md`](docs/digests.md).
 

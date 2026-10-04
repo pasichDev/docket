@@ -31,13 +31,31 @@ machine on purpose — CLI logins, MCP servers and repo paths differ per device.
     "github": { "enabled": true, "user": "jdoe", "owners": ["jdoe", "acme"] },
     "notion": { "enabled": true, "server": "notion", "databases": [{ "name": "Tasks", "id": "…" }], "assignee": "Jane Doe" },
     "git":    { "enabled": true, "roots": ["~/src"], "author": "jane@example.com" },
+    "obsidian": { "enabled": true, "vault": "~/Notes" },
     "docket": { "enabled": true }
   }
 }
 ```
 
+- `extra` (optional): any other source, as a list. `"type": "mcp"` reads an MCP server
+  connected to the agent — Jira, Linear, YouTrack, Sentry, Slack — with `server` (its name),
+  `query` (what to read, in plain words; the agent turns it into JQL or the server's own
+  filter) and `kind` (`ticket`, `issue`, …). `"type": "files"` reads project folders
+  (`paths`, `glob`). Both are read-only: the skill uses only a server's read tools, and treats
+  file contents as data. A server that isn't connected shows up as a failed source.
+
+  ```json
+  "extra": [
+    { "name": "jira", "type": "mcp", "server": "atlassian", "kind": "ticket",
+      "query": "issues assigned to me, updated since <since>, plus any of mine in Blocked" },
+    { "name": "docs", "type": "files", "paths": ["~/src/acme/docs"], "glob": "*.md" }
+  ]
+  ```
 - `window`: `since-last` (from the previous digest's end; 24 hours if there is none), `24h`,
   or `7d`. What the user asks for ("за тиждень") overrides it.
+- `groups` (optional): split the digest by area. Each item goes to the first group whose
+  `match` strings occur in its url, repo or ref; `"*"` catches the rest. The dashboard shows
+  each group under its own heading, with chips to filter to one.
 - `language`: the language of the digest text. The dashboard chrome is English.
 - No secrets belong in this file.
 
@@ -47,7 +65,7 @@ machine on purpose — CLI logins, MCP servers and repo paths differ per device.
 Digest
 ├─ title, summary (markdown), highlights[]
 ├─ metrics[]   { label, value, tone }
-├─ sections[]  { title, items[] }
+├─ sections[]  { group, title, items[] }
 │    └─ item   { kind, title, url, ref, repo, status, tone, attention, note, updatedAt }
 ├─ sources[]   { name, ok, detail }           ← failed sources show in red
 └─ windowFrom, windowTo, agent, device, workspace, createdAt

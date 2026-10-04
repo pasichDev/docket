@@ -28,6 +28,13 @@
   signature covers a `digests:`-prefixed cursor, so a captured todo-sync request
   cannot be replayed against it. Digests are immutable, so the merge is a set
   union plus deletions; a deletion wins everywhere.
+- **Groups.** A section can carry a `group` ("vploq", "Learning", "Side
+  projects"); the dashboard shows each group under its own heading, with chips to
+  filter to one, remembered per browser. The config's `groups` say which repos
+  and ticket prefixes go where.
+- **More sources.** Obsidian vaults and project folders (`files`), and any MCP
+  server the agent has — Jira, Linear, Sentry, Slack — as configurable `extra`
+  sources, read-only like the rest.
 - `docket backup` includes `digests.json.enc`.
 - Not yet in remote (self-hosted server) mode: the digest tools say so instead
   of writing somewhere no dashboard reads.
