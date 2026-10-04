@@ -10,8 +10,9 @@ Warp — across every project, before the work is worth a ticket. Local-first,
 self-hostable, no SaaS account.**
 
 <p align="center">
-  <img src="docs/assets/demo.gif" alt="Claude Code and Codex, each in a different project, add a todo; both appear on the Docket dashboard within seconds, filed under their own projects" width="100%" />
+  <a href="https://pasichdev.github.io/docket/#digests"><img src="docs/assets/docket-demo-play.jpg" alt="Watch the one-minute demo: Claude Code makes the day's digest, the dashboard by area and by person, a task closed with a reason, and Codex and Claude each taking a digest item by number" width="100%" /></a>
 </p>
+<p align="center"><sub><a href="https://pasichdev.github.io/docket/#digests">Watch the one-minute demo</a> · <a href="docs/assets/docket-demo.mp4">download the mp4</a></sub></p>
 
 ## Quick start
 
@@ -240,10 +241,6 @@ Full field and workflow reference: [`skills/docket/SKILL.md`](skills/docket/SKIL
 
 ## Digests
 
-<p align="center">
-  <img src="docs/assets/digest-home.jpg" alt="The dashboard home page: a digest with a summary, highlights, source chips, a 'since the previous digest' card and metric tiles, with a Tasks card and a timeline of digests on the side" width="100%" />
-</p>
-
 Ask your agent *"make a digest"* (or *"зроби дайджест"*). The `docket:digest`
 skill reads your merge requests, pull requests, Notion tickets, local commits
 and docket items, checks every status at the source, and publishes the result —
@@ -273,10 +270,6 @@ paired devices. Details: [`docs/digests.md`](docs/digests.md).
   week"*), environment checks, mail and chat via MCP, a daily run — and the
   skill keeps short notes on what you keep correcting.
 
-<p align="center">
-  <img src="docs/assets/digest-area.jpg" alt="Digest items grouped into Work, Learning and Side projects, each row numbered, with status, owner and a change badge" width="49%" />
-  <img src="docs/assets/digest-people.jpg" alt="The same digest by person, with one blocked ticket expanded to show the agent's analysis" width="49%" />
-</p>
 
 ## CLI
 
