@@ -818,4 +818,74 @@ export const STYLES = `
     font-family: 'Fredoka', sans-serif; font-weight: 700; font-size: 18px; margin: 4px 2px 0; color: var(--text);
     display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 2px solid var(--input-border);
   }
+
+  /* ---- Tasks layout (toolbar select; stored per browser) --------------------------------- */
+  body[data-view="tasks"][data-tasks-layout="wide"] .page,
+  body[data-view="tasks"][data-tasks-layout="wide"] header { max-width: 1080px; }
+  body[data-view="tasks"][data-tasks-layout="grid"] .page,
+  body[data-view="tasks"][data-tasks-layout="grid"] header { max-width: 1280px; }
+  body[data-view="tasks"][data-tasks-layout="full"] .page,
+  body[data-view="tasks"][data-tasks-layout="full"] header { max-width: none; }
+  body[data-tasks-layout="grid"] ul.open-list, body[data-tasks-layout="grid"] ul.done-list,
+  body[data-tasks-layout="full"] ul.open-list, body[data-tasks-layout="full"] ul.done-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); align-items: start;
+  }
+  body[data-tasks-layout="grid"] ul.open-list > li.empty,
+  body[data-tasks-layout="full"] ul.open-list > li.empty { grid-column: 1 / -1; }
+  select.layout { max-width: 150px; }
+
+  /* ---- Seen marks and closing a task from the dashboard ---------------------------------- */
+  .dg-seen {
+    border: none; background: transparent; cursor: pointer; color: var(--muted); border-radius: 999px;
+    width: 28px; height: 26px; display: inline-flex; align-items: center; justify-content: center; opacity: .45;
+    font: 600 11.5px 'Karla', sans-serif;
+  }
+  .dg-seen svg { width: 14px; height: 14px; }
+  .dg-item:hover .dg-seen, .dg-seen:focus-visible { opacity: 1; }
+  .dg-seen:hover { background: var(--bg); color: var(--text); }
+  .dg-seen[data-seen="false"] { width: auto; padding: 0 10px; opacity: .8; }
+  @media (hover: none) { .dg-seen { opacity: .8; } }
+  .dg-item[data-hidden="true"] { opacity: .6; padding: 7px 0; }
+  .dg-item[data-hidden="true"] .dg-title { font-weight: 500; font-size: 13.5px; }
+  .dg-seen-list { padding-bottom: 6px; }
+  .dg-seen-list summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted2); padding: 8px 0 4px; list-style: none; }
+  .dg-seen-list summary::-webkit-details-marker { display: none; }
+  .dg-seen-list summary::before { content: "▸ "; }
+  .dg-seen-list[open] summary::before { content: "▾ "; }
+  .dg-section[data-all-seen="true"] { opacity: .75; }
+  .dg-task-close { opacity: 1; color: var(--sage); box-shadow: 0 0 0 1px var(--sage) inset; }
+  .dg-task-close:hover { background: var(--sage); color: #fff; }
+  .close-panel textarea { width: 100%; border-radius: 14px; margin: 6px 0 10px; resize: vertical; font-size: 14px; }
+  .close-label { display: block; font-size: 13px; font-weight: 600; margin-top: 12px; }
+  .close-label span { font-weight: 400; color: var(--muted2); }
+  .close-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .close-quick button {
+    border: none; cursor: pointer; font: 600 12px 'Karla', sans-serif; color: var(--muted);
+    background: var(--bg); border-radius: 999px; padding: 5px 11px;
+  }
+  .close-quick button:hover { color: var(--text); }
+
+  /* ---- Dashboard layout (header select; stored per browser) ------------------------------ */
+  body[data-view="tasks"] .dash-only { display: none; }
+  body[data-dash-layout="grid"] .dg-group, body[data-dash-layout="wide"] .dg-group {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; align-items: start;
+  }
+  body[data-dash-layout="grid"] .dg-group > .dg-group-head, body[data-dash-layout="wide"] .dg-group > .dg-group-head { grid-column: 1 / -1; }
+  body[data-dash-layout="grid"] .dg-section[data-attention="true"],
+  body[data-dash-layout="wide"] .dg-section[data-attention="true"] { grid-column: 1 / -1; }
+  body:not([data-view="tasks"])[data-dash-layout="grid"] .dash,
+  body:not([data-view="tasks"])[data-dash-layout="grid"] header { max-width: 1400px; }
+  body:not([data-view="tasks"])[data-dash-layout="wide"] .dash,
+  body:not([data-view="tasks"])[data-dash-layout="wide"] header { max-width: none; }
+  @media (max-width: 560px) {
+    body[data-dash-layout] .dg-group { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* In a grid column the row is narrow: actions drop under the title instead of squeezing it. */
+  body[data-dash-layout="grid"] .dg-section:not([data-attention="true"]) .dg-item,
+  body[data-dash-layout="wide"] .dg-section:not([data-attention="true"]) .dg-item { grid-template-columns: 50px minmax(0, 1fr); row-gap: 6px; }
+  body[data-dash-layout="grid"] .dg-section:not([data-attention="true"]) .dg-side,
+  body[data-dash-layout="wide"] .dg-section:not([data-attention="true"]) .dg-side { grid-column: 2; flex-wrap: wrap; }
+
+  .dg-kind[data-kind="mail"], .dg-kind[data-kind="chat"] { color: var(--sage); background: var(--sage-bg); }
 `;

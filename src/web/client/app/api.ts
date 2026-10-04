@@ -103,6 +103,7 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
 
 export const listTodos = () => getJson<{ todos: Todo[] }>("/api/todos");
 export const listDigests = () => getJson<{ digests: DigestSummary[]; total: number }>("/api/digests?limit=60");
+export const listSeenMarks = () => getJson<{ seen: Array<{ key: string; status: string | null }> }>("/api/digests/seen");
 export const getDigest = (uuid: string) => getJson<{ digest: Digest }>(`/api/digests/${encodeURIComponent(uuid)}`);
 export const listPeers = () => getJson<{ peers: PeerRow[] }>("/api/peers");
 export const listViewers = () => getJson<{ viewers: ViewerRow[] }>("/api/access/viewers");

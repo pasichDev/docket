@@ -1,5 +1,5 @@
-import { getDigest, listDigests } from "./api.js";
-import { digestBodyHtml, emptyDashboardHtml, glanceHtml, linkedTodos, timelineHtml, todoFromItem } from "./digest-view.js";
+import { getDigest, listDigests, listSeenMarks } from "./api.js";
+import { digestBodyHtml, digestView, emptyDashboardHtml, glanceHtml, linkedTodos, timelineHtml, todoFromItem } from "./digest-view.js";
 import { byId } from "./dom.js";
 import { refresh } from "./list.js";
 import { showToast } from "./modals.js";
@@ -29,9 +29,13 @@ const dash = {
   failed: false,
   /** Delete is two clicks: the first arms the button for a few seconds. */
   armedDelete: null as string | null,
-  /** The area filter ("vploq", "Learning"…); null shows every group. Kept across digests,
-   *  so the morning's "vploq only" view survives a fresh digest landing. */
+  /** The area filter ("Work", "Learning"…); null shows every group. Kept across digests,
+   *  so the morning's "work only" view survives a fresh digest landing. */
   group: null as string | null,
+  /** Seen marks, key → status when marked. Synced across devices by the server. */
+  seen: new Map<string, string | null>(),
+  /** The todo the close dialog is holding, if it is open. */
+  closing: null as number | null,
   /** Items whose "+ task" request is in flight, so a re-render can't re-enable the button. */
   adding: new Set<string>(),
   /** What the two columns last held. The page refreshes every 15 seconds and on every SSE
@@ -84,7 +88,7 @@ export function renderDashboard(): void {
   if (!dash.loaded || (uuid && !current)) {
     mainHtml = dash.failed ? `<p class="dg-empty-note">Couldn't load digests — retrying.</p>` : `<div class="dg-skeleton"></div><div class="dg-skeleton short"></div>`;
   } else if (current) {
-    mainHtml = digestBodyHtml(current, linkedTodos(state.allTodos), Date.now(), dash.adding, dash.group);
+    mainHtml = digestBodyHtml(current, digestView(linkedTodos(state.allTodos), { seen: dash.seen, adding: dash.adding, group: dash.group }));
   } else {
     mainHtml = emptyDashboardHtml();
   }
@@ -117,8 +121,9 @@ async function ensureSelectedLoaded(): Promise<void> {
 /** Refreshes the data only; the caller renders, so one refresh is one paint. */
 export async function refreshDigests(): Promise<void> {
   try {
-    const { digests } = await listDigests();
+    const [{ digests }, { seen }] = await Promise.all([listDigests(), listSeenMarks()]);
     dash.summaries = digests;
+    dash.seen = new Map(seen.map((m) => [m.key, m.status]));
     const live = new Set(digests.map((d) => d.uuid));
     for (const uuid of dash.full.keys()) if (!live.has(uuid)) dash.full.delete(uuid);
     await ensureSelectedLoaded();
@@ -203,6 +208,58 @@ async function select(uuid: string): Promise<void> {
   byId("dash-main").scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
+async function toggleSeen(button: HTMLElement): Promise<void> {
+  const key = button.dataset.seenKey ?? "";
+  const status = button.dataset.seenStatus || null;
+  const seen = button.dataset.seen === "true";
+  // Optimistic: the row moves at once, and a failed write puts it back.
+  const before = new Map(dash.seen);
+  if (seen) dash.seen.set(key, status);
+  else dash.seen.delete(key);
+  renderDashboard();
+  const res = await fetch("/api/digests/seen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, status, title: button.dataset.seenTitle ?? "", seen }),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    dash.seen = before;
+    renderDashboard();
+    showToast("Couldn't save that.");
+  }
+}
+
+function openCloseDialog(button: HTMLElement): void {
+  const dialog = byId<HTMLDialogElement>("close-panel");
+  dash.closing = Number(button.dataset.closeTodo);
+  byId("close-panel-title").textContent = button.dataset.closeTitle ?? "";
+  const reason = byId<HTMLTextAreaElement>("close-panel-reason");
+  reason.value = "";
+  // A modal of our own, not window.prompt: a native dialog blocks the page and can't be styled.
+  dialog.showModal();
+  reason.focus();
+}
+
+async function submitClose(): Promise<void> {
+  const id = dash.closing;
+  if (id === null) return;
+  const reason = byId<HTMLTextAreaElement>("close-panel-reason").value.trim();
+  const res = await fetch(`/api/todos/${id}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(reason ? { reason } : {}),
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    showToast("Couldn't close the task.");
+    return;
+  }
+  dash.closing = null;
+  byId<HTMLDialogElement>("close-panel").close();
+  showToast(reason ? "Closed, with the reason in its description." : "Closed.");
+  await refresh();
+  renderDashboard();
+}
+
 const GROUP_KEY = "docket-digest-group";
 
 function rememberGroup(group: string | null): void {
@@ -239,6 +296,18 @@ export function initDashboard(): void {
       return;
     }
 
+    const seenBtn = target.closest<HTMLElement>("button[data-seen-key]");
+    if (seenBtn) {
+      void toggleSeen(seenBtn);
+      return;
+    }
+
+    const closeBtn = target.closest<HTMLElement>("button[data-close-todo]");
+    if (closeBtn) {
+      openCloseDialog(closeBtn);
+      return;
+    }
+
     const chip = target.closest<HTMLElement>("button[data-digest-group]");
     if (chip) {
       dash.group = chip.dataset.digestGroup || null;
@@ -267,6 +336,23 @@ export function initDashboard(): void {
 
   // Fires for the hero's "N need you" anchor too, which changes only the hash. Re-showing
   // the same view there would be a pointless re-render under the scroll it just did.
+  byId("close-panel-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    void submitClose();
+  });
+  byId("close-panel-cancel").addEventListener("click", () => {
+    dash.closing = null;
+    byId<HTMLDialogElement>("close-panel").close();
+  });
+  // Quick reasons, because most closes are one of a handful.
+  byId("close-panel-quick").addEventListener("click", (e) => {
+    const pick = (e.target as Element).closest<HTMLElement>("button[data-reason]");
+    if (!pick) return;
+    const area = byId<HTMLTextAreaElement>("close-panel-reason");
+    area.value = area.value ? `${area.value} ${pick.dataset.reason}` : (pick.dataset.reason ?? "");
+    area.focus();
+  });
+
   window.addEventListener("popstate", () => {
     const view = viewFromPath(location.pathname);
     if (view !== currentView()) showView(view);

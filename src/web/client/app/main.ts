@@ -113,6 +113,30 @@ function setupEvents(): void {
   }
 }
 
+/**
+ * A layout picker: one <select>, one attribute on <body>, so CSS does all of it. Stored per
+ * browser — a phone and a wide monitor want different answers.
+ */
+function initLayoutPicker(selectId: string, attribute: "tasksLayout" | "dashLayout", options: readonly string[], storageKey: string): void {
+  const select = byId<HTMLSelectElement>(selectId);
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(storageKey);
+  } catch {}
+  const apply = (value: string) => {
+    const layout = options.includes(value) ? value : options[0];
+    document.body.dataset[attribute] = layout;
+    select.value = layout;
+  };
+  apply(stored ?? options[0]);
+  select.addEventListener("change", () => {
+    apply(select.value);
+    try {
+      localStorage.setItem(storageKey, select.value);
+    } catch {}
+  });
+}
+
 function start(): void {
   // Before anything renders, so the first paint is already the right page.
   showView(viewFromPath(location.pathname));
@@ -124,6 +148,8 @@ function start(): void {
   initAddForm();
   initCardActions();
   initDashboard();
+  initLayoutPicker("tasks-layout", "tasksLayout", ["narrow", "wide", "grid", "full"], "docket-tasks-layout");
+  initLayoutPicker("dash-layout", "dashLayout", ["stack", "grid", "wide"], "docket-dash-layout");
   watchHistoryPanels();
 
   void loadVersionFooter();

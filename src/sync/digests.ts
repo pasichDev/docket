@@ -74,7 +74,7 @@ export async function pullDigestsFromPeer(
       }
       if (page.epoch) knownEpoch = page.epoch;
       const merged = await withDigests((store) => mergeDigestPage(store, page));
-      changed += merged.inserted + merged.deleted;
+      changed += merged.inserted + merged.deleted + merged.seen;
       if (merged.inserted || merged.deleted) log(`sync: digests from peer ${peer.id} — +${merged.inserted} -${merged.deleted}`);
       const advanced = digestCursorAfterPage(page, cursor, merged.rejectedBelow);
       if (merged.rejectedBelow !== null) {

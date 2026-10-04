@@ -18,6 +18,8 @@ const KIND_LABEL: Record<DigestItemKind, string> = {
   release: "Release",
   todo: "Todo",
   doc: "Doc",
+  mail: "Mail",
+  chat: "Chat",
   note: "Note",
 };
 
@@ -77,33 +79,84 @@ export function isStale(d: Pick<Digest, "createdAt">, now = Date.now()): boolean
   return now - new Date(d.createdAt).getTime() > STALE_AFTER_MS;
 }
 
-/** What the "→ task" button already knows: an open or done todo pointing at the same link. */
-export type LinkedTodos = Map<string, Pick<Todo, "id" | "done">>;
+/** What a digest row knows about the task list: which todo, if any, is the same piece of work. */
+export interface TodoLinks {
+  byUrl: Map<string, Pick<Todo, "id" | "done" | "title">>;
+  byShortId: Map<string, Pick<Todo, "id" | "done" | "title">>;
+}
 
-export function linkedTodos(todos: readonly Todo[]): LinkedTodos {
-  const map: LinkedTodos = new Map();
-  // Open beats done: if both exist, the open one is the one worth pointing at.
-  for (const t of todos) if (t.sourceUrl && (!map.has(t.sourceUrl) || !t.done)) map.set(t.sourceUrl, t);
-  return map;
+export function linkedTodos(todos: readonly Todo[]): TodoLinks {
+  const byUrl = new Map<string, Pick<Todo, "id" | "done" | "title">>();
+  const byShortId = new Map<string, Pick<Todo, "id" | "done" | "title">>();
+  for (const t of todos) {
+    // Open beats done: if both exist, the open one is the one worth pointing at.
+    if (t.sourceUrl && (!byUrl.has(t.sourceUrl) || !t.done)) byUrl.set(t.sourceUrl, t);
+    if (t.shortId) byShortId.set(t.shortId.toUpperCase(), t);
+  }
+  return { byUrl, byShortId };
+}
+
+/** A docket todo the row IS (its ref is a T- id) or that was made from it (same link). */
+export function todoForItem(item: DigestItem, links: TodoLinks): Pick<Todo, "id" | "done" | "title"> | null {
+  const ref = item.ref?.trim().toUpperCase();
+  if (ref && /^T-[0-9A-Z]{6}$/.test(ref)) {
+    const own = links.byShortId.get(ref);
+    if (own) return own;
+  }
+  const href = safeHref(item.url);
+  return (href && links.byUrl.get(href)) || null;
+}
+
+/** Seen marks as the dashboard holds them: key → the status the item was marked in. */
+export type SeenMarks = ReadonlyMap<string, string | null>;
+
+export function isHidden(item: DigestItem, seen: SeenMarks): boolean {
+  return !!item.key && seen.has(item.key) && (seen.get(item.key) ?? null) === (item.status ?? null);
+}
+
+/** Everything a render needs beyond the digest itself. */
+export interface DigestView {
+  links: TodoLinks;
+  seen: SeenMarks;
+  adding: ReadonlySet<string>;
+  group: string | null;
+  now: number;
+}
+
+const NONE: ReadonlySet<string> = new Set();
+const NO_MARKS: SeenMarks = new Map();
+
+export function digestView(links: TodoLinks, overrides: Partial<Omit<DigestView, "links">> = {}): DigestView {
+  return { links, seen: NO_MARKS, adding: NONE, group: null, now: Date.now(), ...overrides };
 }
 
 const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`;
 const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>`;
 const ICON_ALERT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>`;
+const ICON_EYE_OFF = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-3.1 4.2M6.1 6.1A13 13 0 0 0 2 12c1 2.5 5 7 10 7a9.6 9.6 0 0 0 4-.9"/></svg>`;
 
-function taskButton(item: DigestItem, key: string, linked: LinkedTodos, adding: ReadonlySet<string>): string {
-  const href = safeHref(item.url);
-  const existing = href ? linked.get(href) : undefined;
-  if (existing) {
-    return `<a class="dg-task dg-task-linked" href="/tasks" data-nav="tasks" title="${existing.done ? "Already done in Tasks" : "Already in Tasks"}">${ICON_CHECK}<span>${existing.done ? "done" : "in tasks"}</span></a>`;
+/** The row's task action: close the todo it is, open it in Tasks, or make one from it. */
+function taskButton(item: DigestItem, key: string, view: DigestView): string {
+  const todo = todoForItem(item, view.links);
+  if (todo && !todo.done) {
+    return `<button type="button" class="dg-task dg-task-close" data-close-todo="${todo.id}" data-close-title="${escapeHtml(todo.title)}" title="Close this task, with a reason">${ICON_CHECK}<span>close</span></button>`;
   }
-  if (adding.has(key)) return `<button type="button" class="dg-task" disabled>${ICON_PLUS}<span>adding…</span></button>`;
+  if (todo) return `<a class="dg-task dg-task-linked" href="/tasks" data-nav="tasks" title="Already done in Tasks">${ICON_CHECK}<span>done</span></a>`;
+  if (view.adding.has(key)) return `<button type="button" class="dg-task" disabled>${ICON_PLUS}<span>adding…</span></button>`;
   return `<button type="button" class="dg-task" data-digest-item="${escapeHtml(key)}" title="Add to Tasks">${ICON_PLUS}<span>task</span></button>`;
+}
+
+function seenButton(item: DigestItem, hidden: boolean): string {
+  if (!item.key) return "";
+  const attrs = `data-seen-key="${escapeHtml(item.key)}" data-seen-status="${escapeHtml(item.status ?? "")}" data-seen-title="${escapeHtml(item.title)}"`;
+  return hidden
+    ? `<button type="button" class="dg-seen" ${attrs} data-seen="false" title="Show it again">show</button>`
+    : `<button type="button" class="dg-seen" ${attrs} data-seen="true" title="Mark as seen — hidden until its status changes">${ICON_EYE_OFF}</button>`;
 }
 
 /**
  * One digest row becomes one task: the ref goes in the category when it looks like a ticket
- * id, so the card picks up the same colour badge any other VPQ-123 item has; the link goes in
+ * id, so the card picks up the same colour badge any other ACME-123 item has; the link goes in
  * sourceUrl, which is also how the button knows next time that the task already exists.
  */
 export function todoFromItem(item: DigestItem, digest: Pick<Digest, "shortId">, workspace: string | null = null): Record<string, unknown> {
@@ -123,40 +176,51 @@ export function todoFromItem(item: DigestItem, digest: Pick<Digest, "shortId">, 
   };
 }
 
-const NONE: ReadonlySet<string> = new Set();
-
-export function digestItemHtml(item: DigestItem, key: string, linked: LinkedTodos, adding: ReadonlySet<string> = NONE): string {
+export function digestItemHtml(item: DigestItem, key: string, view: DigestView, hidden = false): string {
   const href = safeHref(item.url);
   const title = escapeHtml(item.title);
   const titleHtml = href
     ? `<a class="dg-title" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${title}</a>`
     : `<span class="dg-title">${title}</span>`;
   const meta = [item.repo ? escapeHtml(item.repo) : "", item.updatedAt ? `updated ${escapeHtml(timeAgo(item.updatedAt))}` : ""].filter(Boolean);
-  return `<li class="dg-item" data-tone="${tone(item.tone)}"${item.attention ? ' data-attention="true"' : ""}>
+  return `<li class="dg-item" data-tone="${tone(item.tone)}"${item.attention && !hidden ? ' data-attention="true"' : ""}${hidden ? ' data-hidden="true"' : ""}>
     <span class="dg-kind" data-kind="${escapeHtml(item.kind)}">${escapeHtml(KIND_LABEL[item.kind] ?? "Note")}</span>
     <div class="dg-main">
       <div class="dg-line">${item.ref ? `<span class="dg-ref">${escapeHtml(item.ref)}</span>` : ""}${titleHtml}</div>
       ${meta.length ? `<div class="dg-meta">${meta.join(" · ")}</div>` : ""}
-      ${item.note ? `<div class="dg-note">${escapeHtml(item.note)}</div>` : ""}
+      ${item.note && !hidden ? `<div class="dg-note">${escapeHtml(item.note)}</div>` : ""}
     </div>
     <div class="dg-side">
       ${item.status ? `<span class="dg-status" data-tone="${tone(item.tone)}">${item.attention ? ICON_ALERT : ""}${escapeHtml(item.status)}</span>` : item.attention ? `<span class="dg-status" data-tone="warn">${ICON_ALERT}needs you</span>` : ""}
-      ${taskButton(item, key, linked, adding)}
+      ${hidden ? "" : taskButton(item, key, view)}
+      ${seenButton(item, hidden)}
     </div>
   </li>`;
 }
 
-function sectionHtml(d: Digest, index: number, linked: LinkedTodos, adding: ReadonlySet<string>): string {
+function sectionHtml(d: Digest, index: number, view: DigestView): string {
   const section = d.sections[index];
   if (section.items.length === 0) return "";
-  const rows = section.items.map((item, i) => digestItemHtml(item, `${d.uuid}:${index}:${i}`, linked, adding));
-  const shown = rows.slice(0, SECTION_FOLD).join("");
-  const rest = rows.slice(SECTION_FOLD);
-  const needs = section.items.filter((i) => i.attention).length;
-  return `<section class="dg-section"${needs === section.items.length ? ' data-attention="true"' : ""}>
-    <h3><span>${escapeHtml(section.title)}</span><span class="dg-count">${section.items.length}</span>${needs && needs < section.items.length ? `<span class="dg-need">${needs} need you</span>` : ""}</h3>
-    <ul class="dg-items">${shown}</ul>
+  const visible: string[] = [];
+  const hidden: string[] = [];
+  let needs = 0;
+  section.items.forEach((item, i) => {
+    const key = `${d.uuid}:${index}:${i}`;
+    if (isHidden(item, view.seen)) {
+      hidden.push(digestItemHtml(item, key, view, true));
+    } else {
+      visible.push(digestItemHtml(item, key, view));
+      if (item.attention) needs += 1;
+    }
+  });
+  const shown = visible.slice(0, SECTION_FOLD).join("");
+  const rest = visible.slice(SECTION_FOLD);
+  const all = visible.length > 0 && needs === visible.length;
+  return `<section class="dg-section"${all ? ' data-attention="true"' : ""}${visible.length === 0 ? ' data-all-seen="true"' : ""}>
+    <h3><span>${escapeHtml(section.title)}</span><span class="dg-count">${visible.length}</span>${needs && !all ? `<span class="dg-need">${needs} need you</span>` : ""}</h3>
+    ${visible.length ? `<ul class="dg-items">${shown}</ul>` : ""}
     ${rest.length ? `<details class="dg-more"><summary>Show ${rest.length} more</summary><ul class="dg-items">${rest.join("")}</ul></details>` : ""}
+    ${hidden.length ? `<details class="dg-seen-list"><summary>${hidden.length} seen</summary><ul class="dg-items">${hidden.join("")}</ul></details>` : ""}
   </section>`;
 }
 
@@ -177,16 +241,17 @@ function sourcesHtml(d: Digest): string {
     .join("")}</div>`;
 }
 
-export function heroHtml(d: Digest, now = Date.now()): string {
+export function heroHtml(d: Digest, view: Pick<DigestView, "now" | "seen"> = { now: Date.now(), seen: NO_MARKS }): string {
   const who = [d.agent, d.deviceName].filter(Boolean).join("@");
-  const needs = attentionItems(d).length;
+  const needs = attentionItems(d).filter((i) => !isHidden(i, view.seen)).length;
+  const seenCount = d.sections.reduce((n, s) => n + s.items.filter((i) => isHidden(i, view.seen)).length, 0);
   const window = windowLabel(d);
   const chips = [
     window ? `<span class="dg-chip">${escapeHtml(window)}</span>` : "",
-    `<span class="dg-chip">${items(itemCount(d))}</span>`,
+    `<span class="dg-chip">${items(itemCount(d) - seenCount)}${seenCount ? ` · ${seenCount} seen` : ""}</span>`,
     needs ? `<a class="dg-chip dg-chip-need" href="#dg-first-attention">${ICON_ALERT}${needs} need you</a>` : "",
     d.workspace ? `<span class="dg-chip">@${escapeHtml(d.workspace)}</span>` : "",
-    isStale(d, now) ? `<span class="dg-chip dg-chip-stale" title="Ask your agent for a fresh digest">${escapeHtml(timeAgo(d.createdAt))} — may be out of date</span>` : "",
+    isStale(d, view.now) ? `<span class="dg-chip dg-chip-stale" title="Ask your agent for a fresh digest">${escapeHtml(timeAgo(d.createdAt))} — may be out of date</span>` : "",
   ].join("");
   return `<article class="dg-hero">
     <div class="dg-eyebrow">
@@ -209,12 +274,13 @@ export interface DigestGroup {
   name: string;
   /** Indexes into digest.sections, in order — the indexes also key each "+ task" button. */
   sections: number[];
+  /** Counts leave out seen items, so a group the user has cleared reads as cleared. */
   items: number;
   attention: number;
 }
 
 /** Sections grouped by `group`, in order of first appearance. Empty for an ungrouped digest. */
-export function groupsOf(d: Pick<Digest, "sections">): DigestGroup[] {
+export function groupsOf(d: Pick<Digest, "sections">, seen: SeenMarks = NO_MARKS): DigestGroup[] {
   if (!d.sections.some((s) => s.group)) return [];
   const byName = new Map<string, DigestGroup>();
   d.sections.forEach((s, i) => {
@@ -225,45 +291,49 @@ export function groupsOf(d: Pick<Digest, "sections">): DigestGroup[] {
       byName.set(name, g);
     }
     g.sections.push(i);
-    g.items += s.items.length;
-    g.attention += s.items.filter((it) => it.attention).length;
+    const live = s.items.filter((it) => !isHidden(it, seen));
+    g.items += live.length;
+    g.attention += live.filter((it) => it.attention).length;
   });
   return [...byName.values()];
 }
 
-function groupChipsHtml(groups: readonly DigestGroup[], active: string | null, total: number): string {
+function groupChipsHtml(groups: readonly DigestGroup[], active: string | null): string {
   const chip = (name: string | null, label: string, n: number, need: number) =>
     `<button type="button" class="dg-group-chip" data-digest-group="${escapeHtml(name ?? "")}" data-active="${(active ?? "") === (name ?? "")}">${escapeHtml(label)} <span class="n">${n}</span>${need ? `<span class="need">${need}</span>` : ""}</button>`;
+  const total = groups.reduce((n, g) => n + g.items, 0);
   const need = groups.reduce((n, g) => n + g.attention, 0);
   return `<div class="dg-groups" role="toolbar" aria-label="Filter by area">${chip(null, "All", total, need)}${groups.map((g) => chip(g.name, g.name, g.items, g.attention)).join("")}</div>`;
 }
 
 /**
- * `group` filters the body to one area; null shows every group, each under its own heading.
- * An unknown group (the digest changed under a remembered filter) falls back to all.
+ * `view.group` filters the body to one area; null shows every group, each under its own
+ * heading. An unknown group (the digest changed under a remembered filter) falls back to all.
  */
-export function digestBodyHtml(d: Digest, linked: LinkedTodos, now = Date.now(), adding: ReadonlySet<string> = NONE, group: string | null = null): string {
-  const groups = groupsOf(d);
+export function digestBodyHtml(d: Digest, view: DigestView): string {
+  const groups = groupsOf(d, view.seen);
   let body: string;
   if (groups.length === 0) {
-    body = d.sections.map((_, i) => sectionHtml(d, i, linked, adding)).join("");
+    // Wrapped like a group without a heading, so the grid layouts apply to it as well.
+    const sections = d.sections.map((_, i) => sectionHtml(d, i, view)).join("");
+    body = sections ? `<div class="dg-group">${sections}</div>` : "";
   } else {
-    const shown = groups.filter((g) => g.name === group);
+    const shown = groups.filter((g) => g.name === view.group);
     const visible = shown.length ? shown : groups;
     body =
-      groupChipsHtml(groups, shown.length ? group : null, itemCount(d)) +
+      groupChipsHtml(groups, shown.length ? view.group : null) +
       visible
         .map(
           (g) => `<div class="dg-group">
         <h2 class="dg-group-head"><span>${escapeHtml(g.name)}</span><span class="dg-count">${items(g.items)}</span>${g.attention ? `<span class="dg-need">${g.attention} need you</span>` : ""}</h2>
-        ${g.sections.map((i) => sectionHtml(d, i, linked, adding)).join("")}
+        ${g.sections.map((i) => sectionHtml(d, i, view)).join("")}
       </div>`,
         )
         .join("");
   }
   // The hero's "N need you" chip jumps here.
   const anchored = body.replace('data-attention="true"', 'id="dg-first-attention" data-attention="true"');
-  return `${heroHtml(d, now)}${metricsHtml(d)}${anchored || `<p class="dg-empty-note">This digest has no items.</p>`}`;
+  return `${heroHtml(d, view)}${metricsHtml(d)}${anchored || `<p class="dg-empty-note">This digest has no items.</p>`}`;
 }
 
 export function timelineHtml(digests: readonly DigestSummary[], selected: string | null): string {

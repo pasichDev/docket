@@ -63,8 +63,8 @@ test("validateDigestInput: a metric value sent as a number is kept as text, not 
 });
 
 test("validateDigestInput: a section's group is kept, trimmed and length-checked", () => {
-  const body = validateDigestInput({ ...sample(), sections: [{ ...sample().sections[0], group: "  vploq  " }] });
-  assert.equal(body.sections[0].group, "vploq");
+  const body = validateDigestInput({ ...sample(), sections: [{ ...sample().sections[0], group: "  Work  " }] });
+  assert.equal(body.sections[0].group, "Work");
   assert.equal(validateDigestInput(sample()).sections[0].group, null);
   assert.throws(() => validateDigestInput({ ...sample(), sections: [{ ...sample().sections[0], group: "g".repeat(61) }] }), /group is 61 characters/);
 });
@@ -194,6 +194,31 @@ test("digest sync: a peer that lies about maxSeq cannot move the cursor past wha
   createDigest(a, sample(), ctx);
   const page = { ...buildDigestPage(a, 0), maxSeq: 999 };
   assert.equal(digestCursorAfterPage(page, 0, null), 1);
+});
+
+test("seen marks: last write wins across devices, the undo syncs too, and the loser re-advertises", async () => {
+  const { setSeenRecord, seenIndex, isSeen } = digests;
+  const a = store();
+  const b = store();
+  const item = { url: "https://gitlab.com/g/r/-/merge_requests/9", repo: "g/r", ref: "!9", title: "t", status: "merged" };
+  setSeenRecord(a, { key: digests.seenKey(item), status: "merged", title: "t" }, true, "dev-a");
+  let bCursor = pullAll(a, b, 0);
+  assert.ok(isSeen(seenIndex(b), item), "a mark must reach the other device");
+  assert.ok(!isSeen(seenIndex(b), { ...item, status: "reverted" }), "a changed status is news again");
+  await new Promise((r) => setTimeout(r, 2));
+  setSeenRecord(b, { key: digests.seenKey(item), status: "merged", title: "t" }, false, "dev-b");
+  const aCursor = pullAll(b, a, 0);
+  assert.ok(!isSeen(seenIndex(a), item), "the undo must reach the first device");
+  // A stale copy arriving later must not win, and must make the newer side re-send.
+  const stale = store();
+  stale.seen = [{ ...a.seen![0], seen: true, at: "2020-01-01T00:00:00.000Z", localSeq: 1 }];
+  stale.seqCounter = 1;
+  const before = a.seqCounter;
+  pullAll(stale, a, 0);
+  assert.ok(!isSeen(seenIndex(a), item));
+  assert.ok(a.seqCounter > before, "the winning copy must be re-stamped so the stale peer hears it");
+  void bCursor;
+  void aCursor;
 });
 
 test("findDigest: resolves the D- short id in any case, with or without the prefix", () => {

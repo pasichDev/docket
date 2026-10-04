@@ -34,7 +34,7 @@ const LOCK_PATH = `${DIGESTS_PATH}.lock`;
 
 export const DIGEST_FORMAT_VERSION = 1;
 
-export const DIGEST_ITEM_KINDS = ["pr", "mr", "issue", "ticket", "commit", "release", "todo", "doc", "note"] as const;
+export const DIGEST_ITEM_KINDS = ["pr", "mr", "issue", "ticket", "commit", "release", "todo", "doc", "mail", "chat", "note"] as const;
 export type DigestItemKind = (typeof DIGEST_ITEM_KINDS)[number];
 
 export const DIGEST_TONES = ["good", "warn", "bad", "info", "neutral"] as const;
@@ -44,7 +44,7 @@ export interface DigestItem {
   kind: DigestItemKind;
   title: string;
   url: string | null;
-  /** The handle a human recognises: "!154", "#12", "VPQ-680", "v3.0.1". */
+  /** The handle a human recognises: "!154", "#12", "ACME-680", "v3.0.1". */
   ref: string | null;
   repo: string | null;
   /** As the source names it: "merged", "In review", "Blocked". */
@@ -58,7 +58,7 @@ export interface DigestItem {
 }
 
 export interface DigestSection {
-  /** The area this section belongs to — "vploq", "Learning", "Side projects". Sections that
+  /** The area this section belongs to — "Work", "Learning", "Side projects". Sections that
    *  share a group are shown together under one heading, in order of first appearance, and
    *  the dashboard can filter to one group. Null for an ungrouped digest. */
   group: string | null;
@@ -75,7 +75,7 @@ export interface DigestMetric {
 export interface DigestSource {
   name: string;
   ok: boolean;
-  /** What was read ("12 MRs in vploq/*"), or why it could not be. */
+  /** What was read ("12 MRs in acme/*"), or why it could not be. */
   detail: string | null;
 }
 
@@ -100,6 +100,25 @@ export interface Digest {
   localSeq: number;
 }
 
+/**
+ * "I've seen this one" on a digest item. Digests are immutable, so this lives beside them,
+ * keyed by the item's identity rather than by any one digest — a merged MR marked once stays
+ * marked in tomorrow's digest too. Only while its status is unchanged, though: an item that
+ * moves (open → merged, In Progress → Blocked) is news again and comes back.
+ *
+ * Unmarking writes `seen: false` instead of deleting, so the undo itself reaches the other
+ * devices. Last write wins on `at`.
+ */
+export interface DigestSeen {
+  key: string;
+  status: string | null;
+  title: string;
+  seen: boolean;
+  at: string;
+  deviceId: string | null;
+  localSeq: number;
+}
+
 export interface DigestStore {
   formatVersion: number;
   /** This file's incarnation, minted on its first write. See digestPageEpoch in sync/digests.ts. */
@@ -107,6 +126,8 @@ export interface DigestStore {
   seqCounter: number;
   digests: Digest[];
   deleted: Tombstone[];
+  /** Absent in files written before seen marks existed. */
+  seen?: DigestSeen[];
 }
 
 /**
@@ -432,6 +453,7 @@ export async function readDigestStore(): Promise<DigestStore> {
     seqCounter: parsed.seqCounter ?? 0,
     digests: parsed.digests ?? [],
     deleted: parsed.deleted ?? [],
+    seen: parsed.seen ?? [],
   };
 }
 
@@ -526,40 +548,126 @@ export async function deleteDigest(id: string, deviceId: string | null): Promise
   });
 }
 
+// ---- Seen marks --------------------------------------------------------------------------
+
+const MAX_SEEN_KEY = 2200;
+
+/**
+ * An item's identity across digests: its link when it has one — the one thing that names the
+ * same MR in every digest — else repo + ref, else the title. Lowercased and trimmed, so two
+ * agents writing the same URL with different case still agree.
+ */
+export function seenKey(item: Pick<DigestItem, "url" | "repo" | "ref" | "title">): string {
+  const raw = item.url ?? (item.ref ? `${item.repo ?? ""}#${item.ref}` : `title:${item.title}`);
+  return raw.trim().toLowerCase().slice(0, MAX_SEEN_KEY);
+}
+
+export function seenIndex(store: Pick<DigestStore, "seen">): Map<string, DigestSeen> {
+  return new Map((store.seen ?? []).map((m) => [m.key, m]));
+}
+
+/** Hidden while marked AND still in the status it was marked in. */
+export function isSeen(index: ReadonlyMap<string, DigestSeen>, item: Pick<DigestItem, "url" | "repo" | "ref" | "title" | "status">): boolean {
+  const mark = index.get(seenKey(item));
+  return !!mark && mark.seen && (mark.status ?? null) === (item.status ?? null);
+}
+
+export function setSeenRecord(
+  store: DigestStore,
+  input: { key: string; status: string | null; title: string },
+  seen: boolean,
+  deviceId: string | null,
+): DigestSeen {
+  store.seen ??= [];
+  const key = input.key.trim().toLowerCase().slice(0, MAX_SEEN_KEY);
+  let mark = store.seen.find((m) => m.key === key);
+  if (!mark) {
+    mark = { key, status: null, title: "", seen, at: "", deviceId, localSeq: 0 };
+    store.seen.push(mark);
+  }
+  mark.status = input.status?.trim().slice(0, DIGEST_LIMITS.status) || null;
+  mark.title = input.title.trim().slice(0, DIGEST_LIMITS.itemTitle);
+  mark.seen = seen;
+  mark.at = new Date().toISOString();
+  mark.deviceId = deviceId;
+  stamp(store, mark);
+  return mark;
+}
+
+export async function markSeen(input: { key: string; status: string | null; title: string }, seen: boolean, deviceId: string | null): Promise<DigestSeen> {
+  if (!input.key?.trim()) throw new DigestValidationError("key is required");
+  return withDigestStore((store) => setSeenRecord(store, input, seen, deviceId));
+}
+
+export async function listSeen(): Promise<DigestSeen[]> {
+  return ((await readDigestStore()).seen ?? []).filter((m) => m.seen);
+}
+
+function sanitizeSeen(raw: unknown): DigestSeen | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.key !== "string" || !r.key.trim() || r.key.length > MAX_SEEN_KEY) return null;
+  if (!isIsoish(r.at) || typeof r.seen !== "boolean") return null;
+  const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+  return {
+    key: r.key.trim().toLowerCase(),
+    status: str(r.status, DIGEST_LIMITS.status),
+    title: str(r.title, DIGEST_LIMITS.itemTitle) ?? "",
+    seen: r.seen,
+    at: r.at,
+    deviceId: str(r.deviceId, 120),
+    localSeq: 0,
+  };
+}
+
+/** Same total order on every device, so two concurrent marks settle the same way everywhere. */
+function seenNewer(a: DigestSeen, b: DigestSeen): boolean {
+  return a.at > b.at || (a.at === b.at && (a.deviceId ?? "") > (b.deviceId ?? ""));
+}
+
 // ---- Sync ------------------------------------------------------------------------------
 
 /** Digests are larger than todos, so a page holds fewer of them. A tuning knob, not a limit. */
 export const DIGEST_PAGE_SIZE = 50;
 const MAX_INCOMING_DIGESTS = 1_000;
+const MAX_INCOMING_SEEN = 5_000;
 
 export interface DigestSyncPage {
   digests: Digest[];
   deleted: Tombstone[];
+  /** Absent from a peer that predates seen marks. */
+  seen?: DigestSeen[];
   maxSeq: number;
   hasMore: boolean;
   epoch?: string;
   serverTime: string;
 }
 
+/** Seen marks are tiny, so a page carries many more of them than digests. */
+const SEEN_PAGE_SIZE = 500;
+
 /**
  * One page of what a peer is owed, by this file's sequence numbers. The same promise rule
- * as buildSyncPayload: when either stream is truncated, `maxSeq` stops at that stream's
- * last row, so the caller never steps over a record the other stream still owes.
+ * as buildSyncPayload: when any stream is truncated, `maxSeq` stops at that stream's last
+ * row, so the caller never steps over a record another stream still owes.
  */
 export function buildDigestPage(store: DigestStore, sinceSeq: number, epoch?: string): DigestSyncPage {
   const bySeq = (a: { localSeq: number }, b: { localSeq: number }) => a.localSeq - b.localSeq;
-  const digestCandidates = store.digests.filter((d) => d.localSeq > sinceSeq).sort(bySeq);
-  const tombCandidates = store.deleted.filter((t) => t.localSeq > sinceSeq).sort(bySeq);
-  const digests = digestCandidates.slice(0, DIGEST_PAGE_SIZE);
-  const deleted = tombCandidates.slice(0, DIGEST_PAGE_SIZE);
-  const digestsTruncated = digestCandidates.length > DIGEST_PAGE_SIZE;
-  const tombsTruncated = tombCandidates.length > DIGEST_PAGE_SIZE;
-  const ceiling = (page: Array<{ localSeq: number }>, truncated: boolean) => (truncated ? page[page.length - 1].localSeq : store.seqCounter);
+  const take = <T extends { localSeq: number }>(all: readonly T[], size: number) => {
+    const candidates = all.filter((r) => r.localSeq > sinceSeq).sort(bySeq);
+    const page = candidates.slice(0, size);
+    const truncated = candidates.length > size;
+    return { page, ceiling: truncated ? page[page.length - 1].localSeq : store.seqCounter, truncated };
+  };
+  const digests = take(store.digests, DIGEST_PAGE_SIZE);
+  const deleted = take(store.deleted, DIGEST_PAGE_SIZE);
+  const seen = take(store.seen ?? [], SEEN_PAGE_SIZE);
   return {
-    digests,
-    deleted,
-    maxSeq: Math.max(sinceSeq, Math.min(ceiling(digests, digestsTruncated), ceiling(deleted, tombsTruncated))),
-    hasMore: digestsTruncated || tombsTruncated,
+    digests: digests.page,
+    deleted: deleted.page,
+    seen: seen.page,
+    maxSeq: Math.max(sinceSeq, Math.min(digests.ceiling, deleted.ceiling, seen.ceiling)),
+    hasMore: digests.truncated || deleted.truncated || seen.truncated,
     epoch,
     serverTime: new Date().toISOString(),
   };
@@ -573,9 +681,10 @@ export function buildDigestPage(store: DigestStore, sinceSeq: number, epoch?: st
  * A deletion always wins: a digest is never edited, so there is no newer version of it
  * that a deletion could be older than.
  */
-export function mergeDigestPage(store: DigestStore, page: Partial<DigestSyncPage>): { inserted: number; deleted: number; rejectedBelow: number | null } {
+export function mergeDigestPage(store: DigestStore, page: Partial<DigestSyncPage>): { inserted: number; deleted: number; seen: number; rejectedBelow: number | null } {
   let inserted = 0;
   let deleted = 0;
+  let seenChanged = 0;
   let rejectedBelow: number | null = null;
   const noteRejected = (record: unknown): void => {
     const seq = (record as { localSeq?: unknown } | null)?.localSeq;
@@ -614,7 +723,35 @@ export function mergeDigestPage(store: DigestStore, page: Partial<DigestSyncPage
     present.add(clean.uuid);
     inserted += 1;
   }
-  return { inserted, deleted, rejectedBelow };
+
+  // Last write wins. Accepting a newer mark is a local write and is re-stamped, like
+  // everything else here. Refusing an older one re-stamps OUR copy, because the peer's
+  // cursor is already past it and it would otherwise never hear that it lost — the same
+  // conversation the todo merge has, and it settles once both sides agree.
+  store.seen ??= [];
+  const marks = seenIndex(store);
+  const rawSeen = Array.isArray(page.seen) ? page.seen.slice(0, MAX_INCOMING_SEEN) : [];
+  for (const raw of rawSeen) {
+    const clean = sanitizeSeen(raw);
+    if (!clean) {
+      noteRejected(raw);
+      continue;
+    }
+    const local = marks.get(clean.key);
+    if (!local) {
+      stamp(store, clean);
+      store.seen.push(clean);
+      marks.set(clean.key, clean);
+      seenChanged += 1;
+    } else if (seenNewer(clean, local)) {
+      Object.assign(local, clean, { localSeq: local.localSeq });
+      stamp(store, local);
+      seenChanged += 1;
+    } else if (seenNewer(local, clean)) {
+      stamp(store, local);
+    }
+  }
+  return { inserted, deleted, seen: seenChanged, rejectedBelow };
 }
 
 const isSeq = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
@@ -623,7 +760,7 @@ const isSeq = (v: unknown): v is number => typeof v === "number" && Number.isSaf
 export function digestCursorAfterPage(page: Partial<DigestSyncPage>, current: number, rejectedBelow: number | null): number {
   if (!isSeq(page.maxSeq)) throw new Error(`peer sent digest maxSeq ${JSON.stringify(page.maxSeq)}, which is not a sequence number`);
   const delivered: number[] = [];
-  for (const record of [...(page.digests ?? []), ...(page.deleted ?? [])]) {
+  for (const record of [...(page.digests ?? []), ...(page.deleted ?? []), ...(page.seen ?? [])]) {
     const seq = (record as { localSeq?: unknown } | null)?.localSeq;
     if (isSeq(seq)) delivered.push(seq);
   }

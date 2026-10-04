@@ -1,16 +1,21 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ApiContext } from "../http.js";
-import { attentionCount, deleteDigest, digestShortId, DigestValidationError, getDigest, itemCount, listDigests, type Digest } from "../../digests.js";
+import { attentionCount, deleteDigest, digestShortId, DigestValidationError, getDigest, itemCount, listDigests, listSeen, markSeen, seenKey, type Digest } from "../../digests.js";
 import { log } from "../../log.js";
-import { json } from "../http.js";
+import { json, readJsonBody } from "../http.js";
 
 /**
  * The dashboard's read side of digests, plus delete. There is deliberately no POST: a digest
  * is written by an agent through digest_publish, after it has actually read the sources.
  */
 
+/** Each item carries its seen-mark key, so the browser never has to re-derive it — one rule, here. */
 function withShortId(d: Digest) {
-  return { ...d, shortId: digestShortId(d.uuid) };
+  return {
+    ...d,
+    shortId: digestShortId(d.uuid),
+    sections: d.sections.map((s) => ({ ...s, items: s.items.map((i) => ({ ...i, key: seenKey(i) })) })),
+  };
 }
 
 /**
@@ -38,6 +43,29 @@ export async function handleDigestRoutes(req: IncomingMessage, res: ServerRespon
     const { digests, total } = await listDigests(limit);
     json(res, 200, { digests: digests.map(summaryOf), total });
     return true;
+  }
+
+  // Seen marks: the list the dashboard hides by, and the toggle. Synced like digests.
+  if (url.pathname === "/api/digests/seen") {
+    if (req.method === "GET") {
+      json(res, 200, { seen: (await listSeen()).map(({ key, status }) => ({ key, status })) });
+      return true;
+    }
+    if (req.method === "POST") {
+      const body = (await readJsonBody(req)) as { key?: unknown; status?: unknown; title?: unknown; seen?: unknown };
+      if (typeof body.key !== "string" || !body.key.trim()) {
+        json(res, 400, { error: "key is required" });
+        return true;
+      }
+      const mark = await markSeen(
+        { key: body.key, status: typeof body.status === "string" ? body.status : null, title: typeof body.title === "string" ? body.title : "" },
+        body.seen !== false,
+        ctx.deviceId,
+      );
+      ctx.broadcastUpdate();
+      json(res, 200, { seen: { key: mark.key, status: mark.status, seen: mark.seen } });
+      return true;
+    }
   }
 
   const one = url.pathname.match(/^\/api\/digests\/([^/]+)$/);

@@ -19,7 +19,7 @@ import { duplicationWarning, emptyScopeNotice, formatIdle, formatResult, formatT
 import { RemoteProtocolError, RemoteTodoRepository, RemoteUnavailableError } from "./remote/client.js";
 import { loadRemoteCredentials } from "./remote/credentials.js";
 import { filterTodos, type MutationContext } from "./repository.js";
-import { DIGEST_ITEM_KINDS, DIGEST_TONES, DigestValidationError, deleteDigest, digestShortId, formatDigest, formatDigestLine, getDigest, listDigests, publishDigest } from "./digests.js";
+import { DIGEST_ITEM_KINDS, DIGEST_TONES, DigestValidationError, deleteDigest, digestShortId, formatDigest, formatDigestLine, getDigest, listDigests, listSeen, publishDigest } from "./digests.js";
 import { CURRENT_FORMAT_VERSION, LAST_V7_RELEASE, migrateLegacyFields, readStore, restorePreUpgradeStore, withStore } from "./storage.js";
 import { buildSnapshot } from "./snapshot.js";
 import { TodoService, todoService as localTodoService } from "./todo-service.js";
@@ -607,7 +607,7 @@ server.registerTool(
     description:
       "Save a digest — a snapshot of the user's work across Notion, GitHub, GitLab, git and docket that YOU compiled after actually reading those sources — so it shows on the Docket dashboard and syncs to the user's paired devices. Load the docket:digest skill for how to build one. Digests are immutable: publish a new one rather than editing. Put structure in fields, not in the summary: every PR/MR/ticket is an item with url, ref, status and tone, and anything the user must act on gets attention:true.",
     inputSchema: {
-      title: z.string().min(1).describe("Short heading, e.g. \"Fri 4 Oct — 2 MRs await review, VPQ-680 blocked\""),
+      title: z.string().min(1).describe("Short heading, e.g. \"Fri 4 Oct — 2 MRs await review, ACME-680 blocked\""),
       summary: z.string().describe("Markdown, 2–6 sentences: what matters, what changed since the last digest, what to do next"),
       highlights: z.array(z.string()).optional().describe("Up to 12 one-line takeaways, most important first"),
       metrics: z
@@ -617,14 +617,14 @@ server.registerTool(
       sections: z
         .array(
           z.object({
-            group: z.string().optional().describe("The area this section belongs to, e.g. \"vploq\" or \"Side projects\". Sections with the same group are shown together under one heading; the digest skill's config says which repos go where"),
+            group: z.string().optional().describe("The area this section belongs to, e.g. \"Work\" or \"Side projects\". Sections with the same group are shown together under one heading; the digest skill's config says which repos go where"),
             title: z.string().describe("e.g. \"Needs you\", \"Merged\", \"In review\", \"Tickets\""),
             items: z.array(
               z.object({
-                kind: z.enum(DIGEST_ITEM_KINDS).describe("pr (GitHub), mr (GitLab), issue, ticket (Notion/Jira), commit, release, todo, doc, note"),
+                kind: z.enum(DIGEST_ITEM_KINDS).describe("pr (GitHub), mr (GitLab), issue, ticket (Notion/Jira), commit, release, todo, doc, mail (an email thread), chat (a Slack/Teams thread), note"),
                 title: z.string(),
                 url: z.string().optional().describe("http(s) link to the item — always set it when there is one"),
-                ref: z.string().optional().describe("Human handle: \"!154\", \"#12\", \"VPQ-680\", \"v3.0.1\""),
+                ref: z.string().optional().describe("Human handle: \"!154\", \"#12\", \"ACME-680\", \"v3.0.1\""),
                 repo: z.string().optional().describe("group/repo, or the Notion database"),
                 status: z.string().optional().describe("As the source says it: merged, open, In review, Blocked…"),
                 tone: toneSchema,
@@ -640,7 +640,7 @@ server.registerTool(
       sources: z
         .array(z.object({ name: z.string(), ok: z.boolean(), detail: z.string().optional() }))
         .optional()
-        .describe("Every source you tried, including the ones that failed, e.g. {name:\"gitlab\", ok:true, detail:\"9 MRs in vploq/*\"}"),
+        .describe("Every source you tried, including the ones that failed, e.g. {name:\"gitlab\", ok:true, detail:\"9 MRs in acme/*\"}"),
       windowFrom: z.string().optional().describe("Start of the period covered, ISO date or timestamp"),
       windowTo: z.string().optional().describe("End of the period covered, ISO date or timestamp"),
     },
@@ -697,6 +697,24 @@ server.registerTool(
       if (err instanceof DigestValidationError) return errorText(err.message);
       throw err;
     }
+  }),
+);
+
+server.registerTool(
+  "digest_seen",
+  {
+    title: "Items marked seen",
+    description:
+      "Digest items the user marked as seen on the dashboard, with the status they had then. When compiling a digest, leave out any item whose link (or repo#ref) and status match one of these — the user has already dealt with it. An item whose status has since changed is news again: include it.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true },
+  },
+  withRemoteErrorHandling(async () => {
+    const blocked = await digestsUnavailable();
+    if (blocked) return blocked;
+    const marks = await listSeen();
+    if (marks.length === 0) return text("Nothing marked seen.");
+    return text(marks.map((m) => `${m.key}  [${m.status ?? "no status"}]  ${m.title}`).join("\n"));
   }),
 );
 

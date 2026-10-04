@@ -66,9 +66,11 @@ export type WorkspaceKey = string | typeof UNFILED;
 
 /** The wire shape of /api/digests — see src/digests.ts on the server. */
 export type DigestTone = "good" | "warn" | "bad" | "info" | "neutral";
-export type DigestItemKind = "pr" | "mr" | "issue" | "ticket" | "commit" | "release" | "todo" | "doc" | "note";
+export type DigestItemKind = "pr" | "mr" | "issue" | "ticket" | "commit" | "release" | "todo" | "doc" | "mail" | "chat" | "note";
 
 export interface DigestItem {
+  /** Identity for seen marks, computed by the server (seenKey in src/digests.ts). */
+  key?: string;
   kind: DigestItemKind;
   title: string;
   url: string | null;
