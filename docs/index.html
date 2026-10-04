@@ -273,6 +273,7 @@
   </div>
   <div class="links">
     <a href="#demo">Demo</a>
+    <a href="#digests">Digests</a>
     <a href="#modes" class="hide-sm">Modes</a>
     <a href="#install">Install</a>
     <a href="#self-host">Self-host</a>
@@ -311,13 +312,13 @@
 </div>
 
 <div class="rc-banner wrap">
-  <span class="pill">3.0</span>
+  <span class="pill">3.1</span>
   <div>
-    <strong>Upgrading from 2.x?</strong> The store format changes on the first write. A copy of the old
-    one is kept beside it and <code>docket restore --from-v7</code> puts it back, so the upgrade is
-    reversible — but it is worth reading the two paragraphs under
-    <a href="https://github.com/pasichDev/docket/blob/main/CHANGELOG.md">Breaking / migration</a> before
-    you run it. Projects your items are filed under also get more specific names in 3.0.
+    <strong>New: digests.</strong> Ask your agent for a digest and the dashboard's home page shows
+    what needs you, what shipped and what is stuck across your merge requests, pull requests, issues,
+    tickets and notes — with what changed since last time, who does each next step, and a number you
+    can hand to any agent. <a href="#digests">See it ↓</a> · From 3.0 it is a drop-in upgrade; coming
+    from 2.x, read <a href="https://github.com/pasichDev/docket/blob/main/CHANGELOG.md">Breaking / migration</a> first.
   </div>
 </div>
 
@@ -361,6 +362,45 @@
   </div>
 </section>
 
+<section id="digests" class="wrap">
+  <p class="eyebrow">New in 3.1</p>
+  <h2 class="section-title">A digest of your work, on the home page</h2>
+  <p class="section-sub">Say <code>make a digest</code> to your agent. It reads your GitLab merge requests, GitHub pull requests and issues, Notion or Jira tickets, notes and mail — read-only, with the logins it already has — checks every status at the source, and publishes. Docket never holds those credentials; it keeps what the agent wrote and shows it here.</p>
+
+  <div class="demo-tabs" role="tablist">
+    <button role="tab" data-pane="digest-home" data-active="true" aria-selected="true">Home</button>
+    <button role="tab" data-pane="digest-area" data-active="false" aria-selected="false">By area</button>
+    <button role="tab" data-pane="digest-people" data-active="false" aria-selected="false">By person</button>
+  </div>
+  <div class="demo-pane" data-pane="digest-home" data-active="true">
+    <div class="demo-shot"><img src="assets/digest-home.jpg" alt="The dashboard home page: a digest with a summary, highlights, source chips, a 'since the previous digest' card listing status changes, and metric tiles; a Tasks card and a timeline of digests on the side" loading="lazy" /></div>
+    <p class="shot-caption">The latest digest: what matters, what changed since the previous one — computed, not guessed — and the task list at a glance.</p>
+  </div>
+  <div class="demo-pane" data-pane="digest-area" data-active="false">
+    <div class="demo-shot"><img src="assets/digest-area.jpg" alt="Digest items grouped into Work, Learning and Side projects, with filter chips; each row has a number, a status pill, its owner and a 'was draft' change badge" loading="lazy" /></div>
+    <p class="shot-caption">Grouped by area, filtered with a click. Every row is numbered, linked to its source, and one click from becoming a task.</p>
+  </div>
+  <div class="demo-pane" data-pane="digest-people" data-active="false">
+    <div class="demo-shot"><img src="assets/digest-people.jpg" alt="The same digest laid out by person: the user's own steps first, one item expanded to show a markdown analysis of a blocked ticket" loading="lazy" /></div>
+    <p class="shot-caption">By person: numbered next steps for you, for each teammate, and for the agent. Blocked or stale items carry a real analysis, not just a status.</p>
+  </div>
+
+  <div class="features" style="margin-top:28px;">
+    <div class="feature-card">
+      <h3>Hand it off by number</h3>
+      <p>Tell any agent <code>take 7</code>. It gets the full brief and a task claimed in its name, so everyone sees who is on it — and when it is done it closes the task with the reason.</p>
+    </div>
+    <div class="feature-card">
+      <h3>Seen means seen</h3>
+      <p>Mark an item seen and it stays out of the way until its status changes — an open MR you dismissed comes back the moment it merges. Marks sync across devices.</p>
+    </div>
+    <div class="feature-card">
+      <h3>Yours to configure</h3>
+      <p>Sources, groups, people, presets (<code>digest work</code>, <code>digest week</code>), environment checks and a daily run live in your own config — and the skill learns what you keep correcting.</p>
+    </div>
+  </div>
+</section>
+
 <section class="wrap">
   <p class="eyebrow">Why not just a text file</p>
   <h2 class="section-title">What it adds beyond "just a list"</h2>
@@ -378,7 +418,7 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" style="color:var(--lavender)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v5h5"/></svg>
       </div>
       <h3>See what's open, on arrival</h3>
-      <p>An optional Claude Code <code>SessionStart</code> hook injects what's open in this project — at most 7 items, under 120 tokens, nothing when there's nothing. It fails open: if docket is down, your session is unaffected.</p>
+      <p>An optional Claude Code <code>SessionStart</code> hook injects what's open in this project — at most 7 items, under 120 tokens, nothing when there's nothing — plus one line about your latest digest. It fails open: if docket is down, your session is unaffected.</p>
     </div>
     <div class="feature-card">
       <div class="icon" style="background:var(--amber-bg)">
@@ -500,7 +540,7 @@
       <div class="num">4</div>
       <div class="body">
         <h3>Open the web UI</h3>
-        <p>Go to <code>http://localhost:8787</code> — it started itself the moment step 3 ran. Check on it from a terminal any time:</p>
+        <p>Go to <code>http://localhost:8787</code> — it started itself the moment step 3 ran. The home page shows your latest digest (ask your agent to <code>make a digest</code>); the list itself is at <code>/tasks</code>. Check on it from a terminal any time:</p>
         <pre><code>$ docket status
 Mode: local
 Store: ~/.docket <span class="c">(from the default location)</span>
@@ -616,16 +656,17 @@ $ docket backend localize                          <span class="c"># …and brin
     A todo list is not important — until it is the only record of what you were doing. Every write goes to
     disk atomically and durably, is checked against the exact bytes it read, and refuses rather than guesses
     when two processes disagree. 3.0 went through a full release-readiness audit before it shipped; all 27 blockers are closed,
-    each with a regression test verified to fail against the code it replaced.
+    each with a regression test verified to fail against the code it replaced. 3.1 adds digests without touching the store format.
   </p>
   <div class="quality">
-    <div class="stat"><div class="n">510</div><div class="l">tests, run on Node 18–24 and macOS</div></div>
+    <div class="stat"><div class="n">555</div><div class="l">tests, run on Node 18–24 and macOS</div></div>
     <div class="stat"><div class="n">20k</div><div class="l">random sync topologies, all converging</div></div>
     <div class="stat"><div class="n">3</div><div class="l">runtime dependencies</div></div>
     <div class="stat"><div class="n">0</div><div class="l">accounts, trackers, telemetry</div></div>
   </div>
   <p class="section-sub" style="margin-top:26px;">
-    <a href="https://github.com/pasichDev/docket/blob/main/CHANGELOG.md">What changed in 3.0</a> ·
+    <a href="https://github.com/pasichDev/docket/blob/main/CHANGELOG.md">What changed in 3.1</a> ·
+    <a href="https://github.com/pasichDev/docket/blob/main/docs/digests.md">How digests work</a> ·
     <a href="https://github.com/pasichDev/docket/blob/main/docs/security.md">Security model</a> ·
     <a href="https://github.com/pasichDev/docket/blob/main/SECURITY.md">Reporting a vulnerability</a>
   </p>
@@ -646,15 +687,16 @@ $ docket backend localize                          <span class="c"># …and brin
 </footer>
 
 <script>
-  // Screenshot tabs.
+  // Screenshot tabs — scoped to their own section, since the page has more than one set.
   document.querySelectorAll('.demo-tabs button').forEach((btn) => {
     btn.addEventListener('click', () => {
       const pane = btn.dataset.pane;
-      document.querySelectorAll('.demo-tabs button').forEach((b) => {
+      const scope = btn.closest('section') || document;
+      scope.querySelectorAll('.demo-tabs button').forEach((b) => {
         b.dataset.active = String(b === btn);
         b.setAttribute('aria-selected', String(b === btn));
       });
-      document.querySelectorAll('.demo-pane').forEach((p) => (p.dataset.active = String(p.dataset.pane === pane)));
+      scope.querySelectorAll('.demo-pane').forEach((p) => (p.dataset.active = String(p.dataset.pane === pane)));
     });
   });
 

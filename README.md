@@ -240,6 +240,10 @@ Full field and workflow reference: [`skills/docket/SKILL.md`](skills/docket/SKIL
 
 ## Digests
 
+<p align="center">
+  <img src="docs/assets/digest-home.jpg" alt="The dashboard home page: a digest with a summary, highlights, source chips, a 'since the previous digest' card and metric tiles, with a Tasks card and a timeline of digests on the side" width="100%" />
+</p>
+
 Ask your agent *"make a digest"* (or *"зроби дайджест"*). The `docket:digest`
 skill reads your merge requests, pull requests, Notion tickets, local commits
 and docket items, checks every status at the source, and publishes the result —
@@ -255,6 +259,24 @@ servers, an Obsidian vault, a project's docs folder — can be added as a source
 the digest can be split into groups such as work, learning and side projects. What to read is local to each machine, in `~/.config/docket/digest.json`
 (the `docket:digest-setup` skill writes it); the digests themselves sync to
 paired devices. Details: [`docs/digests.md`](docs/digests.md).
+
+- **What changed** since the previous digest is computed when it is published —
+  new items, status changes, what dropped out — not left to the agent's memory.
+- **Who does what:** every item can name its owner (you, a teammate, the
+  agent); **By person** turns the digest into numbered next steps per person.
+- **Depth where it matters:** routine items stay one line; blocked, failing or
+  stale ones carry the agent's analysis of the actual cause and next step.
+- **Hand it off by number:** tell any agent *"take 7"* — `digest_take` gives it
+  the brief and a task claimed in its name; it closes the task with the reason.
+- **Seen** hides an item until its status changes; marks sync across devices.
+- **Yours to shape:** groups, people, presets (*"digest work"*, *"digest
+  week"*), environment checks, mail and chat via MCP, a daily run — and the
+  skill keeps short notes on what you keep correcting.
+
+<p align="center">
+  <img src="docs/assets/digest-area.jpg" alt="Digest items grouped into Work, Learning and Side projects, each row numbered, with status, owner and a change badge" width="49%" />
+  <img src="docs/assets/digest-people.jpg" alt="The same digest by person, with one blocked ticket expanded to show the agent's analysis" width="49%" />
+</p>
 
 ## CLI
 
