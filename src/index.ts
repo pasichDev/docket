@@ -635,6 +635,11 @@ server.registerTool(
                 tone: toneSchema,
                 attention: z.boolean().optional().describe("True when the user has to act: review it, unblock it, reply"),
                 note: z.string().optional().describe("One line of your judgement: why it matters or what changed"),
+                detail: z
+                  .string()
+                  .optional()
+                  .describe("Markdown, only for items worth more than a line — blocked, failing, stale, a decision: what is actually wrong, what was tried, the next step. Leave it out for routine items"),
+                owner: z.string().optional().describe("Who does the next step: \"you\" (the user), \"agent\" (you, the agent, as a follow-up), or a person's name from the digest config"),
                 updatedAt: z.string().optional().describe("ISO timestamp of the item's last change at the source"),
               }),
             ),

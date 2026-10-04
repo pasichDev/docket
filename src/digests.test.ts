@@ -308,3 +308,32 @@ test("remote digests: a server without the digest routes is named as too old, no
   const current = new RemoteDigestService(reply(404, { error: "no such digest" }));
   assert.equal(await current.get("D-ABCDEF"), null, "the digest routes' own 404 is a plain miss");
 });
+
+test("publish: items are numbered, and the second digest records what changed since the first", () => {
+  const s = store();
+  const one = (status: string, extra: Array<Record<string, unknown>> = []) => ({
+    title: "d",
+    summary: "",
+    sections: [{ title: "Work", items: [{ kind: "mr", title: "Retry", url: "https://gitlab.com/acme/backend/-/merge_requests/214", status }, ...extra] }],
+  });
+  const first = createDigest(s, one("open", [{ kind: "pr", title: "Gone later", url: "https://github.com/jdoe/side-app/pull/9", status: "open" }]), ctx);
+  assert.equal(first.changes, null, "the first digest has nothing to compare with");
+  assert.deepEqual(first.sections[0].items.map((i) => [i.n, i.change]), [[1, null], [2, null]]);
+
+  const second = createDigest(s, one("merged", [{ kind: "ticket", title: "Fresh", ref: "ACME-1", status: "Todo" }]), ctx);
+  const [retry, fresh] = second.sections[0].items;
+  assert.equal(retry.change, "changed");
+  assert.equal(retry.previousStatus, "open");
+  assert.equal(fresh.change, "new");
+  assert.deepEqual(second.changes && { ...second.changes, since: "x" }, { since: "x", added: 1, changed: 1, gone: [{ title: "Gone later", ref: null, url: "https://github.com/jdoe/side-app/pull/9", status: "open" }] });
+  assert.equal(second.changes?.since, first.uuid);
+});
+
+test("publish: an agent cannot set numbers or change markers; a peer's are carried over", () => {
+  const s = store();
+  const forged = createDigest(s, { title: "d", summary: "", sections: [{ title: "x", items: [{ kind: "note", title: "t", n: 99, change: "new", previousStatus: "x" }] }] }, ctx);
+  assert.equal(forged.sections[0].items[0].n, 1);
+  assert.equal(forged.sections[0].items[0].change, null);
+  const remote = digests.sanitizeRemoteDigest(structuredClone(forged))!;
+  assert.equal(remote.sections[0].items[0].n, 1, "sync must keep the numbers the publisher gave, or handles would differ per device");
+});

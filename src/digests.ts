@@ -34,7 +34,7 @@ const LOCK_PATH = `${DIGESTS_PATH}.lock`;
 
 export const DIGEST_FORMAT_VERSION = 1;
 
-export const DIGEST_ITEM_KINDS = ["pr", "mr", "issue", "ticket", "commit", "release", "todo", "doc", "mail", "chat", "note"] as const;
+export const DIGEST_ITEM_KINDS = ["pr", "mr", "issue", "ticket", "commit", "release", "todo", "doc", "mail", "chat", "decision", "check", "note"] as const;
 export type DigestItemKind = (typeof DIGEST_ITEM_KINDS)[number];
 
 export const DIGEST_TONES = ["good", "warn", "bad", "info", "neutral"] as const;
@@ -54,7 +54,31 @@ export interface DigestItem {
   attention: boolean;
   /** One line of the agent's own judgement: why it matters, what changed. */
   note: string | null;
+  /**
+   * Markdown, for the items that deserve more than a line: what is actually wrong, what was
+   * tried, what the next step is. The skill writes it only where the item is worth it —
+   * blocked, failing, stale, or a decision — and keeps routine items to their note.
+   */
+  detail: string | null;
+  /** Who does the next step: "you", "agent", or a person's name from the digest config. */
+  owner: string | null;
   updatedAt: string | null;
+  /** Position in the digest, 1-based, assigned on publish. "D-XXXXXX/7" names this item to any agent. */
+  n: number;
+  /** Against the previous digest, computed on publish: new here, or its status moved. */
+  change: "new" | "changed" | null;
+  /** The status it had in the previous digest, when `change` is "changed". */
+  previousStatus: string | null;
+}
+
+/** What moved between the previous digest and this one, computed on publish — never by the agent. */
+export interface DigestChanges {
+  /** The digest this one was compared with. */
+  since: string;
+  added: number;
+  changed: number;
+  /** Items the previous digest had and this one does not: done, merged away, or dropped. */
+  gone: Array<{ title: string; ref: string | null; url: string | null; status: string | null }>;
 }
 
 export interface DigestSection {
@@ -88,6 +112,8 @@ export interface Digest {
   metrics: DigestMetric[];
   sections: DigestSection[];
   sources: DigestSource[];
+  /** Null for the first digest, and for one published before changes were computed. */
+  changes: DigestChanges | null;
   /** The period the agent looked at. ISO date or timestamp; null when it did not say. */
   windowFrom: string | null;
   windowTo: string | null;
@@ -149,6 +175,8 @@ export const DIGEST_LIMITS = {
   items: 300,
   itemTitle: 300,
   itemNote: 600,
+  itemDetail: 4000,
+  owner: 60,
   ref: 60,
   repo: 120,
   status: 60,
@@ -177,6 +205,8 @@ export interface DigestInput {
       tone?: DigestTone | null;
       attention?: boolean;
       note?: string | null;
+      detail?: string | null;
+      owner?: string | null;
       updatedAt?: string | null;
     }>;
   }>;
@@ -313,6 +343,64 @@ function each<T, R>(values: T[], mode: Mode, fn: (value: T, index: number) => R)
 
 type Body = Pick<Digest, "title" | "summary" | "highlights" | "metrics" | "sections" | "sources" | "windowFrom" | "windowTo">;
 
+function sanitizeChanges(raw: unknown): DigestChanges | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.since !== "string" || !UUID_RE.test(r.since)) return null;
+  const count = (v: unknown) => (Number.isSafeInteger(v) && (v as number) >= 0 ? (v as number) : 0);
+  const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+  const gone = (Array.isArray(r.gone) ? r.gone.slice(0, MAX_GONE) : []).flatMap((g) => {
+    if (!g || typeof g !== "object") return [];
+    const o = g as Record<string, unknown>;
+    const title = str(o.title, DIGEST_LIMITS.itemTitle);
+    const link = str(o.url, DIGEST_LIMITS.url);
+    return title ? [{ title, ref: str(o.ref, DIGEST_LIMITS.ref), url: link && isSafeUrl(link) ? link : null, status: str(o.status, DIGEST_LIMITS.status) }] : [];
+  });
+  return { since: r.since.toLowerCase(), added: count(r.added), changed: count(r.changed), gone };
+}
+
+/** How many vanished items a digest remembers. The rest are a count, not a list. */
+const MAX_GONE = 50;
+
+/**
+ * Numbers every item and compares the digest with the one before it — on the publishing
+ * store, so the "what changed" block is a fact about two records rather than the agent's
+ * memory of yesterday. Items are matched by the same identity seen marks use (link, else
+ * repo#ref, else title), so an MR is the same MR whichever section it moved to.
+ */
+export function annotate(body: Body, previous: Digest | undefined): { sections: DigestSection[]; changes: DigestChanges | null } {
+  let n = 0;
+  const before = new Map<string, DigestItem>();
+  for (const s of previous?.sections ?? []) for (const i of s.items) before.set(seenKey(i), i);
+  const present = new Set<string>();
+  let added = 0;
+  let changed = 0;
+  const sections = body.sections.map((s) => ({
+    ...s,
+    items: s.items.map((i) => {
+      n += 1;
+      const key = seenKey(i);
+      present.add(key);
+      const old = before.get(key);
+      let change: DigestItem["change"] = null;
+      if (previous && !old) {
+        change = "new";
+        added += 1;
+      } else if (old && (old.status ?? null) !== (i.status ?? null)) {
+        change = "changed";
+        changed += 1;
+      }
+      return { ...i, n, change, previousStatus: change === "changed" ? (old?.status ?? null) : null };
+    }),
+  }));
+  if (!previous) return { sections, changes: null };
+  const gone = [...before.entries()]
+    .filter(([key]) => !present.has(key))
+    .slice(0, MAX_GONE)
+    .map(([, i]) => ({ title: i.title, ref: i.ref, url: i.url, status: i.status }));
+  return { sections, changes: { since: previous.uuid, added, changed, gone } };
+}
+
 function normalizeBody(raw: unknown, mode: Mode): Body {
   if (!raw || typeof raw !== "object") throw new DigestValidationError("a digest must be an object");
   const r = raw as Record<string, unknown>;
@@ -336,7 +424,14 @@ function normalizeBody(raw: unknown, mode: Mode): Body {
           tone: oneOf(i.tone, DIGEST_TONES, `${at}.tone`, mode, null),
           attention: i.attention === true,
           note: text(i.note, L.itemNote, `${at}.note`, mode),
+          detail: text(i.detail, L.itemDetail, `${at}.detail`, mode),
+          owner: text(i.owner, L.owner, `${at}.owner`, mode),
           updatedAt: when(i.updatedAt, `${at}.updatedAt`, mode),
+          // Assigned by the publishing store (see annotate) and carried as-is over sync;
+          // an agent cannot set them — strict mode ignores whatever it sends.
+          n: mode === "lenient" && Number.isSafeInteger(i.n) && (i.n as number) > 0 ? (i.n as number) : 0,
+          change: mode === "lenient" && (i.change === "new" || i.change === "changed") ? (i.change as DigestItem["change"]) : null,
+          previousStatus: mode === "lenient" ? text(i.previousStatus, L.status, `${at}.previousStatus`, mode) : null,
         };
       }),
     };
@@ -408,6 +503,7 @@ export function sanitizeRemoteDigest(raw: unknown): Digest | null {
   return {
     uuid: r.uuid.toLowerCase(),
     ...body,
+    changes: sanitizeChanges(r.changes),
     workspace: short(r.workspace),
     agent: short(r.agent, 120),
     deviceId: short(r.deviceId, 120),
@@ -502,9 +598,12 @@ export function sortDigests(digests: readonly Digest[]): Digest[] {
 
 export function createDigest(store: DigestStore, input: unknown, ctx: DigestContext): Digest {
   const body = validateDigestInput(input);
+  const { sections, changes } = annotate(body, sortDigests(store.digests)[0]);
   const digest: Digest = {
     uuid: uuidv7(),
     ...body,
+    sections,
+    changes,
     workspace: ctx.workspace,
     agent: ctx.agent,
     deviceId: ctx.deviceId,
@@ -546,6 +645,29 @@ export async function deleteDigest(id: string, deviceId: string | null): Promise
     deleteDigestRecord(store, found, deviceId);
     return found;
   });
+}
+
+// ---- Handing an item to an agent ---------------------------------------------------------
+
+/**
+ * "D-XXXXXX/7", "D-XXXXXX#7", "XXXXXX/7", "#7" or "7". The last two mean the latest digest,
+ * which is what a person says out loud: "take 7 from the digest".
+ */
+export function parseItemHandle(handle: string): { digest: string | null; n: number } | null {
+  const raw = handle.trim();
+  const full = raw.match(/^(?:D-)?([0-9A-Z]{6}|[0-9a-f-]{36})\s*[/#:.]\s*(\d{1,4})$/i);
+  if (full) return { digest: full[1].length === 36 ? full[1] : `D-${full[1].toUpperCase()}`, n: Number(full[2]) };
+  const bare = raw.match(/^#?(\d{1,4})$/);
+  return bare ? { digest: null, n: Number(bare[1]) } : null;
+}
+
+export function itemHandle(digest: Pick<Digest, "uuid">, item: Pick<DigestItem, "n">): string {
+  return `${digestShortId(digest.uuid)}/${item.n}`;
+}
+
+export function findItem(digest: Digest, n: number): { item: DigestItem; section: DigestSection } | null {
+  for (const section of digest.sections) for (const item of section.items) if (item.n === n) return { item, section };
+  return null;
 }
 
 // ---- Seen marks --------------------------------------------------------------------------
@@ -787,6 +909,10 @@ export function formatDigest(d: Digest): string {
   const out: string[] = [formatDigestLine(d)];
   if (d.windowFrom || d.windowTo) out.push(`window: ${day(d.windowFrom)} → ${day(d.windowTo)}`);
   if (d.summary) out.push("", d.summary);
+  if (d.changes) {
+    const c = d.changes;
+    out.push("", `since ${digestShortId(c.since)}: ${c.added} new, ${c.changed} changed, ${c.gone.length} gone${c.gone.length ? ` (${c.gone.map((g) => g.ref ?? g.title).join(", ")})` : ""}`);
+  }
   if (d.highlights.length) out.push("", ...d.highlights.map((h) => `• ${h}`));
   if (d.metrics.length) out.push("", d.metrics.map((m) => `${m.label}: ${m.value}`).join(" | "));
   let group: string | null = null;
@@ -795,7 +921,10 @@ export function formatDigest(d: Digest): string {
     group = s.group;
     out.push("", `## ${s.title}`);
     for (const i of s.items) {
-      const head = [i.attention ? "!" : "-", `[${i.kind}]`, i.ref, i.title, i.status ? `(${i.status})` : null, i.repo ? `— ${i.repo}` : null].filter(Boolean).join(" ");
+      const moved = i.change === "new" ? "[new]" : i.change === "changed" ? `[was ${i.previousStatus ?? "—"}]` : null;
+      const head = [i.n ? `#${i.n}` : null, i.attention ? "!" : "-", `[${i.kind}]`, i.ref, i.title, i.status ? `(${i.status})` : null, moved, i.owner ? `→ ${i.owner}` : null, i.repo ? `— ${i.repo}` : null]
+        .filter(Boolean)
+        .join(" ");
       out.push(head + (i.url ? `  ${i.url}` : ""));
       if (i.note) out.push(`    ${i.note}`);
     }
