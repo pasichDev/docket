@@ -316,16 +316,23 @@ test("publish: items are numbered, and the second digest records what changed si
     summary: "",
     sections: [{ title: "Work", items: [{ kind: "mr", title: "Retry", url: "https://gitlab.com/acme/backend/-/merge_requests/214", status }, ...extra] }],
   });
-  const first = createDigest(s, one("open", [{ kind: "pr", title: "Gone later", url: "https://github.com/jdoe/side-app/pull/9", status: "open" }]), ctx);
+  const first = createDigest(
+    s,
+    one("open", [
+      { kind: "pr", title: "Gone later", url: "https://github.com/jdoe/side-app/pull/9", status: "open" },
+      { kind: "pr", title: "Shipped last time", url: "https://github.com/jdoe/side-app/pull/8", status: "merged", tone: "good" },
+    ]),
+    ctx,
+  );
   assert.equal(first.changes, null, "the first digest has nothing to compare with");
-  assert.deepEqual(first.sections[0].items.map((i) => [i.n, i.change]), [[1, null], [2, null]]);
+  assert.deepEqual(first.sections[0].items.map((i) => [i.n, i.change]), [[1, null], [2, null], [3, null]]);
 
   const second = createDigest(s, one("merged", [{ kind: "ticket", title: "Fresh", ref: "ACME-1", status: "Todo" }]), ctx);
   const [retry, fresh] = second.sections[0].items;
   assert.equal(retry.change, "changed");
   assert.equal(retry.previousStatus, "open");
   assert.equal(fresh.change, "new");
-  assert.deepEqual(second.changes && { ...second.changes, since: "x" }, { since: "x", added: 1, changed: 1, gone: [{ title: "Gone later", ref: null, url: "https://github.com/jdoe/side-app/pull/9", status: "open" }] });
+  assert.deepEqual(second.changes && { ...second.changes, since: "x" }, { since: "x", added: 1, changed: 1, gone: [{ title: "Gone later", ref: null, url: "https://github.com/jdoe/side-app/pull/9", status: "open" }] }, "an item shipped last time is not news when it drops out");
   assert.equal(second.changes?.since, first.uuid);
 });
 

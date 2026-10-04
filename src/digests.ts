@@ -394,8 +394,11 @@ export function annotate(body: Body, previous: Digest | undefined): { sections: 
     }),
   }));
   if (!previous) return { sections, changes: null };
+  // "Gone" is for work that was still open last time: an item the previous digest already
+  // listed as merged, released or done is expected to drop out, and counting it would bury
+  // the one disappearance that matters under every shipped PR of the day before.
   const gone = [...before.entries()]
-    .filter(([key]) => !present.has(key))
+    .filter(([key, i]) => !present.has(key) && i.tone !== "good")
     .slice(0, MAX_GONE)
     .map(([, i]) => ({ title: i.title, ref: i.ref, url: i.url, status: i.status }));
   return { sections, changes: { since: previous.uuid, added, changed, gone } };

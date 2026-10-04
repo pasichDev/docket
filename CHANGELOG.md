@@ -49,6 +49,8 @@ untouched.
 - **What changed.** Publishing compares a digest with the previous one by item
   identity: new items, status changes (`was open`), and items no longer listed,
   shown as the first card. Computed by the store, not by the agent.
+- **Issues** as well as pull requests: assigned, mentioning the user, and open
+  ones in their own repos — someone else's issue counts as needing an answer.
 - **Owners and depth.** Items carry `owner` (`you`, `agent`, or a person from
   the config) and an optional markdown `detail` for the ones worth a real
   analysis; **By person** lays the digest out as numbered steps per owner. New

@@ -116,6 +116,7 @@ glab api "merge_requests?scope=all&state=opened&reviewer_username=<user>&per_pag
 glab api "merge_requests?scope=all&author_username=<user>&updated_after=<since>&per_page=100"
 ```
 Keep only MRs whose `references.full` / `web_url` falls under one of `groups` (when set).
+Issues assigned to the user: `glab api "issues?scope=assigned_to_me&state=opened&per_page=100"`.
 For the user's open MRs, the pipeline and approvals matter: `glab api
 "projects/<id>/merge_requests/<iid>/approvals"` and the MR's `head_pipeline.status`
 (`glab api "projects/<id>/merge_requests/<iid>"`). A failed pipeline is `tone: "bad"`.
@@ -127,6 +128,20 @@ gh search prs --author=@me --updated=">=<YYYY-MM-DD>" --json number,title,url,re
 ```
 Filter by `owners` when set. A merged PR shows `state: closed` here — confirm merged vs
 closed with `gh pr view <url> --json state,mergedAt,reviewDecision,statusCheckRollup`.
+
+Issues, not only PRs:
+```sh
+gh search issues --assignee=@me --state=open --json number,title,url,repository,updatedAt,labels --limit 100
+gh search issues --mentions=@me --updated=">=<YYYY-MM-DD>" --json number,title,url,repository,state --limit 50
+# open issues in the user's own repos touched in the window — new ideas, bug reports, replies
+gh search issues --owner=<owner> --state=open --updated=">=<YYYY-MM-DD>" --json number,title,url,repository,author,commentsCount --limit 100
+```
+An issue assigned to the user is theirs (`owner: "you"`); one opened or commented on by
+**someone else** in their repo is `attention: true` — a person is waiting on an answer. The
+user's own fresh issues are backlog: list them together, one line each, not as "needs you".
+An assigned issue with no movement for months is a candidate to close — say so in its
+note rather than listing it as work. Issues that are two halves of one change (a migration
+"from" one repo "to" another) are one item with the other in the note.
 
 **Notion** (the MCP server named in `server`; read only — no create/update tools):
 query each configured database for pages assigned to `assignee` and edited since `<since>`,
