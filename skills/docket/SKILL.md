@@ -96,3 +96,11 @@ replacement for them. An item that turns out to matter gets written up
 properly in whichever of those owns that kind of work, and `sourceUrl` is
 the link back. Items are meant to leave; a list that only grows is a list
 nobody reads.
+
+## Digests
+
+`digest_publish` / `digest_list` / `digest_get` / `digest_delete` store snapshots
+of the user's work that an agent compiled from GitLab, GitHub, Notion and git;
+the dashboard's home page shows the latest one. Don't build one ad hoc — load the
+`docket:digest` skill, which says what to read, how to verify it and how to lay
+it out. `docket:digest-setup` configures the sources.

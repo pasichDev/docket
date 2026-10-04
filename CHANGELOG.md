@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Digests and a dashboard home page
+
+- **Digests.** An agent reads the user's GitLab merge requests, GitHub pull
+  requests, Notion tickets, local git and docket items, and publishes a
+  structured snapshot with the new `digest_publish` tool — summary, highlights,
+  headline metrics, and grouped items each with a link, status, tone and a
+  "needs you" flag. `digest_list`, `digest_get` and `digest_delete` round it
+  out. Docket stores what the agent wrote and nothing else: no source
+  credential ever reaches it.
+- **New skills:** `docket:digest` (collect, verify, compose, publish — read-only
+  towards every source) and `docket:digest-setup` (detects `glab`, `gh`, Notion
+  MCP servers and git roots, asks once, writes `~/.config/docket/digest.json`).
+- **Dashboard.** `/` is now the dashboard: the latest digest, its metrics, a
+  "Tasks" card with open / in progress / overdue / due-soon counts, and a
+  timeline of earlier digests. The task list moved to `/tasks`, same page,
+  switched without a reload. Any digest item becomes a task in one click, with
+  its link, ticket id and "needs you" carried over; an item already in Tasks
+  says so instead.
+- **Digests sync** to paired devices over a new endpoint,
+  `GET /api/sync/digests`, with its own sequence counter and cursor in
+  `digests.json.enc`. The todo sync is untouched: an un-upgraded peer simply has
+  no digests to give (reported on the peer record), and when it is upgraded its
+  cursor starts at 0, so nothing published before the upgrade is skipped. The
+  signature covers a `digests:`-prefixed cursor, so a captured todo-sync request
+  cannot be replayed against it. Digests are immutable, so the merge is a set
+  union plus deletions; a deletion wins everywhere.
+- `docket backup` includes `digests.json.enc`.
+- Not yet in remote (self-hosted server) mode: the digest tools say so instead
+  of writing somewhere no dashboard reads.
+
 ## 3.0.0
 
 Stable. Behaviourally identical to 3.0.0-rc.2 — the only difference is the

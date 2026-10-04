@@ -231,8 +231,25 @@ custom-instructions setting.
 | `todo_history(id)` | Full change log for one item. |
 | `todo_delete(id)` | Permanently remove an item. |
 | `todo_version()` / `todo_check_update()` | Data-format version; read-only npm version check. |
+| `digest_publish(title, summary, sections?, metrics?, highlights?, sources?, windowFrom?, windowTo?)` | Save a digest an agent compiled from your GitLab/GitHub/Notion/git — see [Digests](#digests). |
+| `digest_list(limit?)` / `digest_get(id)` / `digest_delete(id)` | Recent digests, one in full, remove one (everywhere it synced). |
 
 Full field and workflow reference: [`skills/docket/SKILL.md`](skills/docket/SKILL.md).
+
+## Digests
+
+Ask your agent *"make a digest"* (or *"зроби дайджест"*). The `docket:digest`
+skill reads your merge requests, pull requests, Notion tickets, local commits
+and docket items, checks every status at the source, and publishes the result —
+which becomes the dashboard's home page: what needs you, what shipped, what is
+in review, what is stuck, each item linked back to where it lives and one click
+away from becoming a task.
+
+Docket never holds a GitLab, GitHub or Notion credential: the agent reads them
+with the CLIs and MCP servers it already has, and Docket only keeps what it
+wrote. What to read is local to each machine, in `~/.config/docket/digest.json`
+(the `docket:digest-setup` skill writes it); the digests themselves sync to
+paired devices. Details: [`docs/digests.md`](docs/digests.md).
 
 ## CLI
 
@@ -279,7 +296,8 @@ self-hosted setup and what it deliberately doesn't do:
 
 A real-time read/write dashboard — `http://localhost:8787` by default in Local
 Mode (override with `DOCKET_WEB_PORT`), or the Docket Server's own URL in
-Self-hosted Mode. Workspace switcher with per-project open counts, an active-
+Self-hosted Mode. The home page (`/`) shows the latest [digest](#digests) next
+to the task list at a glance; the list itself is at `/tasks`. Workspace switcher with per-project open counts, an active-
 sessions panel, light/dark theme, search, sort, inline edit, undo-delete,
 responsive mobile layout.
 
@@ -322,6 +340,7 @@ control, never a hosted account.
 
 - `todos.json.enc` — the store, AES-256-GCM encrypted
 - `history.json.enc` — the full audit log, kept off the store's write path
+- `digests.json.enc` — digests, AES-256-GCM encrypted, with their own sync cursor
 - `key` — a locally generated 256-bit key, `chmod 600`
 - `device.json` — this machine's id, name, and X25519 identity keypair
 - `peers.json.enc` — paired P2P devices and their derived sync secrets
