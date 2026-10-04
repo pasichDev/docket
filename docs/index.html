@@ -10,7 +10,7 @@
 <meta property="og:url" content="https://pasichdev.github.io/docket/" />
 <meta property="og:title" content="Docket — one list every AI tool can write to" />
 <meta property="og:description" content="Scoped per project, local-first, self-hostable. No SaaS account." />
-<meta property="og:image" content="https://pasichdev.github.io/docket/assets/demo-dark.jpg" />
+<meta property="og:image" content="https://pasichdev.github.io/docket/assets/docket-demo-poster.jpg" />
 <meta name="twitter:card" content="summary_large_image" />
 
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233f7a50'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11.5' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
@@ -203,7 +203,8 @@
        type stops being legible, which is the only reason to show a screenshot at all. */
     max-width: 660px; margin: 0 auto;
   }
-  .demo-shot img { width: 100%; display: block; }
+  .demo-shot img, .demo-shot video { width: 100%; display: block; }
+  .demo-video { aspect-ratio: 16 / 9; background: #120d09; }
   .shot-caption { text-align: center; font-size: 13.5px; color: var(--meta); margin-top: 12px; }
 
   /* --- feature cards ------------------------------------------------------------------ */
@@ -367,23 +368,10 @@
   <h2 class="section-title">A digest of your work, on the home page</h2>
   <p class="section-sub">Say <code>make a digest</code> to your agent. It reads your GitLab merge requests, GitHub pull requests and issues, Notion or Jira tickets, notes and mail — read-only, with the logins it already has — checks every status at the source, and publishes. Docket never holds those credentials; it keeps what the agent wrote and shows it here.</p>
 
-  <div class="demo-tabs" role="tablist">
-    <button role="tab" data-pane="digest-home" data-active="true" aria-selected="true">Home</button>
-    <button role="tab" data-pane="digest-area" data-active="false" aria-selected="false">By area</button>
-    <button role="tab" data-pane="digest-people" data-active="false" aria-selected="false">By person</button>
+  <div class="demo-shot demo-video">
+    <video src="assets/docket-demo.mp4" poster="assets/docket-demo-poster.jpg" controls muted playsinline preload="metadata" aria-label="One minute of Docket: Claude Code makes the day's digest, the dashboard by area and by person, a task closed with a reason, and Codex and Claude each taking a digest item by number"></video>
   </div>
-  <div class="demo-pane" data-pane="digest-home" data-active="true">
-    <div class="demo-shot"><img src="assets/digest-home.jpg" alt="The dashboard home page: a digest with a summary, highlights, source chips, a 'since the previous digest' card listing status changes, and metric tiles; a Tasks card and a timeline of digests on the side" loading="lazy" /></div>
-    <p class="shot-caption">The latest digest: what matters, what changed since the previous one — computed, not guessed — and the task list at a glance.</p>
-  </div>
-  <div class="demo-pane" data-pane="digest-area" data-active="false">
-    <div class="demo-shot"><img src="assets/digest-area.jpg" alt="Digest items grouped into Work, Learning and Side projects, with filter chips; each row has a number, a status pill, its owner and a 'was draft' change badge" loading="lazy" /></div>
-    <p class="shot-caption">Grouped by area, filtered with a click. Every row is numbered, linked to its source, and one click from becoming a task.</p>
-  </div>
-  <div class="demo-pane" data-pane="digest-people" data-active="false">
-    <div class="demo-shot"><img src="assets/digest-people.jpg" alt="The same digest laid out by person: the user's own steps first, one item expanded to show a markdown analysis of a blocked ticket" loading="lazy" /></div>
-    <p class="shot-caption">By person: numbered next steps for you, for each teammate, and for the agent. Blocked or stale items carry a real analysis, not just a status.</p>
-  </div>
+  <p class="shot-caption">One minute, one take: a digest made in Claude Code, the dashboard by area and by person, a task closed with a reason, and Codex and Claude each taking an item by its number — both visible on the list as they work.</p>
 
   <div class="features" style="margin-top:28px;">
     <div class="feature-card">
